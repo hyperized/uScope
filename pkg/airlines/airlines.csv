@@ -1,0 +1,410 @@
+icao,name,hex,source,group,note
+AAH,Aloha Air Cargo,83BF37,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/a/ae/Aloha_Air_Cargo_Logo.svg
+AAL,American Airlines,0078D2,simple-icons,,
+AAR,Asiana Airlines,A51C30,livery,,red and grey speedwing
+AAW,Afriqiyah Airways,3E96D9,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/1a/Afriqiyah_Airways_logo.svg
+AAY,Allegiant Air,00447C,livery,,navy titles with an orange sunburst
+ABB,Air Belgium,E30613,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/0b/Air_Belgium_Logo_%282016%29.svg
+ABL,Air Busan,1E409A,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/01/Air_Busan_logo.svg
+ABQ,Airblue,252F86,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/f/fb/Airblue_Logo.svg
+ABW,AirBridgeCargo,0057A5,livery,,blue titles
+ABX,ABX Air,D13239,brand,,logo file https://upload.wikimedia.org/wikipedia/en/e/e1/Logo_ABX_Air.svg
+ABY,Air Arabia,ED1B48,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/84/Air_Arabia_logo_2018.svg
+ACA,Air Canada,F01428,simple-icons,,
+ACI,Aircalin,004A8F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/9/95/Aircalin_logo.svg
+ACP,Astral Aviation,D71F41,brand,,logo file https://upload.wikimedia.org/wikipedia/en/3/34/Astral_Aviation_logo.svg
+ADY,Air Arabia Abu Dhabi,ED1B48,brand,ABY,Air Arabia house livery
+AEA,Air Europa,2D69E1,brand,,theme-color  mask-icon  manifest and --ae-color-primary agree on aireuropa.com
+AEE,Aegean Airlines,005BAA,livery,,blue titles and tail
+AEZ,Aeroitalia,328040,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/c/ca/Logo-aeroitalia.svg
+AFG,Ariana Afghan Airlines,197EF2,brand,,airline logo on Wikipedia
+AFL,Aeroflot,02458D,simple-icons,,
+AFR,Air France,002157,simple-icons,,
+AHK,Air Hong Kong,FFCC00,livery,BCS,DHL European Air Transport house livery
+AHY,Azerbaijan Airlines,003366,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/4d/Azerbaijan_Airlines_logo.svg
+AIC,Air India,DA0E29,simple-icons,,
+AIQ,Thai AirAsia,FF0000,simple-icons,AXM,AirAsia house livery
+AJT,Amerijet International,ED1C24,brand,,logo file https://upload.wikimedia.org/wikipedia/en/f/f6/Amerijet_International_Logo.svg
+AKJ,Akasa Air,FF6300,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/6/69/Akasa_Air_logo.svg
+AKT,Canadian North,CD153F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/3/38/Logo_Canadian_North_Airlines_%282019%29.svg
+AKX,ANA Wings,223F9A,brand,ANA,All Nippon Airways house livery
+ALK,SriLankan Airlines,027499,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/78/SriLankan_Airlines_Logo.svg
+AMF,Ameriflight,005089,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/5/5d/Ameriflight_logo.svg
+AMU,Air Macau,312667,brand,,logo file https://upload.wikimedia.org/wikipedia/en/9/98/Air_Macau_logo.svg
+AMV,AMC Airlines,EC1E24,brand,,logo file https://upload.wikimedia.org/wikipedia/en/6/61/AMC_Airlines_logo.svg
+AMX,Aeroméxico,0B2343,simple-icons,,
+ANA,All Nippon Airways,223F9A,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/8d/All_Nippon_Airways_Logo.svg
+ANE,Air Nostrum,0090D0,brand,IBE,logo file https://upload.wikimedia.org/wikipedia/en/a/af/Logo_Air_Nostrum_%28Spain%29.svg
+ANG,Air Niugini,740054,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/02/Air_Niugini_Logo.svg
+ANO,Airnorth,04396F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/2/21/Airnorth_logo.svg
+ANZ,Air New Zealand,000000,livery,,all-black fuselage with the white koru
+APG,Philippines AirAsia,FF0000,simple-icons,AXM,AirAsia house livery
+APJ,Peach Aviation,E4007F,livery,,Peach magenta
+ARE,LATAM Colombia,2A0088,livery,LAN,LATAM Airlines house livery
+ARG,Aerolíneas Argentinas,0081C6,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/79/Logo_Aerol%C3%ADneas_Argentinas_%282010%29.svg
+ARU,Aruba Airlines,D5180D,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/5/5a/Aruba_Airlines.svg
+ASA,Alaska Airlines,01426A,brand,,theme-color on alaskaair.com
+ASL,Air Serbia,0E203F,simple-icons,,
+ASV,Air Seoul,1DB898,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/6/65/Logo_of_Air_Seoul.svg
+ATC,Air Tanzania,03B14D,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/0b/Air_Tanzania_logo.svg
+ATN,Air Transport International,D13239,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/1e/Logo_Air_Transport_International.svg
+AUA,Austrian Airlines,D7211B,brand,DLH,logo file https://upload.wikimedia.org/wikipedia/en/8/81/Austrian_Airlines_logo.svg
+AUL,Smartavia,330072,brand,,theme-color and manifest on flysmartavia.com
+AUR,Aurigny,FFD500,livery,,all-yellow fuselage
+AVA,Avianca,FF0000,brand,,logo file https://upload.wikimedia.org/wikipedia/en/f/fc/Logo_Avianca_%28Colombia%29_2023.svg
+AVN,Air Vanuatu,CD1520,brand,,logo file https://upload.wikimedia.org/wikipedia/en/d/da/Air_Vanuatu_logo_new.svg
+AVR,Avianca Express,FF0000,brand,AVA,Avianca house livery
+AWQ,Indonesia AirAsia,FF0000,simple-icons,AXM,AirAsia house livery
+AXB,Air India Express,FF6423,brand,AIC,logo file https://upload.wikimedia.org/wikipedia/commons/b/bd/Air_India_Express_logo.svg
+AXM,AirAsia,FF0000,simple-icons,,
+AZA,Alitalia,00663F,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/34/Alitalia_logo.svg
+AZG,Silk Way West Airlines,0050A0,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/33/Logo_of_Silk_Way_West_Airlines.svg
+AZU,Azul Brazilian Airlines,5162AA,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/5/52/Logo_da_Azul_Linhas_A%C3%A9reas_Brasileiras.svg
+AZW,Air Zimbabwe,FDE449,brand,,logo file https://upload.wikimedia.org/wikipedia/en/d/d2/Air_Zimbabwe_Logo_2011.svg
+BAW,British Airways,2E5C99,simple-icons,,
+BBC,Biman Bangladesh Airlines,00803E,brand,,logo file https://upload.wikimedia.org/wikipedia/en/9/9f/Biman_Airlines_classic_logo.svg
+BCS,DHL European Air Transport,FFCC00,livery,,DHL yellow
+BCY,CityJet,9E8165,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b5/CityJet_logo.svg
+BEL,Brussels Airlines,051446,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/bb/Brussels_airlines_logo_2021.svg
+BHS,Bahamasair,1F6BA6,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/8b/Bahamasair_Logo.svg
+BKP,Bangkok Airways,254AA5,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/01/Bangkok_Airways_logo.svg
+BLX,TUI fly Nordic,E41917,brand,TUI,TUI fly Deutschland house livery
+BMA,BermudAir,12D4D9,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/1/1f/Bermudair-logo.svg
+BOI,2GO,EC008C,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/82/2GO_logo.svg
+BOT,Air Botswana,10ADE4,brand,,logo file https://upload.wikimedia.org/wikipedia/en/e/e5/Air_Botswana_logo.svg
+BOV,Boliviana de Aviación,0D2B60,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/6/63/Logotipo_de_BoA.svg
+BOX,AeroLogic,FFCC00,livery,BCS,DHL European Air Transport house livery
+BRU,Belavia,455CC7,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/0c/Belavia_logo.svg
+BTI,airBaltic,CDDA32,brand,,airline logo on Wikipedia
+BTK,Batik Air,C02555,brand,,logo file https://upload.wikimedia.org/wikipedia/en/9/9e/Batik_Air_logo.svg
+BWA,Caribbean Airlines,00843D,livery,,green hummingbird
+CAI,Corendon Airlines,D81E05,brand,,theme-color on corendon.nl
+CAL,China Airlines,CA5767,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/a7/China_Airlines.svg
+CAO,Air China Cargo,E30E17,simple-icons,CCA,Air China house livery
+CAY,Cayman Airways,18468B,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/4e/Cayman_Airways_logo.svg
+CBG,GX Airlines,FFE900,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/78/GX_Airlines_logo.svg
+CCA,Air China,E30E17,simple-icons,,
+CCD,Dalian Airlines,E30E17,simple-icons,CCA,Air China house livery
+CCM,Air Corsica,004B86,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/8c/Air_Corsica_logo.svg
+CDG,Shandong Airlines,1E406C,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/be/ShandongAirlines.svg
+CEB,Cebu Pacific,2574BB,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/cd/Cebu_Pacific_logo.svg
+CES,China Eastern Airlines,1A2477,simple-icons,,
+CFE,BA CityFlyer,2E5C99,simple-icons,BAW,British Airways house livery
+CFG,Condor,FFD100,livery,,Condor yellow  the constant through the 2022 stripe livery
+CHH,Hainan Airlines,E60012,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/cd/Hainan_Airlines_Logo.svg
+CJT,Cargojet,D22730,livery,,Cargojet red
+CKK,China Cargo Airlines,1A2477,simple-icons,CES,China Eastern Airlines house livery
+CKS,Kalitta Air,1C1C1C,livery,,black tail
+CLH,Lufthansa CityLine,05164D,simple-icons,DLH,Lufthansa house livery
+CLW,LOT Charters,11397E,simple-icons,LOT,LOT Polish Airlines house livery
+CLX,Cargolux,003DA5,livery,,blue tail
+CMA,CMA CGM Air Cargo,051039,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d1/CMA_CGM_logo.svg
+CMP,Copa Airlines,0032A0,simple-icons,,
+CND,Corendon Dutch Airlines,D81E05,brand,CAI,Corendon Airlines house livery
+CNF,Canaryfly,2F4A93,brand,,airline logo on Wikipedia
+CPA,Cathay Pacific,006B6E,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/17/Cathay_Pacific_logo.svg
+CRK,Hong Kong Airlines,E60012,brand,,logo file https://upload.wikimedia.org/wikipedia/en/d/d6/Hong_Kong_Airlines_Logo.svg
+CRL,Corsair International,00539F,livery,,Corsair blue tail and titles
+CSA,Czech Airlines,0F2C64,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/33/Czech_Airlines_Logo.svg
+CSC,Sichuan Airlines,D7000F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/0d/Sichuan_Airlines_logo.svg
+CSH,Shanghai Airlines,DE0038,brand,CES,logo file https://upload.wikimedia.org/wikipedia/en/4/4e/Shanghai_Airlines.svg
+CSN,China Southern Airlines,008BCB,simple-icons,,
+CSW,Chair Airlines,00A4E1,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/e/e2/Chair_Airlines.svg
+CSZ,Shenzhen Airlines,CC0327,brand,CCA,logo file https://upload.wikimedia.org/wikipedia/en/8/84/Shenzhen_Airlines_logo.svg
+CTN,Croatia Airlines,19386E,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/e/e0/Croatia_Airlines_2024_logo.svg
+CTV,Citilink,0C803D,brand,GIA,logo file https://upload.wikimedia.org/wikipedia/commons/d/d4/2012_Citilink_Logo.svg
+CUA,China United Airlines,C40169,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/a4/China_United_Airlines_logo.svg
+CXA,XiamenAir,244584,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/c8/XiamenAir.svg
+DAE,DHL Aviation EEMEA,FFCC00,livery,BCS,DHL European Air Transport house livery
+DAH,Air Algérie,E2231A,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/9/94/Air_Alg%C3%A9rie_logo.svg
+DAL,Delta Air Lines,003366,simple-icons,,
+DHK,DHL Air UK,FFCC00,livery,BCS,DHL European Air Transport house livery
+DJI,Air Djibouti,FB0F0C,brand,,logo file https://upload.wikimedia.org/wikipedia/en/f/f7/Air_Djibouti_logo.svg
+DLA,Air Dolomiti,062647,brand,DLH,logo file https://upload.wikimedia.org/wikipedia/commons/3/3a/Air_Dolomiti-Logo.svg
+DLH,Lufthansa,05164D,simple-icons,,
+DQA,Maldivian,BD193A,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/84/Maldivian_%28airline%29_logo.svg
+DRK,Drukair,E9540D,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/a0/Drukair-royal-bhutan-airlines-logo.svg
+DTR,Danish Air Transport,D22027,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/7a/Danish_Air_Transport_logo.svg
+EAI,Emerald Airlines,006472,brand,EIN,Aer Lingus house livery
+EAL,Eastern Airlines,192947,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/34/Eastern_Airlines_logo_new.svg
+EAQ,Eastern Australia Airlines,E40000,simple-icons,QFA,Qantas house livery
+EDV,Endeavor Air,003366,simple-icons,DAL,Delta Air Lines house livery
+EDW,Edelweiss Air,CF0A2C,brand,SWR,logo file https://upload.wikimedia.org/wikipedia/en/1/19/Edelweiss_Air_logo.svg
+EFW,BA Euroflyer,2E5C99,simple-icons,BAW,British Airways house livery
+EIN,Aer Lingus,006472,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/1c/Aer_Lingus_logo_2019.svg
+EJU,easyJet Europe,FF6600,simple-icons,EZY,easyJet house livery
+ELY,El Al,1B358F,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d7/El_Al_logo.svg
+ENT,Enter Air,0299D2,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/0b/Enter_Air_logo.svg
+ENY,Envoy Air,0078D2,simple-icons,AAL,American Airlines house livery
+ESF,Estafeta Carga Aérea,C01818,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/7/7f/Logo_de_Estafeta.svg
+ETD,Etihad Airways,BD8B13,simple-icons,,
+ETH,Ethiopian Airlines,648B1A,simple-icons,,
+EVA,EVA Air,00A64F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/e/ed/EVA_Air_logo.svg
+EWE,Eurowings Europe,8F174F,brand,EWG,Eurowings house livery
+EWG,Eurowings,8F174F,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/b4/Eurowings_Logo.svg
+EXS,Jet2.com,E2231A,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d6/Jet2Logo.svg
+EZS,easyJet Switzerland,FF6600,simple-icons,EZY,easyJet house livery
+EZY,easyJet,FF6600,simple-icons,,
+FAD,Flyadeal,CDDE00,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/7/73/Flyadeal_Logo.svg
+FBU,French Bee,1252A1,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/8b/French_bee_logo.svg
+FBZ,Flybondi,FDBE12,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/bd/Flybondi_logo_simple.svg
+FCM,Nordic Regional Airlines,0B1560,brand,FIN,Finnair house livery
+FDA,Fuji Dream Airlines,D7001D,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/4/45/Fuji_Dream_Airlines_logo_%282008%2C_FDA%29.svg
+FDB,Flydubai,FF8200,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/7/79/Fly_Dubai_logo_2010_03.svg
+FDX,FedEx Express,4D148C,livery,,FedEx purple tail and wordmark
+FFM,Firefly,F06519,brand,MAS,logo file https://upload.wikimedia.org/wikipedia/commons/9/9f/Firefly_Logo.svg
+FFT,Frontier Airlines,008542,livery,,Frontier green tail
+FHY,Freebird Airlines,0055A4,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/9/9b/Freebird_Airlines_Logo_%282021%29.svg
+FIN,Finnair,0B1560,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/bb/Finnair_Logo.svg
+FJA,Fiji Link,002F6C,livery,FJI,Fiji Airways house livery
+FJI,Fiji Airways,002F6C,livery,,navy tail with the masi motif
+FJL,Fly Jinnah,ED1B48,brand,ABY,Air Arabia house livery
+FLI,Atlantic Airways,25407B,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/cb/Atlantic_Airways_logo.svg
+FPO,ASL Airlines France,00539B,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/a/a5/ASL_Airlines_France_logo.svg
+FPY,Play,EC0C31,brand,,logo file https://upload.wikimedia.org/wikipedia/en/6/69/Fly_Play_logo.svg
+FWI,Air Caraïbes,55B031,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/1/17/Air_Caraibes_2019_logo.svg
+GAP,PAL Express,2E378F,brand,PAL,logo file https://upload.wikimedia.org/wikipedia/en/d/db/PAL_Express_logo.svg
+GCR,Tianjin Airlines,ED1C24,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/cc/Tianjin_Airlines_logo.svg
+GEC,Lufthansa Cargo,FFAD00,livery,DLH,Lufthansa Cargo yellow tail
+GFA,Gulf Air,9E7E38,livery,,gold falcon on the tail
+GIA,Garuda Indonesia,202D5C,brand,,logo file https://upload.wikimedia.org/wikipedia/en/f/fe/Garuda_Indonesia_Logo.svg
+GLG,Avianca Ecuador,FF0000,brand,AVA,Avianca house livery
+GLO,Gol Linhas Aéreas,FF7020,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/f/ff/Gol_Linhas_A%C3%A9reas_Inteligentes_logo_%282015%2C_without_the_slogan%29.svg
+GRL,Air Greenland,C10A27,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/8f/Air_Greenland_logo.svg
+GTI,Atlas Air,002D62,livery,,Atlas Air blue globe
+GUG,Avianca Guatemala,FF0000,brand,AVA,Avianca house livery
+GWI,Germanwings,05164D,simple-icons,DLH,Lufthansa house livery
+HAL,Hawaiian Airlines,4F2683,livery,,Hawaiian purple with the Pualani
+HDA,Cathay Dragon,B70031,brand,CPA,logo file https://upload.wikimedia.org/wikipedia/en/8/89/Cathay_Dragon.svg
+HFY,Hi Fly,1B3668,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/c/cc/Hi_Fly_logo.svg
+HKE,HK Express,702B91,brand,CPA,logo file https://upload.wikimedia.org/wikipedia/en/e/ee/HK_Express_logo_%282023%29.svg
+HOP,Air France Hop,002157,simple-icons,AFR,Air France house livery
+HVN,Vietnam Airlines,00607A,livery,,teal-blue tail with the gold lotus
+HXA,China Express Airlines,00469B,brand,,logo file https://upload.wikimedia.org/wikipedia/en/6/6c/ChinaExpressAirLogo.svg
+IAW,Iraqi Airways,12470D,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/7/7c/Iraqi_Airways_Logo.svg
+IBB,Binter Canarias,3DAF29,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/0f/Binter_logo.svg
+IBE,Iberia,D7192D,simple-icons,,
+IBS,Iberia Express,D7192D,simple-icons,IBE,Iberia house livery
+ICE,Icelandair,001B71,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/9/9a/Icelandairlogo.svg
+ICV,Cargolux Italia,003DA5,livery,CLX,Cargolux house livery
+IGO,IndiGo,09009B,simple-icons,,
+IRA,Iran Air,004B87,livery,,blue titles carrying the Homa
+ISR,Israir,18549C,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/9/9c/Israir_Airlines_Logo.svg
+ISV,Avianca Honduras,FF0000,brand,AVA,Avianca house livery
+ITY,ITA Airways,0C4DA2,livery,,all-over azzurro fuselage
+IYE,Yemenia,174191,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/4f/Yemenia_Logo.svg
+JAC,Japan Air Commuter,C00000,simple-icons,JAL,Japan Airlines house livery
+JAF,TUI fly Belgium,E41917,brand,TUI,TUI fly Deutschland house livery
+JAL,Japan Airlines,C00000,simple-icons,,
+JAT,JetSmart,153E69,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/f/fb/Logo_JetSmart.svg
+JBU,JetBlue,001E59,simple-icons,,
+JIA,PSA Airlines,0078D2,simple-icons,AAL,American Airlines house livery
+JJA,Jeju Air,F15A22,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/f/f2/Jeju_Air_Logo.svg
+JJP,Jetstar Japan,FE5815,brand,JST,Jetstar house livery
+JLJ,J-Air,C00000,simple-icons,JAL,Japan Airlines house livery
+JNA,Jin Air,BED600,brand,,logo file https://upload.wikimedia.org/wikipedia/en/5/5a/Jin_Air_logo.svg
+JOS,DHL de Guatemala,FFCC00,livery,BCS,DHL European Air Transport house livery
+JSA,Jetstar Asia,FE5815,brand,JST,Jetstar house livery
+JST,Jetstar,FE5815,brand,,airline logo on Wikipedia
+JSX,JSX,E53835,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/83/Logo_of_JSX.svg
+JTD,Jettime,034EA1,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d6/Jet_Time_logo_%282016%29.svg
+JYH,9 Air,002686,brand,,airline logo on Wikipedia
+JZA,Jazz Aviation,F01428,simple-icons,ACA,Air Canada house livery
+JZR,Jazeera Airways,0D89CB,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/6/6d/Jazeera_Airways_logo.svg
+KAC,Kuwait Airways,20285C,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/08/Kuwait_Airways_logo.svg
+KAL,Korean Air,0064A8,livery,,Korean Air blue with the taegeuk
+KAP,Cape Air,1F4FA2,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/44/Cape_Air_logo.svg
+KLC,KLM Cityhopper,00A1E4,brand,KLM,KLM house livery
+KLM,KLM,00A1E4,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/c/c7/KLM_logo.svg
+KMM,KM Malta Airlines,C8102E,brand,,airline logo on Wikipedia
+KNE,Flynas,00A94F,livery,,flynas green
+KQA,Kenya Airways,C8102E,livery,,red titles and tail
+KTC,AirAsia Cambodia,FF0000,simple-icons,AXM,AirAsia house livery
+KZR,Air Astana,253168,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/a7/Air_Astana_logo.svg
+LAE,LATAM Cargo Colombia,2A0088,livery,LAN,LATAM Airlines house livery
+LAM,LAM Mozambique Airlines,DC1F02,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/cf/LAM_Mozambique_Airlines_logo.svg
+LAN,LATAM Airlines,2A0088,livery,,LATAM indigo
+LAO,Lao Airlines,24A859,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/a0/LaoAirlineslogo.svg
+LAP,LATAM Paraguay,2A0088,livery,LAN,LATAM Airlines house livery
+LCO,LATAM Cargo Chile,2A0088,livery,LAN,LATAM Airlines house livery
+LDA,Lauda Europe,E61842,brand,RYR,logo file https://upload.wikimedia.org/wikipedia/commons/a/a1/Lauda.svg
+LDM,LaudaMotion,E61842,livery,RYR,LaudaMotion red  the Lauda house colour
+LGL,Luxair,00ABBF,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/77/Luxair_Official_Logo.svg
+LHX,Lufthansa City Airlines,05164D,simple-icons,DLH,Lufthansa house livery
+LNI,Lion Air,FB0102,brand,,logo file https://upload.wikimedia.org/wikipedia/en/5/59/Lion_Air.svg
+LNK,Airlink,001A6F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/19/Airlink_logo.svg
+LOG,Loganair,00205B,livery,,Loganair navy tail
+LOT,LOT Polish Airlines,11397E,simple-icons,,
+LPE,LATAM Perú,2A0088,livery,LAN,LATAM Airlines house livery
+LRC,Avianca Costa Rica,FF0000,brand,AVA,Avianca house livery
+LTG,LATAM Cargo Brasil,2A0088,livery,LAN,LATAM Airlines house livery
+LVL,Level,00AADB,brand,IBE,logo file https://upload.wikimedia.org/wikipedia/commons/9/97/Level.svg
+LXJ,Flexjet,96262C,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/b3/Flexjet_Logo.svg
+LZB,Bulgaria Air,AC1F24,brand,,logo file https://upload.wikimedia.org/wikipedia/en/3/35/Bulgaria_Air_logo-en.svg
+MAC,Air Arabia Maroc,ED1B48,brand,ABY,Air Arabia house livery
+MAS,Malaysia Airlines,0D4689,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/13/Malaysia_Airlines_Logo.svg
+MAU,Air Mauritius,C1012F,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/8f/Air_Mauritius_Logo.svg
+MAY,Malta Air,073590,simple-icons,RYR,Ryanair house livery
+MDA,Mandarin Airlines,003DA6,brand,CAL,logo file https://upload.wikimedia.org/wikipedia/en/1/1b/Mandarin_Airlines_logo.svg
+MEA,Middle East Airlines,007B5E,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/84/Middle_East_Airlines_%28logo%29.svg
+MGL,MIAT Mongolian Airlines,164194,brand,,logo file https://upload.wikimedia.org/wikipedia/en/6/6a/MIAT_Eng_Logo.svg
+MGY,Madagascar Airlines,005843,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/ad/Madagascar_Airlines_logo.svg
+MNE,Air Montenegro,00B9F2,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/7f/Logo_Air_Montenegro_%282025%29.svg
+MPH,Martinair,00A1E4,brand,KLM,KLM house livery
+MSC,Air Cairo,3D1063,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/6/60/Air_Cairo_logo.svg
+MSE,EgyptAir Express,00265D,brand,MSR,EgyptAir house livery
+MSR,EgyptAir,00265D,brand,,logo file https://upload.wikimedia.org/wikipedia/en/c/ca/Egypt_Air.svg
+MXD,Batik Air Malaysia,C02555,brand,BTK,Batik Air house livery
+NAC,Northern Air Cargo,FF0000,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/c/cf/Northern_Air_Cargo_Logo.svg
+NAN,Norwegian Air Norway,E6222E,brand,NAX,Norwegian Air Shuttle house livery
+NAX,Norwegian Air Shuttle,E6222E,brand,,airline logo on Wikipedia
+NBT,Norse Atlantic Airways,20417C,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/2/28/Norse.svg
+NCR,National Airlines,005BAA,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/dd/National_Airlines_logo.svg
+NKS,Spirit Airlines,FFE500,livery,,Spirit yellow
+NOK,Nok Air,FFD200,livery,,yellow fuselage with a bird's beak on the nose
+NOS,Neos,DA1A15,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/bf/Neos_logo.svg
+NOZ,Norwegian Air Shuttle Sweden,E6222E,brand,NAX,Norwegian Air Shuttle house livery
+NSZ,Norwegian Air Sweden,E6222E,brand,NAX,Norwegian Air Shuttle house livery
+NWK,Network Aviation,E40000,simple-icons,QFA,Qantas house livery
+NWS,Nordwind Airlines,CD202C,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/0e/Nordwind_Airlines_logo.svg
+NZM,Mount Cook Airline,000000,livery,ANZ,Air New Zealand house livery
+OAE,Omni Air International,D13239,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d0/Omni_Air_International_Logo.svg
+OAL,Olympic Air,0B4F9C,livery,AEE,Olympic blue rings
+OAW,Helvetic Airways,E4032E,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/2/2f/Helvetic_Logo_2019_red.svg
+OCN,Discover Airlines,1F73B0,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/8/88/Logo_Discover_Airlines.svg
+OMA,Oman Air,B5985A,brand,,logo file https://upload.wikimedia.org/wikipedia/en/a/a0/Oman_Air_logo.svg
+PAC,Polar Air Cargo,002D62,livery,GTI,Atlas Air house livery
+PAL,Philippine Airlines,2F3B8D,brand,,logo file https://upload.wikimedia.org/wikipedia/en/d/d2/Philippine_Airlines_logo.svg
+PDT,Piedmont Airlines,0078D2,simple-icons,AAL,American Airlines house livery
+PGT,Pegasus Airlines,FDC43E,simple-icons,,
+PIA,Pakistan International Airlines,00694E,livery,,green tail
+PLM,Wamos Air,6FB92C,brand,,logo file https://upload.wikimedia.org/wikipedia/en/2/24/Wamos_Air_logo.svg
+POE,Porter Airlines,002B49,livery,,Porter navy and white
+QAZ,Qazaq Air,EE3124,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/2/23/Vietjet_Qazaqstan_logo.svg
+QFA,Qantas,E40000,simple-icons,,
+QTR,Qatar Airways,5C0D34,simple-icons,,
+QXE,Horizon Air,01426A,brand,ASA,Alaska Airlines house livery
+RAM,Royal Air Maroc,C20831,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/bf/Logo_Royal_Air_Maroc.svg
+RBA,Royal Brunei Airlines,FFE600,brand,,logo file https://upload.wikimedia.org/wikipedia/en/5/56/Royal_Brunei_Airlines_Logo.svg
+RBG,Air Arabia Egypt,ED1B48,brand,ABY,Air Arabia house livery
+REU,Air Austral,20294E,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/45/Air_Austral_logo_%282015%29.svg
+RJA,Royal Jordanian,7C2529,livery,,crimson titles
+RLK,Air Nelson,000000,livery,ANZ,Air New Zealand house livery
+ROT,TAROM,003366,simple-icons,,
+ROU,Air Canada Rouge,F01428,simple-icons,ACA,Air Canada house livery
+RPA,Republic Airways,00263A,brand,,airline logo on Wikipedia
+RPB,Copa Airlines Colombia,0032A0,simple-icons,CMP,Copa Airlines house livery
+RUK,Ryanair UK,073590,simple-icons,RYR,Ryanair house livery
+RWD,RwandAir,1C4E9D,brand,,logo file https://upload.wikimedia.org/wikipedia/en/6/6e/RwandAir_logo.svg
+RWZ,Red Wings Airlines,E62731,brand,,airline logo on Wikipedia
+RXA,Rex Airlines,003366,brand,,theme-color on rex.com.au
+RXI,Riyadh Air,240852,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/b1/Riyadh_Air_Logo.svg
+RXP,Royal Air Maroc Express,C20831,brand,RAM,Royal Air Maroc house livery
+RYR,Ryanair,073590,simple-icons,,
+RYS,Buzz,FCD000,brand,RYR,logo file https://upload.wikimedia.org/wikipedia/en/7/7a/Buzz_%28Ryanair%29_logo.svg
+RZO,Azores Airlines,003568,brand,,logo file https://upload.wikimedia.org/wikipedia/en/f/f6/Azores_Airlines_logo.svg
+SAA,South African Airways,163683,brand,,logo file https://upload.wikimedia.org/wikipedia/en/7/7c/SAA_logo_%282019%29.svg
+SAS,Scandinavian Airlines,0002BE,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/33/Scandinavian_Airlines_logo.svg
+SAT,SATA Air Açores,003568,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b0/SATA_Air_A%C3%A7ores_logo.svg
+SBI,S7 Airlines,BED600,brand,,airline logo on Wikipedia
+SCX,Sun Country Airlines,F15908,brand,,manifest theme_color on suncountry.com
+SDM,Rossiya Airlines,DD052B,brand,,airline logo on Wikipedia
+SEH,Sky Express,183A68,brand,,theme-color and manifest on skyexpress.gr
+SEJ,SpiceJet,EB1C23,brand,,airline logo on Wikipedia
+SEY,Air Seychelles,D93722,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b1/Air_Seychelles_logo.svg
+SFJ,StarFlyer,1A1A1A,livery,,all-black fuselage
+SHT,British Airways Shuttle,2E5C99,simple-icons,BAW,British Airways house livery
+SHU,Aurora,002A59,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/2/2e/Aurora_airline_logo.svg
+SIA,Singapore Airlines,F99F1C,simple-icons,,
+SJV,Super Air Jet,D0A175,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/06/Logo_Super_Air_Jet.svg
+SJX,Starlux Airlines,1B2A4A,livery,,navy fuselage with gold trim
+SKU,Sky Airline,59237F,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/6/65/Sky_Airline_Logo.svg
+SKX,Sky Airline Perú,59237F,brand,SKU,Sky Airline house livery
+SKY,Skymark Airlines,1E398D,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/4/44/Skymark_Airlines_Logo.svg
+SLI,Aeroméxico Connect,0B2343,simple-icons,AMX,Aeroméxico house livery
+SLK,SilkAir,009484,brand,SIA,logo file https://upload.wikimedia.org/wikipedia/en/d/d5/SilkAir_Logo.svg
+SLM,Surinam Airways,CC1719,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/8f/Surinam_Airways_Logo.svg
+SNJ,Solaseed Air,C5D700,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/3e/Solaseed_Air_logo.svg
+SOL,Solomon Airlines,212061,brand,,logo file https://upload.wikimedia.org/wikipedia/en/9/9d/Solomon_Airlines_Logo.svg
+SQC,Singapore Airlines Cargo,F99F1C,simple-icons,SIA,Singapore Airlines house livery
+SQP,SkyUp Airlines,005CB2,brand,,--primary custom property on skyup.aero
+SRQ,Cebgo,2574BB,brand,CEB,Cebu Pacific house livery
+SRR,Maersk Air Cargo,42B0D5,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/e/e6/Maersk_Group_Logo.svg
+SRU,Star Perú,DAA228,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/a/af/Star_Per%C3%BA_logo.svg
+SSQ,Sunstate Airlines,E40000,simple-icons,QFA,Qantas house livery
+STK,Stobart Air,006472,brand,EIN,Aer Lingus house livery
+STP,STP Airways,019901,brand,,logo file https://upload.wikimedia.org/wikipedia/en/8/8b/STP_Airways_logo.svg
+STW,Southwind Airlines,BE1E2D,brand,,airline logo on Wikipedia
+SUD,Sudan Airways,013B82,brand,,--primary custom property on sudanair.com
+SVA,Saudia,026938,simple-icons,,
+SVR,Ural Airlines,BA0C2F,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/0/04/Logo_of_the_Ural_Airlines.svg
+SVS,SAS Link,0002BE,brand,SAS,Scandinavian Airlines house livery
+SWA,Southwest Airlines,304CB2,simple-icons,,
+SWR,Swiss International Air Lines,E60005,brand,DLH,logo file https://upload.wikimedia.org/wikipedia/commons/f/f8/Swiss_International_Air_Lines_Logo_2011.svg
+SXD,SunExpress Deutschland,1A428A,brand,SXS,SunExpress house livery
+SXS,SunExpress,1A428A,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d9/SunExpress_Logo.svg
+SYR,Syrian Air,172983,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b8/SyrianAir_logo.svg
+SZN,Air Senegal,D41219,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/01/Air_Senegal_Logo.svg
+SZS,SAS Connect,0002BE,brand,SAS,Scandinavian Airlines house livery
+TAI,Avianca El Salvador,FF0000,brand,AVA,Avianca house livery
+TAM,LATAM Brasil,2A0088,livery,LAN,LATAM Airlines house livery
+TAP,TAP Air Portugal,009639,livery,,TAP green on the tail and titles
+TAR,Tunisair,D40000,brand,,logo file https://upload.wikimedia.org/wikipedia/en/9/97/Tunisair_logo.svg
+TAX,Thai AirAsia X,FF0000,simple-icons,AXM,AirAsia house livery
+TAY,ASL Airlines Belgium,054C91,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/e/e8/ASL_Airlines_Belgium_Logo.svg
+TFL,TUI fly Netherlands,E41917,brand,TUI,TUI fly Deutschland house livery
+TGW,Scoot,FFE900,brand,SIA,logo file https://upload.wikimedia.org/wikipedia/commons/b/ba/Scoot_logo.svg
+TGZ,Georgian Airways,EB1F37,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/40/Georgian_Airways_logo.svg
+THA,Thai Airways International,6F2C91,livery,,Thai purple tail with gold
+THD,Thai Smile,6F2C91,livery,THA,Thai Airways International house livery
+THT,Air Tahiti Nui,003565,brand,,mask-icon on airtahitinui.com
+THY,Turkish Airlines,C70A0C,simple-icons,,
+TKJ,AJet,008FDA,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/3/38/AJet_logo.svg
+TLM,Thai Lion Air,FB0102,brand,LNI,Lion Air house livery
+TNO,Avianca Cargo México,FF0000,brand,AVA,Avianca house livery
+TOM,TUI Airways,E41917,brand,TUI,TUI fly Deutschland house livery
+TPA,Avianca Cargo,FF0000,brand,AVA,Avianca house livery
+TPU,Avianca Perú,FF0000,brand,AVA,Avianca house livery
+TRA,Transavia,05CE78,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/c/cf/Transavia_2025_logo.svg
+TSC,Air Transat,172B54,simple-icons,,
+TTW,Tigerair Taiwan,F6A021,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/f/fa/Tigerair_Taiwan_logo.svg
+TUA,Turkmenistan Airlines,008542,livery,,green tail
+TUI,TUI fly Deutschland,E41917,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/a/a6/TUIfly_Logo_2016.svg
+TUX,Tunisair Express,D40000,brand,TAR,Tunisair house livery
+TVF,Transavia France,05CE78,brand,TRA,Transavia house livery
+TVJ,Thai VietJet Air,FF0000,brand,VJC,VietJet Air house livery
+TVL,Smartwings Hungary,004289,brand,TVS,Smartwings house livery
+TVP,Smartwings Poland,004289,brand,TVS,Smartwings house livery
+TVQ,Smartwings Slovakia,004289,brand,TVS,Smartwings house livery
+TVS,Smartwings,004289,brand,,airline logo on Wikipedia
+UAE,Emirates,D71921,simple-icons,,
+UAL,United Airlines,002244,simple-icons,,
+UGD,Uganda Airlines,E91D26,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b0/Uganda_Airlines_2019_Logo.svg
+UPS,UPS Airlines,644117,livery,,UPS brown
+UTA,Utair,003594,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/b5/Utair_logo_gradient.svg
+UZB,Uzbekistan Airways,254A88,brand,,theme-color on uzairways.com
+VBW,Air Burkina,0FAB4B,brand,,logo file https://upload.wikimedia.org/wikipedia/en/1/16/Air_Burkina_logo.svg
+VCV,Conviasa,EC6A18,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/d/d7/Conviasa_Logo.svg
+VDA,Volga-Dnepr Airlines,004A95,brand,,logo file https://upload.wikimedia.org/wikipedia/en/0/06/Volga-Dnepr_Airlines_logo.svg
+VIR,Virgin Atlantic,DA0530,simple-icons,,
+VIV,Viva Aerobus,00AE44,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/1/1f/Viva_Logo.svg
+VJC,VietJet Air,FF0000,brand,,manifest theme_color on vietjetair.com
+VKG,Sunclass Airlines,FE8C00,brand,,theme-color on sunclassairlines.dk
+VLG,Vueling,FFCC00,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/b/b8/Logo_Vueling.svg
+VOE,Volotea,5B2D8E,livery,,Volotea purple wordmark
+VOI,Volaris,6B2C91,livery,,Volaris purple
+VOS,Volaris El Salvador,6B2C91,livery,VOI,Volaris house livery
+VOZ,Virgin Australia,E10A0A,simple-icons,,
+VRE,Air Côte d'Ivoire,E77A31,brand,,logo file https://upload.wikimedia.org/wikipedia/en/5/51/Air_C%C3%B4te_d%27Ivoire_logo.svg
+VTA,Air Tahiti,E20025,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b9/Air_Tahiti_logo.svg
+VTI,Vistara,511D4B,brand,AIC,logo file https://upload.wikimedia.org/wikipedia/en/b/bd/Vistara_Logo.svg
+WEN,WestJet Encore,00467F,brand,WJA,WestJet house livery
+WIA,Winair,B81D23,brand,,theme-color and manifest on fly-winair.sx
+WIF,Widerøe,00482D,brand,,logo file https://upload.wikimedia.org/wikipedia/en/b/b7/Wideroe_logo.svg
+WJA,WestJet,00467F,brand,,logo file https://upload.wikimedia.org/wikipedia/commons/1/16/WestJetLogo2018.svg
+WMT,Wizz Air Malta,C6007E,simple-icons,WZZ,Wizz Air house livery
+WON,Wings Air,FB0102,brand,LNI,Lion Air house livery
+WUK,Wizz Air UK,C6007E,simple-icons,WZZ,Wizz Air house livery
+WWP,Wingo,62358B,brand,,logo file https://upload.wikimedia.org/wikipedia/en/4/4e/Wingo_Logo.svg
+WZZ,Wizz Air,C6007E,simple-icons,,
+XAX,AirAsia X,FF0000,simple-icons,AXM,AirAsia house livery
