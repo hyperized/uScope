@@ -1261,9 +1261,10 @@ func TestStart(t *testing.T) {
 	})
 }
 
-func TestRunReportsASourceItCannotBuild(t *testing.T) {
-	t.Parallel()
-
+// Not parallel on purpose: it swaps the package-level newSource seam, and
+// parallel tests only resume once every sequential test has finished, so
+// this is the one window in which rewriting it races with nobody.
+func TestRunReportsASourceItCannotBuild(t *testing.T) { //nolint:paralleltest // rewrites the newSource seam
 	original := newSource
 	newSource = func(config, string, io.Writer) (source.Source, error) { return nil, errUnrelated }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fonts"
@@ -351,7 +352,7 @@ func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 		{fieldNewTicker, funcPtr(run.newTicker) == funcPtr(realTicker)},
 		{fieldCreatePNG, funcPtr(run.createPNG) == funcPtr(createFile)},
 		{fieldNow, funcPtr(run.now) == funcPtr(time.Now)},
-		{fieldStdin, run.stdin == io.Reader(os.Stdin)},
+		{fieldStdin, isTermReader(run.stdin)},
 		{fieldLoadScenes, funcPtr(run.loadScenes) == funcPtr(run.defaultScenes)},
 		{fieldSource, run.source == source.Source(source.Empty{})},
 		{fieldScopeRange, run.scopeRange.GetCurrent() != overrideRangeNm},
@@ -973,4 +974,12 @@ func TestBuildScenesFillsInWhatItWasNotGiven(t *testing.T) {
 
 		scene.Draw(canv, 0)
 	}
+}
+
+// isTermReader reports whether stdin is the production reader, which wraps
+// the terminal's file descriptor rather than os.Stdin itself.
+func isTermReader(src io.Reader) bool {
+	_, ok := src.(*term.Reader)
+
+	return ok
 }

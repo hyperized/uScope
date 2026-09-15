@@ -8,6 +8,7 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
@@ -56,7 +57,7 @@ func newRunner(opts ...Option) *runner {
 		now:           time.Now,
 		getenv:        os.Getenv,
 		goos:          runtime.GOOS,
-		stdin:         os.Stdin,
+		stdin:         term.NewReader(os.Stdin.Fd()),
 		stderr:        os.Stderr,
 		source:        source.Empty{},
 		scopeRange:    scope.New(),

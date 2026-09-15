@@ -186,7 +186,9 @@ func arrow(char byte) (Kind, bool) {
 // It never blocks on out for longer than cancellation takes, so the caller
 // can drop the channel on the floor at shutdown. On a raw tty with VMIN=0
 // and VTIME=1 a read returns at least every 100 ms, which bounds how long
-// cancellation takes to be noticed. io.EOF is a clean stop, not an error.
+// cancellation takes to be noticed. io.EOF is a clean stop, not an error;
+// the app therefore feeds it term.Reader, which never reports a timed-out
+// read as EOF the way os.File does.
 func Read(ctx context.Context, src io.Reader, out chan<- Key) error {
 	var dec Decoder
 
