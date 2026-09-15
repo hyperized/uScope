@@ -70,10 +70,27 @@ type Blitter interface {
 	String() string
 }
 
-// Drawer paints one frame. pattern.Scene and specimen.Scene implement it;
-// the radar will be the third.
+// Drawer paints one frame. All three scenes implement it.
 type Drawer interface {
 	Draw(dst *canvas.Canvas, elapsed time.Duration)
+}
+
+// KeyHandler is the optional other half of the scene contract. A scene that
+// binds keys of its own implements it and gets first refusal on every key;
+// anything it does not take falls through to the loop, which is what keeps q
+// and s working whichever scene is on screen.
+//
+// It is declared here, where it is consumed, so a scene does not have to
+// import internal/app to be one.
+type KeyHandler interface {
+	Handle(key input.Key) bool
+}
+
+// offerKey hands a key to the scene and reports whether the scene took it.
+func offerKey(scene Drawer, key input.Key) bool {
+	binder, ok := scene.(KeyHandler)
+
+	return ok && binder.Handle(key)
 }
 
 // Config is the parsed intent of the command line.
@@ -186,8 +203,8 @@ func enter(
 type command uint8
 
 const (
-	// cmdNone is every key nothing is bound to, which includes the arrows:
-	// they are decoded, but slice 3 has nothing for them to steer.
+	// cmdNone is every key nothing is bound to at this level. The arrows and
+	// the radar's own keys are taken by the scene before the loop sees them.
 	cmdNone command = iota
 	cmdQuit
 	cmdNextScene
@@ -474,6 +491,10 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan
 		case <-ctx.Done():
 			return nil
 		case key := <-keys:
+			if offerKey(ses.scene(), key) {
+				continue
+			}
+
 			action := classify(key)
 			if action == cmdQuit {
 				return nil

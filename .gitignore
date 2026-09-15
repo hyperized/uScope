@@ -3,6 +3,7 @@ uScope*
 coverage.out
 coverage.html
 dist/
+*.test
 CLAUDE.md
 improvements.md
 plan.md

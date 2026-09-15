@@ -4,6 +4,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -34,6 +35,20 @@ func countPixels(canv *canvas.Canvas, want color.RGBA) int {
 	}
 
 	return count
+}
+
+// mustCanvas creates a side by side canvas or fails the test immediately.
+// The tests below call it instead of checking canvas.New's error inline,
+// which keeps their per-case setup down to one line each.
+func mustCanvas(t *testing.T, side int) *canvas.Canvas {
+	t.Helper()
+
+	canv, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return canv
 }
 
 func TestNew(t *testing.T) {
@@ -543,4 +558,467 @@ func BenchmarkLine(b *testing.B) {
 	for b.Loop() {
 		canv.Line(0, 0, side-1, side-1, canvas.White)
 	}
+}
+
+// TestCanvasBlend covers bounds clipping, the NaN/negative/overflow ends of
+// the alpha clamp, and the two edges the doc comment promises: alpha 1
+// matching Set exactly and alpha 0 leaving the pixel completely untouched.
+func TestCanvasBlend(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side       = 5
+		targetX    = 2
+		targetY    = 2
+		overAlpha  = 1.5
+		underAlpha = -0.5
+	)
+
+	base := color.RGBA{R: 20, G: 40, B: 60, A: 0xFF}
+	full := color.RGBA{R: 200, G: 150, B: 100, A: 0xFF}
+
+	for _, testCase := range []struct {
+		name  string
+		x     int
+		y     int
+		alpha float64
+		want  color.RGBA
+	}{
+		{name: "out of bounds is dropped", x: side, y: targetY, alpha: 1, want: base},
+		{name: "alpha one matches Set", x: targetX, y: targetY, alpha: 1, want: full},
+		{name: "alpha zero is untouched", x: targetX, y: targetY, alpha: 0, want: base},
+		{name: "negative alpha clamps to untouched", x: targetX, y: targetY, alpha: underAlpha, want: base},
+		{name: "NaN alpha is untouched", x: targetX, y: targetY, alpha: math.NaN(), want: base},
+		{
+			name: "alpha above one clamps to Set", x: targetX, y: targetY, alpha: overAlpha, want: full,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustCanvas(t, side)
+
+			canv.Set(targetX, targetY, base)
+			canv.Blend(testCase.x, testCase.y, full, testCase.alpha)
+
+			assertPixel(t, canv, targetX, targetY, testCase.want)
+		})
+	}
+}
+
+// TestCanvasBlendHalfway checks the interpolated middle of the alpha range,
+// which the boundary cases in TestCanvasBlend do not exercise.
+func TestCanvasBlendHalfway(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side       = 4
+		startValue = 0
+		endValue   = 100
+		halfAlpha  = 0.5
+		wantValue  = 50
+	)
+
+	canv := mustCanvas(t, side)
+
+	canv.Set(0, 0, color.RGBA{R: startValue, G: startValue, B: startValue, A: 0xFF})
+	canv.Blend(0, 0, color.RGBA{R: endValue, G: endValue, B: endValue, A: 0xFF}, halfAlpha)
+
+	assertPixel(t, canv, 0, 0, color.RGBA{R: wantValue, G: wantValue, B: wantValue, A: 0xFF})
+}
+
+// TestCanvasLineAA covers the shapes LineAA's doc comment makes promises
+// about: it draws something, an off-axis line lands in more than one
+// column, a zero-length line still paints its single pixel, and a bad
+// coordinate is rejected outright.
+func TestCanvasLineAA(t *testing.T) {
+	t.Parallel()
+
+	const side = 20
+
+	for _, testCase := range []struct {
+		name      string
+		x0, y0    float64
+		x1, y1    float64
+		wantCount bool
+	}{
+		{name: "diagonal draws pixels", x0: 1, y0: 1, x1: 10, y1: 6, wantCount: true},
+		{name: "steep draws pixels", x0: 1, y0: 1, x1: 6, y1: 10, wantCount: true},
+		{name: "zero length draws one pixel", x0: 5, y0: 5, x1: 5, y1: 5, wantCount: true},
+		{name: "NaN coordinate draws nothing", x0: math.NaN(), y0: 1, x1: 10, y1: 6, wantCount: false},
+		{name: "infinite coordinate draws nothing", x0: 1, y0: math.Inf(1), x1: 10, y1: 6, wantCount: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustCanvas(t, side)
+
+			canv.LineAA(testCase.x0, testCase.y0, testCase.x1, testCase.y1, canvas.White)
+
+			got := countPixels(canv, color.RGBA{}) != side*side
+			if got != testCase.wantCount {
+				t.Errorf("LineAA(%v, %v, %v, %v) painted something = %v, want %v",
+					testCase.x0, testCase.y0, testCase.x1, testCase.y1, got, testCase.wantCount)
+			}
+		})
+	}
+}
+
+// TestCanvasLineAASymmetric draws the same line with its endpoints swapped
+// on two separate canvases and requires byte-identical images, since the
+// normalisation LineAA does internally is only useful if it actually holds.
+func TestCanvasLineAASymmetric(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side           = 16
+		startX, startY = 2.0, 3.0
+		endX, endY     = 13.0, 9.0
+	)
+
+	forward := mustCanvas(t, side)
+	reversed := mustCanvas(t, side)
+
+	forward.LineAA(startX, startY, endX, endY, canvas.Green)
+	reversed.LineAA(endX, endY, startX, startY, canvas.Green)
+
+	for y := range side {
+		for x := range side {
+			if got, want := forward.Image().RGBAAt(x, y), reversed.Image().RGBAAt(x, y); got != want {
+				t.Errorf("pixel (%d, %d) = %v, want %v (reversed endpoints)", x, y, got, want)
+			}
+		}
+	}
+}
+
+// TestCanvasLineAAHorizontal draws a horizontal line at an integer row and
+// requires full coverage on that row and nothing at all on the rows either
+// side of it, which is only true if the fractional part of the
+// interpolated y stays exactly zero all the way across.
+func TestCanvasLineAAHorizontal(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side   = 24
+		startX = 2
+		endX   = 20
+		row    = 5
+	)
+
+	canv := mustCanvas(t, side)
+
+	canv.LineAA(startX, row, endX, row, canvas.White)
+
+	for x := startX; x <= endX; x++ {
+		assertPixel(t, canv, x, row, canvas.White)
+		assertPixel(t, canv, x, row-1, color.RGBA{})
+		assertPixel(t, canv, x, row+1, color.RGBA{})
+	}
+}
+
+// TestLineAAAllocs does not call t.Parallel: testing.AllocsPerRun panics if
+// it runs while the test is marked parallel, since it needs the runtime's
+// undivided attention to count allocations accurately.
+//
+//nolint:paralleltest // AllocsPerRun forbids running as a parallel test; see comment above.
+func TestLineAAAllocs(t *testing.T) {
+	const side = 64
+
+	canv := mustCanvas(t, side)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		canv.LineAA(0, 0, side-1, side-1, canvas.White)
+	})
+
+	if allocs != 0 {
+		t.Errorf("LineAA allocated %v times per call, want 0", allocs)
+	}
+}
+
+func BenchmarkLineAA(b *testing.B) {
+	const side = 256
+
+	canv, err := canvas.New(side, side)
+	if err != nil {
+		b.Fatalf("New: %v", err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		canv.LineAA(0, 0, side-1, side-1, canvas.White)
+	}
+}
+
+// TestCanvasDashedCircle covers the four specified behaviours: a negative
+// radius or non-positive dash draws nothing, a non-positive gap falls back
+// to a solid Circle, and otherwise the dashes cover strictly less area than
+// the solid circle they are broken from.
+func TestCanvasDashedCircle(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side    = 30
+		centerX = 15
+		centerY = 15
+		radius  = 10
+		dash    = 3
+		gap     = 2
+	)
+
+	t.Run("negative radius draws nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.DashedCircle(centerX, centerY, -1, dash, gap, canvas.Red)
+
+		if got := countPixels(canv, canvas.Red); got != 0 {
+			t.Errorf("DashedCircle painted %d pixels, want 0", got)
+		}
+	})
+
+	t.Run("non-positive dash draws nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.DashedCircle(centerX, centerY, radius, 0, gap, canvas.Red)
+
+		if got := countPixels(canv, canvas.Red); got != 0 {
+			t.Errorf("DashedCircle painted %d pixels, want 0", got)
+		}
+	})
+
+	t.Run("non-positive gap matches solid Circle", func(t *testing.T) {
+		t.Parallel()
+
+		dashed := mustCanvas(t, side)
+		solid := mustCanvas(t, side)
+
+		dashed.DashedCircle(centerX, centerY, radius, dash, 0, canvas.Cyan)
+		solid.Circle(centerX, centerY, radius, canvas.Cyan)
+
+		for y := range side {
+			for x := range side {
+				if got, want := dashed.Image().RGBAAt(x, y), solid.Image().RGBAAt(x, y); got != want {
+					t.Errorf("pixel (%d, %d) = %v, want %v", x, y, got, want)
+				}
+			}
+		}
+	})
+
+	t.Run("zero radius draws only the centre pixel", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.DashedCircle(centerX, centerY, 0, dash, gap, canvas.Yellow)
+
+		assertPixel(t, canv, centerX, centerY, canvas.Yellow)
+
+		if got := countPixels(canv, canvas.Yellow); got != 1 {
+			t.Errorf("DashedCircle painted %d pixels, want 1", got)
+		}
+	})
+}
+
+// TestCanvasDashedCircleCoverage is the other half of DashedCircle's cases,
+// split out because six subtests in one function push revive's
+// cognitive-complexity limit.
+func TestCanvasDashedCircleCoverage(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side    = 30
+		centerX = 15
+		centerY = 15
+		radius  = 10
+		dash    = 3
+		gap     = 2
+	)
+
+	t.Run("dashes cover strictly less than a solid circle", func(t *testing.T) {
+		t.Parallel()
+
+		dashed := mustCanvas(t, side)
+		solid := mustCanvas(t, side)
+
+		dashed.DashedCircle(centerX, centerY, radius, dash, gap, canvas.Magenta)
+		solid.Circle(centerX, centerY, radius, canvas.Magenta)
+
+		dashedCount := countPixels(dashed, canvas.Magenta)
+		solidCount := countPixels(solid, canvas.Magenta)
+
+		if dashedCount == 0 {
+			t.Fatal("DashedCircle painted 0 pixels, want more than 0")
+		}
+
+		if dashedCount >= solidCount {
+			t.Errorf("DashedCircle painted %d pixels, want fewer than the solid circle's %d", dashedCount, solidCount)
+		}
+	})
+
+	t.Run("identical arguments produce identical images", func(t *testing.T) {
+		t.Parallel()
+
+		first := mustCanvas(t, side)
+		second := mustCanvas(t, side)
+
+		first.DashedCircle(centerX, centerY, radius, dash, gap, canvas.Blue)
+		second.DashedCircle(centerX, centerY, radius, dash, gap, canvas.Blue)
+
+		for y := range side {
+			for x := range side {
+				if got, want := first.Image().RGBAAt(x, y), second.Image().RGBAAt(x, y); got != want {
+					t.Errorf("pixel (%d, %d) = %v, want %v", x, y, got, want)
+				}
+			}
+		}
+	})
+}
+
+// TestCanvasFillTriangle covers a right triangle's known pixel count, its
+// vertices being filled, a point outside it being left alone, both winding
+// orders producing the same image, a fully off-canvas triangle leaving the
+// canvas untouched, and a degenerate triangle not panicking.
+func TestCanvasFillTriangle(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side = 12
+		leg  = 5
+		// A right triangle with legs of length `leg` along the axes covers
+		// (leg+1)*(leg+2)/2 pixels: leg+1 rows, each one pixel longer than
+		// the last starting from a single pixel at the apex.
+		wantCount = (leg + 1) * (leg + 2) / 2
+	)
+
+	t.Run("right triangle covers the expected area", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.FillTriangle(0, 0, leg, 0, 0, leg, canvas.Red)
+
+		if got := countPixels(canv, canvas.Red); got != wantCount {
+			t.Errorf("FillTriangle painted %d pixels, want %d", got, wantCount)
+		}
+
+		assertPixel(t, canv, 0, 0, canvas.Red)
+		assertPixel(t, canv, leg, 0, canvas.Red)
+		assertPixel(t, canv, 0, leg, canvas.Red)
+		assertPixel(t, canv, leg, leg, color.RGBA{})
+	})
+
+	t.Run("reversed winding order matches", func(t *testing.T) {
+		t.Parallel()
+
+		clockwise := mustCanvas(t, side)
+		counterClockwise := mustCanvas(t, side)
+
+		clockwise.FillTriangle(0, 0, leg, 0, 0, leg, canvas.Green)
+		counterClockwise.FillTriangle(0, leg, leg, 0, 0, 0, canvas.Green)
+
+		for y := range side {
+			for x := range side {
+				got, want := clockwise.Image().RGBAAt(x, y), counterClockwise.Image().RGBAAt(x, y)
+				if got != want {
+					t.Errorf("pixel (%d, %d) = %v, want %v", x, y, got, want)
+				}
+			}
+		}
+	})
+
+	t.Run("fully off canvas changes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.FillTriangle(side, side, side+leg, side, side, side+leg, canvas.Blue)
+
+		if got := countPixels(canv, canvas.Blue); got != 0 {
+			t.Errorf("FillTriangle painted %d pixels, want 0", got)
+		}
+	})
+
+	t.Run("degenerate collinear triangle does not panic", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.FillTriangle(0, 0, leg, leg, 2*leg, 2*leg, canvas.Yellow)
+	})
+
+	t.Run("degenerate identical vertices does not panic", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.FillTriangle(leg, leg, leg, leg, leg, leg, canvas.Yellow)
+	})
+}
+
+// TestCanvasRect covers the corners of an outlined rectangle, the interior
+// staying untouched, the empty and 1x1 edge cases, and clipping when the
+// rectangle runs off the canvas.
+func TestCanvasRect(t *testing.T) {
+	t.Parallel()
+
+	const side = 12
+
+	t.Run("corners are set and interior is untouched", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			minX, minY = 2, 3
+			maxX, maxY = 8, 9
+		)
+
+		canv := mustCanvas(t, side)
+
+		canv.Rect(image.Rect(minX, minY, maxX, maxY), canvas.White)
+
+		assertPixel(t, canv, minX, minY, canvas.White)
+		assertPixel(t, canv, maxX-1, minY, canvas.White)
+		assertPixel(t, canv, minX, maxY-1, canvas.White)
+		assertPixel(t, canv, maxX-1, maxY-1, canvas.White)
+		assertPixel(t, canv, (minX+maxX-1)/2, (minY+maxY-1)/2, color.RGBA{})
+	})
+
+	t.Run("empty rectangle draws nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.Rect(image.Rect(2, 2, 2, 2), canvas.Red)
+
+		if got := countPixels(canv, canvas.Red); got != 0 {
+			t.Errorf("Rect painted %d pixels, want 0", got)
+		}
+	})
+
+	t.Run("1x1 rectangle sets exactly one pixel", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.Rect(image.Rect(4, 4, 5, 5), canvas.Green)
+
+		assertPixel(t, canv, 4, 4, canvas.Green)
+
+		if got := countPixels(canv, canvas.Green); got != 1 {
+			t.Errorf("Rect painted %d pixels, want 1", got)
+		}
+	})
+
+	t.Run("partly off canvas clips without panic", func(t *testing.T) {
+		t.Parallel()
+
+		canv := mustCanvas(t, side)
+
+		canv.Rect(image.Rect(side-2, side-2, side+4, side+4), canvas.Yellow)
+
+		assertPixel(t, canv, side-2, side-2, canvas.Yellow)
+	})
 }

@@ -2,18 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"image"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/hyperized/uAirwaves/pkg/adsb"
+	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/fbdev"
 	"github.com/hyperized/uScope/pkg/rotate"
@@ -46,10 +53,19 @@ const (
 	flagFrames  = "--frames"
 	flagPNG     = "--png"
 	flagScene   = "--scene"
+	flagDemo    = "--demo"
+	flagBeast   = "--beast"
+	flagReplay  = "--replay-iq"
+	flagLat     = "--lat"
+	flagLon     = "--lon"
 
-	// specimenValue is the non-default --scene spelling, named because it
-	// turns up in several tables.
+	// patternValue and specimenValue are the two non-default --scene
+	// spellings, named because they turn up in several tables.
+	patternValue  = "pattern"
 	specimenValue = "specimen"
+	demoValue     = "demo"
+	demoLabel     = "DEMO"
+	captureFile   = "capture.iq"
 	kittyValue    = "kitty"
 	blocksValue   = "blocks"
 	pngValue      = "png"
@@ -765,7 +781,9 @@ func TestRunSuccess(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	got := run([]string{flagPNG, pngPath}, &stdout, &stderr)
+	// --demo so the run does not fall back to the demo fleet with a warning,
+	// which is what a machine with no receiver would otherwise print.
+	got := run([]string{flagDemo, flagPNG, pngPath}, &stdout, &stderr)
 
 	if got != exitOK {
 		t.Fatalf("run() exit code = %d, want %d", got, exitOK)
@@ -884,8 +902,9 @@ func TestParseFlagsScene(t *testing.T) {
 		args []string
 		want app.SceneKind
 	}{
-		{name: caseDefault, args: nil, want: app.Pattern},
-		{name: "pattern explicit", args: []string{flagScene, defaultScene}, want: app.Pattern},
+		{name: caseDefault, args: nil, want: app.Radar},
+		{name: "radar explicit", args: []string{flagScene, defaultScene}, want: app.Radar},
+		{name: patternValue, args: []string{flagScene, patternValue}, want: app.Pattern},
 		{name: specimenValue, args: []string{flagScene, specimenValue}, want: app.Specimen},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -911,7 +930,7 @@ func TestParseFlagsSceneRejections(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "unknown scene", args: []string{flagScene, "radar"}},
+		{name: "unknown scene", args: []string{flagScene, "waterfall"}},
 		{name: "empty scene", args: []string{flagScene, ""}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -944,5 +963,319 @@ func TestSceneReachesConfig(t *testing.T) {
 
 	if cfg.scene != app.Specimen {
 		t.Errorf("config.scene = %v, want %v", cfg.scene, app.Specimen)
+	}
+}
+
+// --- sources --------------------------------------------------------------
+
+// beastAddr is a syntactically valid BEAST address. Nothing dials it: building
+// a source opens no socket, so the host never has to exist.
+const beastAddr = "127.0.0.1:30005"
+
+// fakeIngest satisfies the unexported ingest interface internal/source's
+// WithIngest takes, so a test can build a Live that never goes near a radio.
+type fakeIngest struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (f *fakeIngest) Stream(ctx context.Context, _ *airplanes.Airplanes) error {
+	f.once.Do(func() { close(f.started) })
+	<-ctx.Done()
+
+	return fmt.Errorf("fake ingest: %w", ctx.Err())
+}
+
+func (*fakeIngest) Source() adsb.SourceInfo { return adsb.SourceInfo{Label: "FAKE"} }
+
+func (*fakeIngest) Stats() adsb.Stats { return adsb.Stats{} }
+
+func TestParseFlagsSource(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		args   []string
+		want   sourceKind
+		beast  string
+		replay string
+	}{
+		{name: caseDefault, args: nil, want: sourceAuto},
+		{name: demoValue, args: []string{flagDemo}, want: sourceDemo},
+		{name: "beast", args: []string{flagBeast, beastAddr}, want: sourceBeast, beast: beastAddr},
+		{name: "replay", args: []string{flagReplay, captureFile}, want: sourceReplay, replay: captureFile},
+		{
+			// Replay wins so a capture can always be played back on a host
+			// that also has a feed configured, which is what uAirwaves does.
+			name:   "replay beats beast and demo",
+			args:   []string{flagReplay, captureFile, flagBeast, beastAddr, flagDemo},
+			want:   sourceReplay,
+			beast:  beastAddr,
+			replay: captureFile,
+		},
+		{
+			name:  "beast beats demo",
+			args:  []string{flagBeast, beastAddr, flagDemo},
+			want:  sourceBeast,
+			beast: beastAddr,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.source = testCase.want
+			want.beast = testCase.beast
+			want.replay = testCase.replay
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsBeastRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		addr string
+	}{
+		{name: "no port", addr: "receiver.local"},
+		{name: "nothing at all", addr: ":"},
+		{name: "no host", addr: ":30005"},
+		{name: "no port after the colon", addr: "receiver.local:"},
+		{name: "too many colons", addr: "a:b:c"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags([]string{flagBeast, testCase.addr})
+			if !errors.Is(err, errBeastAddr) {
+				t.Errorf("parseFlags(--beast %q) error = %v, want errBeastAddr", testCase.addr, err)
+			}
+		})
+	}
+}
+
+func TestParseFlagsLocation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("both given", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := parseFlags([]string{flagLat, "52.3105", flagLon, "4.7683"})
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+
+		want := defaultConfig()
+		want.latitude, want.longitude, want.hasLocation = 52.3105, 4.7683, true
+
+		checkConfig(t, got, want)
+	})
+
+	for _, testCase := range []struct {
+		name     string
+		args     []string
+		sentinel error
+	}{
+		{name: "latitude alone", args: []string{flagLat, "52"}, sentinel: errLatLonPair},
+		{name: "longitude alone", args: []string{flagLon, "4"}, sentinel: errLatLonPair},
+		{name: "latitude too high", args: []string{flagLat, "91", flagLon, "0"}, sentinel: errLatitude},
+		{name: "latitude too low", args: []string{flagLat, "-91", flagLon, "0"}, sentinel: errLatitude},
+		{name: "longitude too high", args: []string{flagLat, "0", flagLon, "181"}, sentinel: errLongitude},
+		{name: "longitude too low", args: []string{flagLat, "0", flagLon, "-181"}, sentinel: errLongitude},
+		{name: "latitude is not a number", args: []string{flagLat, "north", flagLon, "0"}, sentinel: errLatitude},
+		{name: "longitude is not a number", args: []string{flagLat, "0", flagLon, "east"}, sentinel: errLongitude},
+		{name: "latitude is NaN", args: []string{flagLat, "NaN", flagLon, "0"}, sentinel: errLatitude},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, testCase.sentinel) {
+				t.Errorf("parseFlags(%v) error = %v, want %v", testCase.args, err, testCase.sentinel)
+			}
+		})
+	}
+}
+
+func TestSourceFor(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		cfg       config
+		goos      string
+		wantLabel string
+		wantWarn  bool
+	}{
+		{
+			name:      "replay",
+			cfg:       config{source: sourceReplay, replay: "/tmp/capture.iq"},
+			goos:      linuxGOOS,
+			wantLabel: "REPLAY capture.iq",
+		},
+		{
+			name:      "beast",
+			cfg:       config{source: sourceBeast, beast: beastAddr},
+			goos:      linuxGOOS,
+			wantLabel: "BEAST " + beastAddr,
+		},
+		{
+			name:      demoValue,
+			cfg:       config{source: sourceDemo},
+			goos:      linuxGOOS,
+			wantLabel: demoLabel,
+		},
+		{
+			name:      "nothing asked for on linux opens the radio",
+			cfg:       config{source: sourceAuto},
+			goos:      linuxGOOS,
+			wantLabel: "SDR",
+		},
+		{
+			name:      "nothing asked for elsewhere flies the demo fleet",
+			cfg:       config{source: sourceAuto},
+			goos:      "darwin",
+			wantLabel: demoLabel,
+			wantWarn:  true,
+		},
+		{
+			name:      "a position is passed through to the demo fleet",
+			cfg:       config{source: sourceDemo, hasLocation: true, latitude: 51.5, longitude: -0.45},
+			goos:      linuxGOOS,
+			wantLabel: demoLabel,
+		},
+		{
+			name: "a position is passed through to the live source",
+			cfg: config{
+				source: sourceBeast, beast: beastAddr,
+				hasLocation: true, latitude: 51.5, longitude: -0.45,
+			},
+			goos:      linuxGOOS,
+			wantLabel: "BEAST " + beastAddr,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+
+			src, err := sourceFor(testCase.cfg, testCase.goos, &stderr)
+			if err != nil {
+				t.Fatalf("sourceFor: %v", err)
+			}
+
+			defer func() { _ = src.Close() }()
+
+			if got := src.Frame().Source.Label; got != testCase.wantLabel {
+				t.Errorf("source label = %q, want %q", got, testCase.wantLabel)
+			}
+
+			if warned := stderr.Len() > 0; warned != testCase.wantWarn {
+				t.Errorf("warned = %v (%q), want %v", warned, stderr.String(), testCase.wantWarn)
+			}
+		})
+	}
+}
+
+func TestSourceForRejectsABadPosition(t *testing.T) {
+	t.Parallel()
+
+	// The flag layer rejects these before sourceFor ever sees them. The
+	// branch is here because internal/source validates its own input, and
+	// this is the only way to reach it.
+	for _, testCase := range []struct {
+		name string
+		cfg  config
+	}{
+		{name: "live", cfg: config{source: sourceBeast, beast: beastAddr, hasLocation: true, latitude: 91}},
+		{name: "demo", cfg: config{source: sourceDemo, hasLocation: true, latitude: 91}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			src, err := sourceFor(testCase.cfg, linuxGOOS, io.Discard)
+			if !errors.Is(err, source.ErrCoordinate) {
+				t.Fatalf("sourceFor error = %v, want source.ErrCoordinate", err)
+			}
+
+			if src != nil {
+				t.Error("sourceFor returned a source alongside an error")
+			}
+		})
+	}
+}
+
+func TestStart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a live source is started", func(t *testing.T) {
+		t.Parallel()
+
+		ingest := &fakeIngest{started: make(chan struct{})}
+
+		src, err := source.NewLive(source.WithIngest(ingest), source.WithStderr(io.Discard))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		start(ctx, src)
+
+		select {
+		case <-ingest.started:
+		case <-time.After(time.Second):
+			t.Fatal("start did not run the ingest")
+		}
+
+		cancel()
+
+		if err := src.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	t.Run("a demo source has nothing to start", func(t *testing.T) {
+		t.Parallel()
+
+		src, err := source.NewDemo()
+		if err != nil {
+			t.Fatalf("NewDemo: %v", err)
+		}
+
+		// The point is that this does not panic on a source with no Start.
+		start(t.Context(), src)
+
+		if err := src.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+}
+
+func TestRunReportsASourceItCannotBuild(t *testing.T) {
+	t.Parallel()
+
+	original := newSource
+	newSource = func(config, string, io.Writer) (source.Source, error) { return nil, errUnrelated }
+
+	t.Cleanup(func() { newSource = original })
+
+	var stdout, stderr bytes.Buffer
+
+	if got := run([]string{flagDemo}, &stdout, &stderr); got != exitFailure {
+		t.Errorf("run() exit code = %d, want %d", got, exitFailure)
+	}
+
+	if !strings.Contains(stderr.String(), errUnrelated.Error()) {
+		t.Errorf("run() stderr = %q, want it to name the failure", stderr.String())
 	}
 }

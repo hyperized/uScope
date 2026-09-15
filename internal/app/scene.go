@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/pattern"
+	"github.com/hyperized/uScope/internal/radar"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/specimen"
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
@@ -13,6 +16,7 @@ import (
 // The --scene spellings, kept next to the Kind they parse into so the flag
 // help and the parser cannot drift apart.
 const (
+	sceneRadar    = "radar"
 	scenePattern  = "pattern"
 	sceneSpecimen = "specimen"
 )
@@ -36,10 +40,15 @@ type SceneKind uint8
 // The scenes, in the order the s key steps through them and in the order
 // buildScenes returns them.
 const (
+	// Radar is the slice 4 scope: aircraft, trails, range rings and the
+	// selected-flight card. It is first because it is what uScope is for;
+	// the other two are diagnostics.
+	Radar SceneKind = iota
+
 	// Pattern is the slice 1 orientation pattern: corner squares, a
-	// triangle and a sweep. It is the default because it is the one that
-	// answers "is the frame the right way up".
-	Pattern SceneKind = iota
+	// triangle and a sweep. It is the one that answers "is the frame the
+	// right way up".
+	Pattern
 
 	// Specimen is the slice 3 type specimen: the four faces and a mock of
 	// the radar's furniture.
@@ -49,12 +58,14 @@ const (
 // ParseScene turns a --scene value into a SceneKind.
 func ParseScene(text string) (SceneKind, error) {
 	switch text {
+	case sceneRadar:
+		return Radar, nil
 	case scenePattern:
 		return Pattern, nil
 	case sceneSpecimen:
 		return Specimen, nil
 	default:
-		return Pattern, fmt.Errorf("%w: %q", ErrScene, text)
+		return Radar, fmt.Errorf("%w: %q", ErrScene, text)
 	}
 }
 
@@ -62,6 +73,8 @@ func ParseScene(text string) (SceneKind, error) {
 // ParseScene and prints as itself.
 func (k SceneKind) String() string {
 	switch k {
+	case Radar:
+		return sceneRadar
 	case Pattern:
 		return scenePattern
 	case Specimen:
@@ -76,29 +89,59 @@ func (k SceneKind) String() string {
 type fontLoader func() (*psf.Font, error)
 
 // defaultScenes is the production scene set.
-func defaultScenes() ([]Drawer, error) {
-	return buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large)
+func (r *runner) defaultScenes() ([]Drawer, error) {
+	return buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, r.source, r.scopeRange)
 }
 
-// buildScenes loads the fonts and builds both scenes, in SceneKind order.
+// buildScenes loads the fonts and builds all three scenes, in SceneKind order.
 //
-// The fonts are loaded here, at startup, rather than when the specimen scene
-// first draws. A font that will not parse is then a clear error before
-// anything takes the screen over, instead of an empty block ten frames into a
-// run on a device with no other diagnostics.
-func buildScenes(small, body, bodyBold, large fontLoader) ([]Drawer, error) {
+// The fonts are loaded here, at startup, rather than when a scene first draws.
+// A font that will not parse is then a clear error before anything takes the
+// screen over, instead of an empty block ten frames into a run on a device
+// with no other diagnostics.
+//
+// All three are built even when --scene picks one of them, because s switches
+// between them while the loop is running and a set that was only half built
+// would fail at the moment someone pressed a key. A nil source or range gets
+// an empty stand-in for the same reason: the radar has to exist even when
+// nothing has been wired to it.
+func buildScenes(
+	small, body, bodyBold, large fontLoader, src source.Source, scopeRange *scope.Scope,
+) ([]Drawer, error) {
+	if src == nil {
+		src = source.Empty{}
+	}
+
 	faces, err := loadFaces(small, body, bodyBold, large)
 	if err != nil {
 		return nil, err
 	}
 
-	return []Drawer{pattern.New(), specimen.New(faces)}, nil
+	if scopeRange == nil {
+		scopeRange = scope.New()
+	}
+
+	return []Drawer{
+		radar.New(radar.Faces(faces), src, scopeRange),
+		pattern.New(),
+		specimen.New(specimen.Faces(faces)),
+	}, nil
+}
+
+// faceSet is the four loaded faces. It is converted to each scene's own Faces
+// type rather than shared, so internal/radar and internal/specimen do not
+// have to import one another.
+type faceSet struct {
+	Small    *psf.Font
+	Body     *psf.Font
+	BodyBold *psf.Font
+	Large    *psf.Font
 }
 
 // loadFaces calls the four loaders, naming whichever one fails.
-func loadFaces(small, body, bodyBold, large fontLoader) (specimen.Faces, error) {
+func loadFaces(small, body, bodyBold, large fontLoader) (faceSet, error) {
 	var (
-		faces specimen.Faces
+		faces faceSet
 		err   error
 	)
 

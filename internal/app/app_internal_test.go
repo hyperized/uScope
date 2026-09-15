@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fonts"
@@ -236,11 +238,25 @@ const (
 	fieldNow           = "now"
 	fieldStdin         = "stdin"
 	fieldLoadScenes    = "loadScenes"
+	fieldSource        = "source"
+	fieldScopeRange    = "scopeRange"
 )
 
-// wantSceneCount is how many scenes the production set holds: the pattern
+// overrideRangeNm is a display range no default Scope starts at, so a test can
+// tell a replaced range control from the one newRunner built.
+const overrideRangeNm = 120
+
+// optionOverrideSource is a Source whose type is not source.Empty, which is
+// how a test tells a replaced source from the default one.
+type optionOverrideSource struct{}
+
+func (optionOverrideSource) Frame() source.Frame { return source.Frame{} }
+
+func (optionOverrideSource) Close() error { return nil }
+
+// wantSceneCount is how many scenes the production set holds: the radar, the pattern
 // and the specimen.
-const wantSceneCount = 2
+const wantSceneCount = 3
 
 func TestNewRunnerDefaults(t *testing.T) {
 	t.Parallel()
@@ -264,6 +280,8 @@ func TestNewRunnerDefaults(t *testing.T) {
 		{name: fieldNow, isNil: run.now == nil},
 		{name: fieldStdin, isNil: run.stdin == nil},
 		{name: fieldLoadScenes, isNil: run.loadScenes == nil},
+		{name: fieldSource, isNil: run.source == nil},
+		{name: fieldScopeRange, isNil: run.scopeRange == nil},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -334,7 +352,9 @@ func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 		{fieldCreatePNG, funcPtr(run.createPNG) == funcPtr(createFile)},
 		{fieldNow, funcPtr(run.now) == funcPtr(time.Now)},
 		{fieldStdin, run.stdin == io.Reader(os.Stdin)},
-		{fieldLoadScenes, funcPtr(run.loadScenes) == funcPtr(defaultScenes)},
+		{fieldLoadScenes, funcPtr(run.loadScenes) == funcPtr(run.defaultScenes)},
+		{fieldSource, run.source == source.Source(source.Empty{})},
+		{fieldScopeRange, run.scopeRange.GetCurrent() != overrideRangeNm},
 	} {
 		wantDefault := field.name != target
 		if field.isDefault != wantDefault {
@@ -365,6 +385,12 @@ func TestOptionsReplaceOnlyNamedField(t *testing.T) {
 		{name: "WithInput", option: WithInput(optionOverrideReader{}), target: fieldStdin},
 		{name: "WithScenes", option: WithScenes(optionOverrideDrawer{}), target: fieldLoadScenes},
 		{name: "WithSceneLoader", option: WithSceneLoader(fakeSceneLoader), target: fieldLoadScenes},
+		{name: "WithSource", option: WithSource(optionOverrideSource{}), target: fieldSource},
+		{
+			name:   "WithScopeRange",
+			option: WithScopeRange(scope.New(scope.WithCurrent(overrideRangeNm))),
+			target: fieldScopeRange,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -542,7 +568,7 @@ func TestCreateFile(t *testing.T) {
 func TestDefaultScenes(t *testing.T) {
 	t.Parallel()
 
-	scenes, err := defaultScenes()
+	scenes, err := newRunner().defaultScenes()
 	if err != nil {
 		t.Fatalf("defaultScenes() = %v, want the production scene set", err)
 	}
@@ -736,9 +762,10 @@ func TestParseScene(t *testing.T) {
 		want    SceneKind
 		wantErr bool
 	}{
+		{name: sceneRadar, text: sceneRadar, want: Radar},
 		{name: scenePattern, text: scenePattern, want: Pattern},
 		{name: sceneSpecimen, text: sceneSpecimen, want: Specimen},
-		{name: "unknown name", text: "radar", wantErr: true},
+		{name: "unknown name", text: "waterfall", wantErr: true},
 		{name: "empty", text: "", wantErr: true},
 		{name: "wrong case", text: "Pattern", wantErr: true},
 	} {
@@ -755,8 +782,8 @@ func TestParseScene(t *testing.T) {
 				// A rejected value still has to come back as the default
 				// rather than as whatever the switch happened to leave, so
 				// a caller that ignores the error draws something sane.
-				if got != Pattern {
-					t.Errorf("ParseScene(%q) = %v on error, want %v", testCase.text, got, Pattern)
+				if got != Radar {
+					t.Errorf("ParseScene(%q) = %v on error, want %v", testCase.text, got, Radar)
 				}
 
 				return
@@ -785,6 +812,7 @@ func TestSceneKindString(t *testing.T) {
 		kind SceneKind
 		want string
 	}{
+		{name: sceneRadar, kind: Radar, want: sceneRadar},
 		{name: scenePattern, kind: Pattern, want: scenePattern},
 		{name: sceneSpecimen, kind: Specimen, want: sceneSpecimen},
 		{name: "out of range", kind: outOfRange, want: "invalid"},
@@ -830,7 +858,7 @@ func TestBuildScenesFontFailure(t *testing.T) {
 			loaders := [...]fontLoader{fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large}
 			loaders[index] = failingFontLoader
 
-			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3])
+			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3], nil, nil)
 			if !errors.Is(err, errStub) {
 				t.Fatalf("buildScenes with a failing %s loader = %v, want the loader's error", name, err)
 			}
@@ -849,7 +877,7 @@ func TestBuildScenesFontFailure(t *testing.T) {
 func TestBuildScenesSucceeds(t *testing.T) {
 	t.Parallel()
 
-	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large)
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, source.Empty{}, scope.New())
 	if err != nil {
 		t.Fatalf("buildScenes: %v", err)
 	}
@@ -890,5 +918,59 @@ func TestSessionScene(t *testing.T) {
 
 	if got := ses.scene(); got != Drawer(first) {
 		t.Errorf("after two nextScene() calls, scene() = %v, want the first scene again", got)
+	}
+}
+
+// TestNilOptionsKeepTheirDefaults covers the guards on the two options that
+// take something a caller could reasonably pass as nil. An option handed a
+// value it cannot use leaves the default alone rather than half-configuring
+// the runner.
+func TestNilOptionsKeepTheirDefaults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("WithSource(nil)", func(t *testing.T) {
+		t.Parallel()
+
+		if got := newRunner(WithSource(nil)).source; got != source.Source(source.Empty{}) {
+			t.Errorf("source = %#v, want the empty default", got)
+		}
+	})
+
+	t.Run("WithScopeRange(nil)", func(t *testing.T) {
+		t.Parallel()
+
+		if got := newRunner(WithScopeRange(nil)).scopeRange; got == nil {
+			t.Error("scopeRange = nil, want the default")
+		}
+	})
+}
+
+// TestBuildScenesFillsInWhatItWasNotGiven covers the two stand-ins. A caller
+// that only wants the pattern scene should not have to supply a receiver and a
+// range control it will never read.
+func TestBuildScenesFillsInWhatItWasNotGiven(t *testing.T) {
+	t.Parallel()
+
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, nil, nil)
+	if err != nil {
+		t.Fatalf("buildScenes with no source and no range: %v", err)
+	}
+
+	if len(scenes) != wantSceneCount {
+		t.Fatalf("buildScenes returned %d scenes, want %d", len(scenes), wantSceneCount)
+	}
+
+	// Drawing proves the stand-ins are usable rather than merely non-nil.
+	canv, err := canvas.New(64, 48)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	for index, scene := range scenes {
+		if scene == nil {
+			t.Fatalf("scene %d is nil", index)
+		}
+
+		scene.Draw(canv, 0)
 	}
 }

@@ -5,9 +5,13 @@
 //
 // It also draws in a terminal, over ssh or on a laptop, with the same canvas
 // code: Kitty graphics where the terminal has them, half-block characters
-// where it does not. There is still no radar in it. --scene picks between the
-// orientation pattern and the type specimen, and in the live loop s switches
-// between them.
+// where it does not.
+//
+// The radar is the default scene. Where its aircraft come from is settled
+// here, from the flags: a captured IQ file, a BEAST feed, the invented demo
+// fleet, or the radio on the uConsole. --scene picks which scene starts, and
+// in the live loop s steps between the radar, the orientation pattern and the
+// type specimen.
 //
 // Exit status is 0 on a clean quit and 1 on any failure, with the reason on
 // stderr.
@@ -24,6 +28,7 @@ import (
 	"syscall"
 
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/fbdev"
 )
 
@@ -36,6 +41,17 @@ const (
 //
 //nolint:gochecknoglobals // test seam; production always holds os.Exit.
 var osExit = os.Exit
+
+// newSource is a seam for the same reason.
+//
+// run's "the source would not build" branch is otherwise unreachable: the
+// flag layer range-checks --lat and --lon before sourceFor ever sees them, so
+// nothing a user can type gets that far. The branch still has to exist,
+// because internal/source validates its own input and may grow a failure mode
+// the flags know nothing about.
+//
+//nolint:gochecknoglobals // test seam; production always holds sourceFor.
+var newSource = sourceFor
 
 func main() {
 	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -59,6 +75,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	src, err := newSource(cfg, runtime.GOOS, stderr)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+
+		return exitFailure
+	}
+
+	// Closed after the loop rather than by the loop: main owns the source
+	// because main built it, and the deferred close waits for the ingest
+	// goroutine so the radio is let go before the process exits.
+	defer func() { _ = src.Close() }()
+
+	start(ctx, src)
+
 	settings := app.Config{
 		FBPath:      cfg.fbPath,
 		Rotation:    cfg.rotation,
@@ -75,13 +105,92 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Warnings go to stderr because a terminal backend is busy writing
 	// frames to stdout, and a warning in the middle of a frame is a mess on
 	// screen and an unparseable stream in a pipe.
-	if err := app.Run(ctx, settings, stdout, app.WithStderr(stderr)); err != nil {
+	if err := app.Run(ctx, settings, stdout, app.WithStderr(stderr), app.WithSource(src)); err != nil {
 		_, _ = fmt.Fprintln(stderr, explain(err, cfg))
 
 		return exitFailure
 	}
 
 	return exitOK
+}
+
+// starter is the half of a source that has a goroutine behind it. Demo has
+// none, so it does not implement this and nothing has to be started.
+type starter interface {
+	Start(ctx context.Context)
+}
+
+// start runs the ingest if the source has one.
+func start(ctx context.Context, src source.Source) {
+	if live, ok := src.(starter); ok {
+		live.Start(ctx)
+	}
+}
+
+// sourceFor builds the aircraft source the flags asked for.
+//
+// With nothing asked for, the answer depends on the machine. Linux is where
+// the radio driver works, so that is the local SDR. Anywhere else there is no
+// receiver to open, and refusing to start would be a poor answer on the laptop
+// the layout is developed on, so the demo fleet takes over and says so once on
+// stderr.
+//
+//nolint:ireturn // the whole point is that the caller cannot tell which one it got.
+func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error) {
+	switch cfg.source {
+	case sourceReplay:
+		return live(cfg, source.WithReplay(cfg.replay))
+	case sourceBeast:
+		return live(cfg, source.WithBeast(cfg.beast))
+	case sourceDemo:
+		return demo(cfg)
+	case sourceAuto:
+		fallthrough
+	default:
+		if goos == linuxGOOS {
+			return live(cfg)
+		}
+
+		_, _ = fmt.Fprintf(stderr,
+			"%s: no receiver on %s and no --beast or --replay-iq given; flying the demo fleet\n",
+			appName, goos)
+
+		return demo(cfg)
+	}
+}
+
+// live builds the real ingest, adding the operator's position when there is
+// one.
+//
+//nolint:ireturn // every branch of sourceFor returns the interface.
+func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
+	if cfg.hasLocation {
+		opts = append(opts, source.WithManualLocation(cfg.latitude, cfg.longitude))
+	}
+
+	src, err := source.NewLive(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", appName, err)
+	}
+
+	return src, nil
+}
+
+// demo builds the invented fleet.
+//
+//nolint:ireturn // every branch of sourceFor returns the interface.
+func demo(cfg config) (source.Source, error) {
+	var opts []source.DemoOption
+	if cfg.hasLocation {
+		opts = append(opts, source.WithDemoLocation(cfg.latitude, cfg.longitude))
+	}
+
+	src, err := source.NewDemo(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", appName, err)
+	}
+
+	return src, nil
 }
 
 // explain turns "no framebuffer on this platform" into advice, because that

@@ -12,8 +12,15 @@
 
 GOARCH_DEV ?= arm64
 
-.PHONY: all build build-aarch64 build-macos run run-blocks run-specimen test \
-        test-coverage lint fmt ship pattern specimen test-device clean
+# The BEAST feed run-beast talks to. Override it on the command line or put it
+# in .env next to DEVICE:
+#
+#   BEAST = 192.168.1.10:30005
+BEAST ?=
+
+.PHONY: all build build-aarch64 build-macos run run-demo run-beast run-blocks \
+        run-pattern run-specimen test test-coverage lint fmt ship pattern \
+        specimen radar test-device clean
 
 all: build
 
@@ -30,13 +37,31 @@ build-macos:
 # Run it here, on the machine you are sitting at. With no --backend it works
 # out where to draw: Kitty graphics in a terminal that has them, half-blocks
 # in one that does not. q quits.
+#
+# On a machine with no receiver this falls back to the demo fleet and says so
+# on stderr. run-demo asks for it outright, which is what to use when you want
+# the same twelve aircraft every time and no warning.
 run:
 	go run .
+
+run-demo:
+	go run . --demo
+
+# Draw a real feed from a remote demodulator. Nothing here needs a radio: the
+# frames are already decoded on the other end.
+run-beast:
+	@test -n "$(BEAST)" || { echo "BEAST not set. Try: make run-beast BEAST=host:30005"; exit 1; }
+	go run . --beast $(BEAST)
 
 # Force the half-block renderer, which is what to compare against when the
 # kitty output looks wrong.
 run-blocks:
-	go run . --backend blocks
+	go run . --backend blocks --demo
+
+# The orientation pattern, live. s steps on to the specimen and round to the
+# radar; q quits.
+run-pattern:
+	go run . --scene pattern
 
 # The type specimen, live. In Ghostty this lands on the kitty backend and the
 # fonts render at their real pixel sizes, which is the only way to judge them
@@ -73,7 +98,7 @@ ship: build-aarch64
 # run it again with --rotate 3. This works over ssh because --test-pattern
 # changes no console or terminal state.
 pattern: ship
-	@ssh $(DEVICE) './uScope --test-pattern'
+	@ssh $(DEVICE) './uScope --scene pattern --test-pattern'
 
 # Paint the type specimen on the panel and leave it there. Same one-frame,
 # no-state-changed deal as pattern, so it is safe over ssh. This is the check
@@ -81,6 +106,13 @@ pattern: ship
 # readable at arm's length on the real screen.
 specimen: ship
 	@ssh $(DEVICE) './uScope --scene specimen --test-pattern'
+
+# Paint one frame of the radar on the panel. With no source flag this opens the
+# uConsole's own SDR, which is the whole point of the machine. To watch it live
+# rather than as a still frame, ssh in and run ./uScope yourself: make ship puts
+# the binary there and every flag works the same on the device as it does here.
+radar: ship
+	@ssh $(DEVICE) './uScope --test-pattern'
 
 # The framebuffer and console tests need real hardware, so they are built
 # here and run there. They are behind the integration tag, so a plain

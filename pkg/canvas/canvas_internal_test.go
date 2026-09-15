@@ -3,6 +3,7 @@ package canvas
 import (
 	"image"
 	"image/color"
+	"math"
 	"testing"
 )
 
@@ -134,5 +135,155 @@ func TestCanvasClearEmptyPix(t *testing.T) {
 
 	if got := len(canv.img.Pix); got != 0 {
 		t.Errorf("len(Pix) = %d, want 0", got)
+	}
+}
+
+func TestBlendChannel(t *testing.T) {
+	t.Parallel()
+
+	const (
+		low       = 10
+		high      = 100
+		halfAlpha = 0.5
+		oneAlpha  = 1.0
+	)
+
+	for _, testCase := range []struct {
+		name  string
+		prev  uint8
+		next  uint8
+		alpha float64
+		want  uint8
+	}{
+		{name: "alpha zero keeps prev", prev: low, next: high, alpha: 0, want: low},
+		{name: "alpha one takes next", prev: low, next: high, alpha: oneAlpha, want: high},
+		{name: "halfway interpolates", prev: 0, next: high, alpha: halfAlpha, want: 50},
+		// math.Round rounds a .5 fraction away from zero, so this case pins
+		// the midpoint down to a single deterministic byte rather than
+		// letting truncation silently round it down instead.
+		{name: "midpoint rounds up", prev: 0, next: 1, alpha: halfAlpha, want: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := blendChannel(testCase.prev, testCase.next, testCase.alpha); got != testCase.want {
+				t.Errorf("blendChannel(%d, %d, %v) = %d, want %d",
+					testCase.prev, testCase.next, testCase.alpha, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestInvalidCoordinate(t *testing.T) {
+	t.Parallel()
+
+	const finite = 3.5
+
+	for _, testCase := range []struct {
+		name string
+		in   float64
+		want bool
+	}{
+		{name: "finite", in: finite, want: false},
+		{name: "NaN", in: math.NaN(), want: true},
+		{name: "positive infinity", in: math.Inf(1), want: true},
+		{name: "negative infinity", in: math.Inf(-1), want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := invalidCoordinate(testCase.in); got != testCase.want {
+				t.Errorf("invalidCoordinate(%v) = %v, want %v", testCase.in, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestEdgeFunction(t *testing.T) {
+	t.Parallel()
+
+	const (
+		legLength = 4
+		onEdge    = 2
+	)
+
+	for _, testCase := range []struct {
+		name                   string
+		ax, ay, bx, by, px, py int
+		want                   int
+	}{
+		{name: "point left of a-to-b line", ax: 0, ay: 0, bx: legLength, by: 0, px: 0, py: legLength, want: 16},
+		{name: "point right of a-to-b line", ax: 0, ay: 0, bx: legLength, by: 0, px: 0, py: -legLength, want: -16},
+		{name: "point on the line", ax: 0, ay: 0, bx: legLength, by: 0, px: onEdge, py: 0, want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := edgeFunction(testCase.ax, testCase.ay, testCase.bx, testCase.by, testCase.px, testCase.py)
+			if got != testCase.want {
+				t.Errorf("edgeFunction(...) = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSameSign(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		area       int
+		w0, w1, w2 int
+		want       bool
+	}{
+		{name: "positive area, all inside", area: 1, w0: 1, w1: 2, w2: 3, want: true},
+		{name: "positive area, one outside", area: 1, w0: 1, w1: -2, w2: 3, want: false},
+		{name: "negative area, all inside", area: -1, w0: -1, w1: -2, w2: -3, want: true},
+		{name: "negative area, one outside", area: -1, w0: -1, w1: 2, w2: -3, want: false},
+		{name: "zero area takes the non-negative branch", area: 0, w0: 0, w1: 0, w2: 0, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := sameSign(testCase.area, testCase.w0, testCase.w1, testCase.w2); got != testCase.want {
+				t.Errorf("sameSign(%d, %d, %d, %d) = %v, want %v",
+					testCase.area, testCase.w0, testCase.w1, testCase.w2, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestPointOnCircle(t *testing.T) {
+	t.Parallel()
+
+	const (
+		centerX = 5
+		centerY = 5
+		radius  = 3
+	)
+
+	for _, testCase := range []struct {
+		name   string
+		radius int
+		angle  float64
+		wantX  int
+		wantY  int
+	}{
+		{name: "zero radius collapses to centre", radius: 0, angle: 1, wantX: centerX, wantY: centerY},
+		{name: "angle zero is due east", radius: radius, angle: 0, wantX: centerX + radius, wantY: centerY},
+		{
+			name: "quarter turn is due south", radius: radius, angle: math.Pi / 2,
+			wantX: centerX, wantY: centerY + radius,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotX, gotY := pointOnCircle(centerX, centerY, testCase.radius, testCase.angle)
+			if gotX != testCase.wantX || gotY != testCase.wantY {
+				t.Errorf("pointOnCircle(%d, %d, %d, %v) = (%d, %d), want (%d, %d)",
+					centerX, centerY, testCase.radius, testCase.angle, gotX, gotY, testCase.wantX, testCase.wantY)
+			}
+		})
 	}
 }

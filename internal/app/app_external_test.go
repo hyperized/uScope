@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -1457,13 +1458,14 @@ func TestRunDrawsTheSelectedScene(t *testing.T) {
 		kind app.SceneKind
 		want string
 	}{
-		{name: "pattern is the first scene", kind: app.Pattern, want: "first"},
-		{name: "specimen is the second", kind: app.Specimen, want: "second"},
+		{name: "radar is the first scene", kind: app.Radar, want: "first"},
+		{name: "pattern is the second", kind: app.Pattern, want: "second"},
+		{name: "specimen is the third", kind: app.Specimen, want: "third"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			calls := make(chan string, 2)
+			calls := make(chan string, 3)
 			cfg := app.Config{
 				PNG:   filepath.Join(t.TempDir(), "out.png"),
 				Size:  image.Pt(16, 16),
@@ -1471,7 +1473,10 @@ func TestRunDrawsTheSelectedScene(t *testing.T) {
 			}
 
 			err := app.Run(t.Context(), cfg, io.Discard,
-				app.WithScenes(newNamedDrawer("first", calls), newNamedDrawer("second", calls)))
+				app.WithScenes(
+					newNamedDrawer("first", calls),
+					newNamedDrawer("second", calls),
+					newNamedDrawer("third", calls)))
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -1613,5 +1618,106 @@ func sendTick(t *testing.T, ticker *fakeTicker) {
 	case ticker.ch <- time.Now():
 	case <-time.After(testTimeout):
 		t.Fatal("timed out delivering a tick to the run loop")
+	}
+}
+
+// --- live mode: a scene with keys of its own -------------------------------
+
+// keyDrawer is a scene that binds a key. It stands in for the radar, which is
+// the only real one, so the loop's key routing can be tested without loading a
+// font or building a receiver.
+type keyDrawer struct {
+	name  string
+	calls chan string
+
+	// takes is the rune this scene claims. Everything else falls through.
+	takes rune
+
+	// handled carries every key the scene took, so a test can tell "the scene
+	// consumed it" from "the loop ignored it".
+	handled chan rune
+}
+
+func newKeyDrawer(name string, takes rune, calls chan string, handled chan rune) *keyDrawer {
+	return &keyDrawer{name: name, calls: calls, takes: takes, handled: handled}
+}
+
+func (d *keyDrawer) Draw(*canvas.Canvas, time.Duration) {
+	d.calls <- d.name
+}
+
+func (d *keyDrawer) Handle(key input.Key) bool {
+	if key.Kind != input.Rune || key.Rune != d.takes {
+		return false
+	}
+
+	d.handled <- key.Rune
+
+	return true
+}
+
+// TestRunLiveSceneTakesItsOwnKeys covers the scene getting first refusal. A
+// scene that claims s must stop the loop switching away from it, which is the
+// whole point of letting a scene bind keys at all.
+func TestRunLiveSceneTakesItsOwnKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	calls := make(chan string, 4)
+	handled := make(chan rune, 2)
+	blitter := newFakeBlitter(100, 100, 16, 200, "fake")
+	ticker := newFakeTicker()
+
+	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
+		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
+		app.WithScenes(newKeyDrawer("first", 's', calls, handled), newNamedDrawer("second", calls)),
+		app.WithConsoleSwitch((&switchSpy{}).switchMode),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(&onceReader{data: []byte{'s'}}),
+		app.WithTicker(ticker.new),
+	)
+
+	if got := recvOrTimeout(t, handled, testTimeout, "the scene to take s"); got != 's' {
+		t.Errorf("scene handled %q, want %q", got, 's')
+	}
+
+	ticker.ch <- time.Now()
+
+	if got := recvOrTimeout(t, calls, testTimeout, "a Draw call"); got != "first" {
+		t.Errorf("scene after s is %q, want the loop to have left it alone", got)
+	}
+
+	cancel()
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return"); err != nil {
+		t.Errorf("Run: %v", err)
+	}
+}
+
+// TestRunLiveSceneLetsQuitThrough is the other half of the contract: a key the
+// scene does not claim reaches the loop, so q still quits whichever scene is
+// on screen.
+func TestRunLiveSceneLetsQuitThrough(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	blitter := newFakeBlitter(100, 100, 16, 200, "fake")
+	ticker := newFakeTicker()
+
+	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
+		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
+		app.WithScenes(newKeyDrawer("first", 't', make(chan string, 4), make(chan rune, 2))),
+		app.WithConsoleSwitch((&switchSpy{}).switchMode),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(&onceReader{data: []byte{'q'}}),
+		app.WithTicker(ticker.new),
+	)
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return after q"); err != nil {
+		t.Errorf("Run: %v, want nil", err)
 	}
 }

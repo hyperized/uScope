@@ -12,10 +12,11 @@ it directly. No X, no Wayland, no DRM master, no terminal emulator.
 It still behaves like a console program. One static binary, started from the
 shell on tty1, keyboard driven, `q` to get back to the shell.
 
-There is no radar in it yet. What there is: a drawing surface, three ways of
-getting that surface onto a screen, raw keyboard input, text in embedded
-console fonts, two scenes to look at, and a clean exit that puts things back
-the way it found them.
+The radar is in it now. Aircraft come in over the uConsole's own radio, from a
+BEAST feed on another machine, from a captured IQ file played back, or from a
+fleet of twelve invented ones so the thing can be worked on at a desk with no
+receiver anywhere near it. They are drawn as silhouettes turned to their
+heading and coloured by altitude, each with the trail it flew in on.
 
 ## The three backends
 
@@ -54,9 +55,78 @@ it supports means writing a query and waiting for an answer that never comes
 if it does not understand the question, and half a second of nothing at
 startup is a worse trade than falling back to blocks.
 
-## The two scenes
+## The radar
 
-`--scene` picks what gets drawn. In live mode `s` switches between them
+`--scene radar` is the default. The left half is the scope: a square field
+with three dashed range rings, the cardinal letters, a marker where the
+receiver is, and the airports that fall inside the current range as small
+hollow squares. Aircraft are 15 pixel silhouettes rotated to their heading.
+The colour is the altitude band: green below 10,000 feet, amber below 25,000,
+red above. An aircraft whose altitude nobody has decoded yet is grey. One
+whose heading nobody has decoded is drawn as a bare circle, because a
+silhouette would be claiming to know which way it is facing.
+
+Behind each aircraft is its trail, drawn as an anti-aliased polyline from the
+oldest fix it still holds to the newest, brightening towards the head. The
+trails are the reason this project exists. A character cell cannot draw one,
+and a scope full of them says in one glance what a scope full of dots cannot:
+who is turning and who came from where.
+
+The right column is the card. The selected aircraft's callsign is set at 64
+pixels with its ICAO hex and squawk beside it, its track in degrees and
+compass points under it, and three figures along the bottom: distance in
+nautical miles, altitude in feet, speed in knots. Under the card is one
+compact row per aircraft, nearest first, and the row for the selected one
+carries the accent bar. Under that, the altitude legend and a line saying how
+many aircraft are being tracked, how many frames have come in, and where from.
+
+Units are nautical miles, feet and knots throughout, because that is what
+aviation uses and converting would only make the numbers harder to check
+against anything else.
+
+### Where the aircraft come from
+
+| Flag | Source |
+|---|---|
+| `--replay-iq PATH` | a captured IQ file, played back through the demodulator |
+| `--beast HOST:PORT` | Mode S frames from a remote demodulator over TCP |
+| `--demo` | twelve invented aircraft on straight tracks |
+| none | the local RTL-SDR on Linux, the demo fleet anywhere else |
+
+They are listed in the order they beat each other. A capture wins over a feed
+so a recorded problem can always be replayed on a machine that also has a feed
+configured. Giving two of them is not an error; the more specific one is
+obviously what was meant.
+
+With nothing given at all the answer depends on the machine. On Linux that is
+the radio, which is the point of the uConsole. On a Mac there is no receiver to
+open, so uScope flies the demo fleet and says so once on stderr rather than
+refusing to start.
+
+`--lat` and `--lon` pin the receiver's own position. Both or neither: a
+latitude with no longitude is half an answer. Without them uScope works its
+own position out from the aircraft it can hear, by intersecting their radio
+horizons, which takes about thirty position reports and lands within tens of
+nautical miles. The header says which of the three it is showing: coordinates
+for a known position, `EST ±22 NM` for an estimate, `NO FIX` for neither.
+
+A known position is worth giving if you have one. With a reference nearby a
+single CPR frame resolves to a position; without one the decoder waits for the
+matching half of the pair, which takes up to ten seconds per aircraft.
+
+### Range
+
+The scope starts in auto range, which fits the farthest aircraft that has a
+position, rounded up to a whole 20 nautical mile step and clamped between 20
+and 500. A frame where nothing has a position leaves the range alone, so the
+scope does not snap back to its minimum every time the feed goes quiet. `a`
+turns auto off and `+` and `-` step the range by hand, which also turns auto
+off: asking for a range and having it overridden on the next frame is not what
+pressing the key meant.
+
+## The other two scenes
+
+`--scene` picks what gets drawn. In live mode `s` steps through all three
 without restarting.
 
 `pattern` is the orientation check from slice 1: four coloured corner
@@ -65,12 +135,13 @@ top-left and cyan triangle at the top means the frame landed the right way
 up, and the sweep moving means the loop is running.
 
 `specimen` is the slice 3 scene. It is half a font sample and half a mock of
-what the radar will look like: a header band with a clock, a selected-flight
-card with the callsign set large, two compact aircraft rows, all four
-embedded faces rendering the alphabet, and a key bar along the bottom. The
-aircraft in it are invented. The point is to find out whether Terminus at 12,
-16 and 32 pixels is readable at arm's length on a 5 inch panel before the
-radar is built on top of it.
+what the radar turned out to look like: a header band with a clock, a
+selected-flight card with the callsign set large, two compact aircraft rows,
+all four embedded faces rendering the alphabet, and a key bar along the
+bottom. The aircraft in it are invented and always the same. It stays in
+because it is the fastest way to judge a font change, and because a scene with
+no moving parts is a useful thing to have when the radar is misbehaving and
+you want to know whether the drawing or the data is at fault.
 
 Every block in the specimen sizes itself from the canvas bounds and the
 metrics of the font it is set in. A block that does not fit is skipped rather
@@ -235,19 +306,39 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | Key | Does |
 |---|---|
 | `q`, `Q` | quit |
-| `s`, `S` | switch between the pattern and the specimen |
+| `s`, `S` | step to the next scene |
+| `n`, `N`, Down | select the next aircraft |
+| `p`, `P`, Up | select the previous one |
+| `+`, `=` | widen the range by one step, and turn auto off |
+| `-`, `_` | narrow it by one step, and turn auto off |
+| `a`, `A` | auto range on or off |
+| `t`, `T` | trails on or off |
 | `Esc` | quit |
 | `Ctrl-C` | quit |
 
 Both cases are bound because caps lock is easy to hit by accident on the
-uConsole's keyboard. Arrow keys are decoded but nothing is bound to them yet.
+uConsole's keyboard, and the unshifted twins of `+` and `-` are bound for the
+same reason.
+
+The radar scene gets first refusal on every key and passes on the ones it does
+not want, which is what keeps `q` and `s` working while it is on screen. The
+other two scenes bind nothing.
+
+Selection is by ICAO rather than by position in the list, so an aircraft
+overtaking another does not move the selection to a different aeroplane. When
+the selected one goes out of range the selection falls to the nearest.
 
 ## Flags
 
 | Flag | Default | Does |
 |---|---|---|
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
-| `--scene` | `pattern` | `pattern` or `specimen` |
+| `--scene` | `radar` | `radar`, `pattern` or `specimen` |
+| `--demo` | off | fly twelve invented aircraft instead of decoding any |
+| `--beast` | | take Mode S frames from `HOST:PORT` |
+| `--replay-iq` | | replay a captured IQ file through the demodulator |
+| `--lat` | | receiver latitude in degrees, needs `--lon` |
+| `--lon` | | receiver longitude in degrees, needs `--lat` |
 | `--fb` | `/dev/fb0` | framebuffer device |
 | `--rotate` | `auto` | `auto` reads sysfs, or force `0`, `1`, `2`, `3` |
 | `--fps` | `30` | frames per second in live mode, 1 to 120 |
@@ -273,14 +364,22 @@ Exit status is 0 on a clean quit and 1 on any failure.
 make build          # for the machine you're on
 make build-aarch64  # for the uConsole
 make run            # go run .
-make run-blocks     # go run . --backend blocks
+make run-demo       # go run . --demo
+make run-beast      # go run . --beast $(BEAST)
+make run-blocks     # go run . --backend blocks --demo
+make run-pattern    # go run . --scene pattern
 make run-specimen   # go run . --scene specimen
 make test           # go test -race -cover ./...
 make lint           # golangci-lint run ./...
+make radar          # ship, then paint one radar frame on the panel
 make pattern        # ship, then paint the test pattern on the panel
 make specimen       # ship, then paint the type specimen on the panel
 make test-device    # cross-compile the integration tests and run them on the device
 ```
+
+`make ship` puts the binary on the device on its own. Once it is there,
+`./uScope` over ssh opens the local radio and every flag above works the same
+as it does here.
 
 Tests that touch a real framebuffer or a real terminal sit behind the
 `integration` build tag, so `make test` never opens a device. `make
@@ -291,6 +390,7 @@ test-device` is what runs them, on the hardware where they mean something.
 ```
 main.go, flags.go     the command line
 pkg/canvas            drawing surface
+pkg/sprite            monochrome bitmaps, rotated to a heading
 pkg/rotate            fbcon rotation numbering and pixel mapping
 pkg/backend           the Backend interface and the --backend allow list
 pkg/fbdev             framebuffer blitter (Linux; stub elsewhere)
@@ -305,6 +405,8 @@ pkg/text              draws strings with a PSF font
 internal/term         raw tty mode
 internal/input        bytes to key events
 internal/theme        the colour palettes
+internal/source       where aircraft come from: the radio, a feed, or invented
+internal/radar        the radar scene
 internal/pattern      the orientation scene
 internal/specimen     the type specimen scene
 internal/app          the run loop
@@ -319,16 +421,42 @@ takes bytes and knows nothing about canvases; the drawer takes a font and a
 canvas and knows nothing about files. Neither of them has ever heard of a
 scene, which is what lets both be tested against fonts built inside a test.
 
-Standard library only. No third-party modules, and no `golang.org/x` either:
-the termios, ioctl and signal work is done with `syscall` behind build tags.
+Everything above the data layer is standard library only. No `golang.org/x`
+either: the termios, ioctl and signal work is done with `syscall` behind build
+tags.
+
+## The uAirwaves dependency
+
+The one thing uScope does not do itself is decode. `internal/source` wraps
+[uAirwaves](https://github.com/hyperized/uAirwaves), which already drives the
+RTL-SDR, demodulates Mode S, resolves CPR positions, tracks aircraft, and
+works out where the receiver is from what it can hear. Rewriting that to own
+it would have taken longer than the rest of the slice and would have been
+wrong in different ways.
+
+Seven packages are imported: `pkg/adsb`, `pkg/airplane`, `pkg/airplanes`,
+`pkg/airports`, `pkg/location`, `pkg/scope` and `pkg/selflocate`. All of them
+are data and decoding.
+
+`pkg/radar` is not imported and will not be. That is uAirwaves' own scope,
+written against tview and tcell in character cells, which is the thing uScope
+exists to do differently. Importing it would drag a terminal UI toolkit into a
+program that writes pixels into `/dev/fb0`. `internal/ui` is out for the same
+reason, and `pkg/gps`, `pkg/coverage` and `pkg/battery` are out because
+nothing here uses them yet.
+
+The dependency is pinned to an exact commit rather than a tag. uAirwaves is a
+moving target and its own local work is ahead of what is published; a pin is
+the difference between a reproducible build and one that changes under you.
 
 ## What comes next
 
-Slice 4 is the radar: aircraft as rotated silhouettes coloured by altitude
-band, one thin trail per aircraft rather than a few dots, range rings, and
-the selected-flight card fed by real decodes instead of the mock data in the
-specimen. It shares uAirwaves' decoding work and draws it at pixel
-resolution. [DESIGN.md](DESIGN.md) is the contract for how it should look.
+Two questions [DESIGN.md](DESIGN.md) left open are still open. Trails fade by
+age, which was the thing to try first and looks right, but nobody has seen it
+next to a version that fades by altitude. And the paper theme has not been
+built, so whether it is worth keeping is still a guess.
+
+Nobody has looked at the radar on the panel yet. That is `make radar`.
 
 ## Licence
 

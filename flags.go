@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -24,7 +26,7 @@ const (
 	defaultFPS     = 30
 	defaultSize    = "1280x720"
 	defaultBackend = "auto"
-	defaultScene   = "pattern"
+	defaultScene   = "radar"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -39,20 +41,56 @@ const (
 	// maxDimension is a sanity ceiling for --size, not a hardware limit. It
 	// exists so a typo allocates a rejected flag instead of 40 GB of canvas.
 	minDimension, maxDimension = 1, 8192
+
+	// The coordinate limits --lat and --lon are checked against. internal/source
+	// checks them again, because it is a library entry point and a caller that
+	// skipped the flags would otherwise centre the scope on nowhere.
+	minLatitude, maxLatitude   = -90.0, 90.0
+	minLongitude, maxLongitude = -180.0, 180.0
+
+	// linuxGOOS is the only platform with a radio driver behind it, so it is
+	// the only one where "no source given" means the local SDR.
+	linuxGOOS = "linux"
+)
+
+// sourceKind is where the aircraft come from. The set is closed for the same
+// reason backend.Kind's is: a typo that fell through to a default would draw
+// something nobody asked for.
+type sourceKind uint8
+
+// The sources, in the order --replay-iq, --beast and --demo beat each other.
+const (
+	// sourceAuto means nobody chose: the local radio on Linux, the demo
+	// fleet anywhere else.
+	sourceAuto sourceKind = iota
+
+	// sourceDemo is the invented fleet, which is what makes the radar
+	// developable on a machine with no receiver.
+	sourceDemo
+
+	// sourceBeast consumes Mode S frames from a remote demodulator.
+	sourceBeast
+
+	// sourceReplay plays a captured IQ file back through the demodulator.
+	sourceReplay
 )
 
 // Flag validation errors. Each is a sentinel so a test can assert which rule
 // rejected the input rather than matching on a message.
 var (
-	errEmptyFB  = errors.New(appName + ": --fb must not be empty")
-	errFPSRange = errors.New(appName + ": --fps out of range")
-	errRotate   = errors.New(appName + ": --rotate must be auto, 0, 1, 2 or 3")
-	errSize     = errors.New(appName + ": --size must be WxH")
-	errFrames   = errors.New(appName + ": --frames out of range")
-	errBackend  = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
-	errScene    = errors.New(appName + ": --scene must be pattern or specimen")
-	errPNGBoth  = errors.New(appName + ": --png and --backend disagree")
-	errPNGPath  = errors.New(appName + ": --backend png needs --png PATH to write to")
+	errEmptyFB    = errors.New(appName + ": --fb must not be empty")
+	errFPSRange   = errors.New(appName + ": --fps out of range")
+	errRotate     = errors.New(appName + ": --rotate must be auto, 0, 1, 2 or 3")
+	errSize       = errors.New(appName + ": --size must be WxH")
+	errFrames     = errors.New(appName + ": --frames out of range")
+	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
+	errScene      = errors.New(appName + ": --scene must be radar, pattern or specimen")
+	errLatitude   = errors.New(appName + ": --lat out of range")
+	errLongitude  = errors.New(appName + ": --lon out of range")
+	errLatLonPair = errors.New(appName + ": --lat and --lon must be given together")
+	errBeastAddr  = errors.New(appName + ": --beast must be HOST:PORT")
+	errPNGBoth    = errors.New(appName + ": --png and --backend disagree")
+	errPNGPath    = errors.New(appName + ": --backend png needs --png PATH to write to")
 )
 
 // config is the validated command line. Everything in it has already been
@@ -68,6 +106,16 @@ type config struct {
 	size        image.Point
 	backend     backend.Kind
 	scene       app.SceneKind
+
+	// Where the aircraft come from, and where the receiver is if the operator
+	// said. hasLocation is separate from the two coordinates because latitude
+	// zero is the Gulf of Guinea, not "unset".
+	source      sourceKind
+	beast       string
+	replay      string
+	latitude    float64
+	longitude   float64
+	hasLocation bool
 }
 
 // rawFlags is the command line before validation: whatever the flag package
@@ -79,9 +127,14 @@ type rawFlags struct {
 	size        string
 	backend     string
 	scene       string
+	beast       string
+	replay      string
+	latitude    string
+	longitude   string
 	fps         int
 	frames      int
 	testPattern bool
+	demo        bool
 }
 
 // parseFlags turns an argument list into a validated config.
@@ -121,7 +174,17 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.backend, "backend", defaultBackend,
 		"where to draw: auto, fb, kitty, blocks or png")
 	set.StringVar(&raw.scene, "scene", defaultScene,
-		"what to draw: pattern or specimen")
+		"what to draw: radar, pattern or specimen")
+	set.BoolVar(&raw.demo, "demo", false,
+		"fly an invented fleet instead of decoding one, for a machine with no receiver")
+	set.StringVar(&raw.beast, "beast", "",
+		"consume Mode S frames from a remote demodulator at HOST:PORT")
+	set.StringVar(&raw.replay, "replay-iq", "",
+		"replay a captured IQ file through the demodulator")
+	set.StringVar(&raw.latitude, "lat", "",
+		"receiver latitude in degrees, -90 to 90; needs --lon as well")
+	set.StringVar(&raw.longitude, "lon", "",
+		"receiver longitude in degrees, -180 to 180; needs --lat as well")
 	set.IntVar(&raw.frames, "frames", 0,
 		"stop after this many frames, 0 to run until quit, up to 1000")
 
@@ -162,6 +225,16 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, err
 	}
 
+	place, err := raw.location()
+	if err != nil {
+		return config{}, err
+	}
+
+	chosen, err := raw.sourceChoice()
+	if err != nil {
+		return config{}, err
+	}
+
 	return config{
 		fbPath:      raw.fb,
 		rotation:    rot,
@@ -173,7 +246,119 @@ func (raw rawFlags) validated() (config, error) {
 		size:        size,
 		backend:     kind,
 		scene:       scene,
+		source:      chosen,
+		beast:       raw.beast,
+		replay:      raw.replay,
+		latitude:    place.latitude,
+		longitude:   place.longitude,
+		hasLocation: place.given,
 	}, nil
+}
+
+// location is the receiver position the operator typed in, if any.
+type location struct {
+	latitude  float64
+	longitude float64
+	given     bool
+}
+
+// location reads --lat and --lon.
+//
+// They are strings rather than float64 flags because latitude zero is a real
+// place off the coast of Ghana, so "unset" cannot be a number. A string also
+// keeps the --help line readable: a float64 flag has to carry some sentinel as
+// its default, and the sentinel is what gets printed.
+//
+// Both or neither: a latitude without a longitude is half an answer, and
+// guessing the other half would put the scope somewhere nobody asked for.
+func (raw rawFlags) location() (location, error) {
+	if raw.latitude == "" && raw.longitude == "" {
+		return location{}, nil
+	}
+
+	if raw.latitude == "" || raw.longitude == "" {
+		return location{}, errLatLonPair
+	}
+
+	latitude, err := degrees(raw.latitude, minLatitude, maxLatitude, errLatitude)
+	if err != nil {
+		return location{}, err
+	}
+
+	longitude, err := degrees(raw.longitude, minLongitude, maxLongitude, errLongitude)
+	if err != nil {
+		return location{}, err
+	}
+
+	return location{latitude: latitude, longitude: longitude, given: true}, nil
+}
+
+// degrees parses and range-checks one coordinate.
+func degrees(text string, low, high float64, sentinel error) (float64, error) {
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q is not a number", sentinel, text)
+	}
+
+	if math.IsNaN(value) || value < low || value > high {
+		return 0, fmt.Errorf("%w: got %s, want %g to %g", sentinel, text, low, high)
+	}
+
+	return value, nil
+}
+
+// sourceChoice settles where the aircraft come from.
+//
+// The order is replay, then beast, then demo, then whatever the platform has.
+// Replay wins so a developer can always play a capture back on a host that
+// also has a feed configured, which is the same precedence uAirwaves uses.
+// Giving two of them is not an error: the more specific one is obviously what
+// was meant, and refusing would only get in the way of a scripted run.
+func (raw rawFlags) sourceChoice() (sourceKind, error) {
+	if raw.replay != "" {
+		return sourceReplay, nil
+	}
+
+	if raw.beast != "" {
+		if err := checkBeastAddress(raw.beast); err != nil {
+			return sourceAuto, err
+		}
+
+		return sourceBeast, nil
+	}
+
+	if raw.demo {
+		return sourceDemo, nil
+	}
+
+	return sourceAuto, nil
+}
+
+// checkBeastAddress makes sure --beast is something that could be dialled.
+//
+// SplitHostPort alone is not enough: it is happy with ":" and with a bare
+// port, and a half-written address is more likely a typo than an intent to
+// dial localhost on port nothing.
+func checkBeastAddress(address string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("%w: %q: %w", errBeastAddr, address, err)
+	}
+
+	if host == "" || port == "" {
+		return fmt.Errorf("%w: %q has no %s", errBeastAddr, address, missingPart(host))
+	}
+
+	return nil
+}
+
+// missingPart names whichever half of a host:port pair is empty.
+func missingPart(host string) string {
+	if host == "" {
+		return "host"
+	}
+
+	return "port"
 }
 
 // parseScene reads --scene against the closed set internal/app knows how to
@@ -182,7 +367,7 @@ func (raw rawFlags) validated() (config, error) {
 func parseScene(text string) (app.SceneKind, error) {
 	kind, err := app.ParseScene(text)
 	if err != nil {
-		return app.Pattern, fmt.Errorf("%w: %w", errScene, err)
+		return app.Radar, fmt.Errorf("%w: %w", errScene, err)
 	}
 
 	return kind, nil

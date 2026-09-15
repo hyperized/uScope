@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/hyperized/uAirwaves/pkg/scope"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
@@ -27,6 +29,18 @@ type runner struct {
 	stdin         io.Reader
 	stderr        io.Writer
 	loadScenes    func() ([]Drawer, error)
+
+	// source is where the radar scene gets its aircraft. It is built in main
+	// from the flags, because that is where the choice between a radio, a
+	// feed, a capture and the demo fleet is made. It defaults to an empty one
+	// so a caller that only wants the pattern scene does not have to supply
+	// a receiver it will never read.
+	source source.Source
+
+	// scopeRange is the display range the +, - and a keys drive. It lives
+	// here rather than inside the scene so a future second view could share
+	// one range control.
+	scopeRange *scope.Scope
 }
 
 // newRunner builds the production wiring and then applies the overrides.
@@ -44,8 +58,14 @@ func newRunner(opts ...Option) *runner {
 		goos:          runtime.GOOS,
 		stdin:         os.Stdin,
 		stderr:        os.Stderr,
-		loadScenes:    defaultScenes,
+		source:        source.Empty{},
+		scopeRange:    scope.New(),
 	}
+
+	// Bound after the struct exists, because the production scene set reads
+	// the source and the range control back off the runner, and both may
+	// still be replaced by an option below.
+	run.loadScenes = run.defaultScenes
 
 	for _, opt := range opts {
 		opt(run)
@@ -133,4 +153,25 @@ func WithScenes(scenes ...Drawer) Option {
 // font loading sits behind.
 func WithSceneLoader(load func() ([]Drawer, error)) Option {
 	return func(r *runner) { r.loadScenes = load }
+}
+
+// WithSource supplies the aircraft the radar scene draws. main builds it from
+// the flags and owns its lifetime: it starts the ingest before the loop and
+// closes it after, so the run loop never has to know which source it is.
+func WithSource(src source.Source) Option {
+	return func(r *runner) {
+		if src != nil {
+			r.source = src
+		}
+	}
+}
+
+// WithScopeRange replaces the display-range control, which is what a test
+// uses to start the radar at a known range.
+func WithScopeRange(scopeRange *scope.Scope) Option {
+	return func(r *runner) {
+		if scopeRange != nil {
+			r.scopeRange = scopeRange
+		}
+	}
 }
