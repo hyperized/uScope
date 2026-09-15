@@ -1,0 +1,37 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "big enough to keep" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [5.0, 52.5],
+            [5.05, 52.5],
+            [5.05, 52.53],
+            [5.0, 52.53],
+            [5.0, 52.5]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "too small to keep" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [6.0, 53.0],
+            [6.001, 53.0],
+            [6.001, 53.001],
+            [6.0, 53.001],
+            [6.0, 53.0]
+          ]
+        ]
+      }
+    }
+  ]
+}

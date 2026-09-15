@@ -39,6 +39,14 @@ type Palette struct {
 	// a step below the ink.
 	Rule color.RGBA
 
+	// Shore is the coastline under the scope, and the quietest colour either
+	// theme has. Against the field it carries a little over 40% of the
+	// contrast Muted does, which is the level it was picked for: the rings
+	// carry a number and have to be read, the coast only has to be
+	// recognised, and a coastline as loud as the furniture turns the scope
+	// into a map that happens to have aircraft on it.
+	Shore color.RGBA
+
 	// The altitude bands. Aircraft are coloured by how high they are, which
 	// is the one piece of information a top-down scope cannot show by
 	// position. Unused until the radar slice; they live here so the palette
@@ -64,6 +72,7 @@ const (
 	nightMuted   = 0x5C7080
 	nightAccent  = 0xF0A030
 	nightRule    = 0x2A3B4A
+	nightShore   = 0x1E3440
 	nightAltLow  = 0x4CAF6E
 	nightAltMid  = 0xE0A93B
 	nightAltHigh = 0xD05A4A
@@ -78,6 +87,7 @@ const (
 	paperMuted   = 0x6E7681
 	paperAccent  = 0xC8700A
 	paperRule    = 0xC9C5BA
+	paperShore   = 0xBFB9AA
 	paperAltLow  = 0x2E8B4F
 	paperAltMid  = 0xB8770B
 	paperAltHigh = 0xB83A2E
@@ -107,6 +117,7 @@ var Night = Palette{
 	Muted:   rgb(nightMuted),
 	Accent:  rgb(nightAccent),
 	Rule:    rgb(nightRule),
+	Shore:   rgb(nightShore),
 	AltLow:  rgb(nightAltLow),
 	AltMid:  rgb(nightAltMid),
 	AltHigh: rgb(nightAltHigh),
@@ -128,6 +139,7 @@ var Paper = Palette{
 	Muted:   rgb(paperMuted),
 	Accent:  rgb(paperAccent),
 	Rule:    rgb(paperRule),
+	Shore:   rgb(paperShore),
 	AltLow:  rgb(paperAltLow),
 	AltMid:  rgb(paperAltMid),
 	AltHigh: rgb(paperAltHigh),

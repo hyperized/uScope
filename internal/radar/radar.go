@@ -13,6 +13,17 @@
 // knows whether they came off a radio or were invented. Everything here works
 // on a source.Frame and would not notice the difference.
 //
+// The scope's furniture is drawn on a background layer of its own and copied
+// under each frame, so the rings, the labels, the airfields and the coastline
+// cost one memmove per frame instead of being drawn again. The layer is
+// redrawn when the canvas size, the range, the receiver position, the palette
+// or one of the overlay toggles changes, and not otherwise.
+//
+// Minimal mode is the aircraft and their trails on the bare field, edge to
+// edge, with no header, no key bar, no column and no furniture at all. The
+// keys keep working: the airfield and shore toggles still change state while
+// it is on, they simply have nothing to draw.
+//
 // Every size comes from the canvas bounds and the metrics of the face it is
 // set in. A block that does not fit is dropped rather than drawn over its
 // neighbour, so the same scene renders at 1280x720 on the panel and on a
@@ -35,6 +46,7 @@ import (
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
+	"github.com/hyperized/uScope/pkg/shore"
 	"github.com/hyperized/uScope/pkg/sprite"
 )
 
@@ -138,9 +150,28 @@ type Scene struct {
 	// colour is what an aircraft's colour means, which the c key cycles.
 	colour ColourMode
 
-	// airports is whether the airfield markers are drawn, which the f key
+	// airports is whether the airfield markers are drawn, which the a key
 	// toggles.
 	airports bool
+
+	// shoreOn is whether the coastline is drawn, which the m key toggles, and
+	// shoreSet is the data behind it. A nil set draws nothing whatever the
+	// toggle says, which is the state on a run that was never handed the data.
+	shoreOn  bool
+	shoreSet *shore.Set
+
+	// minimal strips the scene back to the aircraft and their trails on the
+	// whole canvas, which the z key flips. Every other setting keeps its
+	// state while it is on; some of them just have nothing left to draw.
+	minimal bool
+
+	// The background layer: everything on the scope that does not move
+	// between frames, kept on a canvas of its own and copied under each frame
+	// rather than drawn again. layerRuns counts how many times it has been
+	// drawn, which is what lets a test prove it is not once per frame.
+	layer     *canvas.Canvas
+	layerKey  layerKey
+	layerRuns int
 
 	// light is whether the palette draws on a light field. It is kept beside
 	// the palette rather than worked out per aircraft because an airline's
@@ -228,6 +259,16 @@ func WithBattery(reader BatteryReader) Option {
 	return func(s *Scene) { s.battery = reader }
 }
 
+// WithShore supplies the coastlines the scope draws under everything else.
+//
+// Without it, or with a nil set, no shore is drawn however the toggle and the
+// flag are set. That is a run that was never handed the data rather than a
+// failure, so there is nothing to report and nothing to refuse: the rest of
+// the scope is unaffected.
+func WithShore(set *shore.Set) Option {
+	return func(s *Scene) { s.shoreSet = set }
+}
+
 // WithSprite replaces the aircraft silhouette. A nil bitmap leaves the
 // built-in one alone.
 func WithSprite(icon *sprite.Bitmap) Option {
@@ -242,9 +283,10 @@ func WithSprite(icon *sprite.Bitmap) Option {
 //
 // Those three are parameters rather than options because a radar without them
 // has nothing to draw; the options are the things that have a useful default.
-// Trails, auto range and the airfield markers all start on and the colour mode
-// starts on altitude, which is the state the scope is most useful in when
-// nobody has touched a key yet.
+// Trails, auto range, the airfield markers and the shore all start on and the
+// colour mode starts on altitude, which is the state the scope is most useful
+// in when nobody has touched a key yet. Minimal starts off: it is the view to
+// switch to, not the one to explain on first sight.
 func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option) *Scene {
 	scene := &Scene{
 		faces:      faces,
@@ -256,6 +298,7 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		trails:     true,
 		autoRange:  true,
 		airports:   true,
+		shoreOn:    true,
 		colour:     ColourAltitude,
 		selIndex:   -1,
 	}
@@ -287,8 +330,6 @@ type layout struct {
 // Draw paints one frame. elapsed is unused: the scene is driven by the data
 // and the clock in the frame, not by how long the program has been running.
 func (s *Scene) Draw(dst *canvas.Canvas, _ time.Duration) {
-	dst.Clear(s.pal.Field)
-
 	frame := s.src.Frame()
 	if frame.Now.IsZero() {
 		frame.Now = s.now()
@@ -297,15 +338,29 @@ func (s *Scene) Draw(dst *canvas.Canvas, _ time.Duration) {
 	s.syncSelection(frame)
 	s.fitRange(frame)
 
+	// The field, the rings, the labels, the home marker, the airports and the
+	// shore all come from the background layer, which is redrawn only when
+	// something it depends on moves. Everything below is what changes.
+	s.paintBackground(dst, frame)
+
 	// The layout is a local whose address is handed down rather than a value
 	// returned by pointer, because a pointer returned from newLayout escapes
 	// to the heap and that is the one allocation a frame would otherwise make.
 	lay := s.newLayout(dst)
 
+	// Minimal is the aircraft and nothing else, edge to edge. It skips the
+	// three blocks that would take room off the canvas, so the traffic gets
+	// the whole frame rather than the square the column left behind.
+	if s.minimal {
+		s.drawTraffic(&lay, frame)
+
+		return
+	}
+
 	s.drawKeyBar(&lay)
 	s.drawHeader(&lay, frame)
 	lay.split()
-	s.drawScope(&lay, frame)
+	s.drawTraffic(&lay, frame)
 	s.drawColumn(&lay, frame)
 }
 

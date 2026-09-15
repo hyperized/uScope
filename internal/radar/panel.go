@@ -61,8 +61,13 @@ type keyCap struct {
 }
 
 // keyCaps is the key legend, in the order the keys are worth reaching for:
-// leaving, then moving through the list, then the four things that change what
+// leaving, then moving through the list, then the five things that change what
 // is on the field, then the two that change how it looks.
+//
+// Ten caps and their labels come to 736 pixels of the 1248 the panel leaves
+// between its margins, so nothing here has to be shortened to fit. z is bound
+// and deliberately absent: it hides this bar, so a cap advertising it would be
+// pointing at the thing it is about to remove.
 //
 // The select cap is drawn as the two arrow glyphs rather than as N/P. Both are
 // bound, but the arrows are what a hand reaches for first, and all four
@@ -77,6 +82,7 @@ var keyCaps = [...]keyCap{
 	{key: "R", label: "AUTO"},
 	{key: "T", label: "TRAILS"},
 	{key: "A", label: "AIRPORTS"},
+	{key: "M", label: "SHORE"},
 	{key: "C", label: "COLOUR"},
 	{key: "L", label: "THEME"},
 	{key: "V", label: "VIEW"},
@@ -91,17 +97,12 @@ var keyCaps = [...]keyCap{
 func (s *Scene) drawKeyBar(lay *layout) {
 	face := s.faces.Small
 
-	capHeight := lineHeight(face)
-	if capHeight == 0 {
+	reserved := s.keyBarHeight(lay)
+	if reserved == 0 {
 		return
 	}
 
-	height := capHeight + 2*capPadY
-	if !lay.fits(height) {
-		return
-	}
-
-	top := lay.bottom - height
+	top := lay.bottom - (reserved - blockGap)
 	pen := lay.left
 
 	for _, entry := range keyCaps {
@@ -115,7 +116,28 @@ func (s *Scene) drawKeyBar(lay *layout) {
 		}
 	}
 
-	lay.bottom -= height + blockGap
+	lay.bottom -= reserved
+}
+
+// keyBarHeight is the room the key bar takes off the bottom, blockGap
+// included, or zero when there is no face to set it in or no room left for it.
+//
+// It is separate from drawKeyBar because the background layer has to carve the
+// frame the same way without drawing a bar of its own: the layer holds the
+// scope, and the scope only sits where it does because the bar took its room
+// off the bottom first.
+func (s *Scene) keyBarHeight(lay *layout) int {
+	capHeight := lineHeight(s.faces.Small)
+	if capHeight == 0 {
+		return 0
+	}
+
+	height := capHeight + 2*capPadY
+	if !lay.fits(height) {
+		return 0
+	}
+
+	return height + blockGap
 }
 
 // drawCap draws one key cap, the letter knocked out of a filled box, and
@@ -140,20 +162,13 @@ func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string) int {
 // and BandInk repeat Field and Ink, so there the band is invisible and the
 // text reads exactly as it did before the band existed.
 func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
+	total := s.headerHeight(lay)
+	if total == 0 {
+		return
+	}
+
 	markHeight := lineHeight(s.faces.BodyBold)
-	smallHeight := lineHeight(s.faces.Small)
-	clockHeight := lineHeight(s.faces.Large)
-
-	if markHeight == 0 || smallHeight == 0 || clockHeight == 0 {
-		return
-	}
-
-	band := max(markHeight+rowLead+smallHeight, clockHeight) + 2*headerPadY
-
-	total := band + ruleHeight + blockGap
-	if !lay.fits(total) {
-		return
-	}
+	band := total - ruleHeight - blockGap
 
 	lay.dst.FillRect(image.Rect(lay.left, lay.top, lay.right, lay.top+band), s.pal.Band)
 
@@ -168,6 +183,32 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Rule)
 
 	lay.top += total
+}
+
+// headerHeight is the room the header band takes off the top, its hairline and
+// blockGap included, or zero when one of its three faces is missing or there
+// is no room left for it.
+//
+// It exists for the same reason keyBarHeight does: the background layer has to
+// push the scope down by exactly what the header will push it down by, without
+// drawing a band of its own over the one the frame draws.
+func (s *Scene) headerHeight(lay *layout) int {
+	markHeight := lineHeight(s.faces.BodyBold)
+	smallHeight := lineHeight(s.faces.Small)
+	clockHeight := lineHeight(s.faces.Large)
+
+	if markHeight == 0 || smallHeight == 0 || clockHeight == 0 {
+		return 0
+	}
+
+	band := max(markHeight+rowLead+smallHeight, clockHeight) + 2*headerPadY
+
+	total := band + ruleHeight + blockGap
+	if !lay.fits(total) {
+		return 0
+	}
+
+	return total
 }
 
 // drawWordmark sets USCOPE, then the ingest source beside it behind a dot.

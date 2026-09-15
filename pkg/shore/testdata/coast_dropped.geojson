@@ -1,0 +1,21 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [4.0, 52.0] }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "LineString", "coordinates": [[4.0, 52.0]] }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "LineString", "coordinates": [[4.0, 52.0], ["bad", "data"]] }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "MultiLineString", "coordinates": [[4.0, 52.0], [4.1, 52.1]] }
+    }
+  ]
+}

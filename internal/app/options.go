@@ -12,6 +12,7 @@ import (
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // runner holds the seams. Every one of them has a production default, so
@@ -48,6 +49,11 @@ type runner struct {
 	// default, which is a machine with no battery rather than a failure, and
 	// main fills it in when the platform has one.
 	battery radar.BatteryReader
+
+	// shoreSet is the coastline the radar draws under the scope. Nil draws no
+	// shore, which is what a caller that only wants the pattern scene gets;
+	// main decodes the embedded data once at startup and fills it in.
+	shoreSet *shore.Set
 }
 
 // newRunner builds the production wiring and then applies the overrides.
@@ -182,6 +188,15 @@ func WithBattery(reader radar.BatteryReader) Option {
 			r.battery = reader
 		}
 	}
+}
+
+// WithShore supplies the coastline data the radar scene draws.
+//
+// main loads it once at startup rather than letting the scene load it lazily,
+// so a file that will not decode is an error on the command line instead of an
+// empty scope ten frames into a run on a device with no other diagnostics.
+func WithShore(set *shore.Set) Option {
+	return func(r *runner) { r.shoreSet = set }
 }
 
 // WithScopeRange replaces the display-range control, which is what a test

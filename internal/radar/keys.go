@@ -38,6 +38,10 @@ func (s *Scene) Handle(key input.Key) bool {
 //
 // The unshifted twins of + and - are bound as well, because reaching for
 // shift to change the range on a thumb keyboard is a nuisance.
+//
+// m and z both still work in minimal mode, and so does everything else here.
+// m changes whether the shore would be drawn rather than whether it is, since
+// minimal draws no shore either way, and z is how you get back out.
 func (s *Scene) handleRune(value rune) bool {
 	switch value {
 	case 'n', 'N':
@@ -54,6 +58,10 @@ func (s *Scene) handleRune(value rune) bool {
 		s.trails = !s.trails
 	case 'a', 'A':
 		s.airports = !s.airports
+	case 'm', 'M':
+		s.shoreOn = !s.shoreOn
+	case 'z', 'Z':
+		s.minimal = !s.minimal
 	case 'c', 'C':
 		s.colour = s.colour.Next()
 	default:

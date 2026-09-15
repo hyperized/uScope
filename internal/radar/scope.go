@@ -79,6 +79,14 @@ type projector struct {
 	centerY int
 	radius  int
 	scopeNm float64
+
+	// limitNm is how far from the centre a position may be and still be
+	// drawn. It is the range itself in the ordinary view, where the outer
+	// ring is the edge of the world. Minimal mode widens it to the canvas
+	// corner, because it has no ring and the corners are meant to show
+	// traffic a ring would have cut off.
+	limitNm float64
+
 	lat0    float64
 	lon0    float64
 	cosLat0 float64
@@ -103,6 +111,7 @@ func newProjector(geom scopeGeometry, receiver source.Receiver, scopeNm float64)
 		centerY: geom.centerY,
 		radius:  geom.rangeR,
 		scopeNm: scopeNm,
+		limitNm: scopeNm,
 		lat0:    receiver.Latitude,
 		lon0:    receiver.Longitude,
 		cosLat0: math.Cos(receiver.Latitude * math.Pi / halfCircle),
@@ -114,7 +123,9 @@ func newProjector(geom scopeGeometry, receiver source.Receiver, scopeNm float64)
 //
 // The inside test is done in nautical miles rather than in pixels so it does
 // not depend on the rounding, and so an aircraft exactly on the outer ring
-// lands on the ring rather than one pixel past it.
+// lands on the ring rather than one pixel past it. What counts as outside is
+// limitNm, which is the range ring in the ordinary view and the canvas corner
+// in minimal mode.
 func (p projector) at(latitude, longitude float64) (int, int, bool) {
 	if latitude == 0 && longitude == 0 {
 		return 0, 0, false
@@ -123,13 +134,39 @@ func (p projector) at(latitude, longitude float64) (int, int, bool) {
 	eastNm := (longitude - p.lon0) * nmPerDegree * p.cosLat0
 	northNm := (latitude - p.lat0) * nmPerDegree
 
-	if math.IsNaN(eastNm) || math.IsNaN(northNm) || math.Hypot(eastNm, northNm) > p.scopeNm {
+	if math.IsNaN(eastNm) || math.IsNaN(northNm) || math.Hypot(eastNm, northNm) > p.limitNm {
 		return 0, 0, false
 	}
 
 	return p.centerX + int(math.Round(eastNm*p.scale)),
 		p.centerY - int(math.Round(northNm*p.scale)),
 		true
+}
+
+// offset projects a position to a pixel without the inside test at does.
+//
+// The shore needs it. A coastline is clipped to the ring by distance rather
+// than dropped point by point, so a line that left the scope between two of
+// its points has to be cut where it crossed rather than at the last point that
+// happened to be inside. at cannot say where that is, because it reports only
+// that the point is out.
+func (p projector) offset(latitude, longitude float64) (float64, float64) {
+	eastNm := (longitude - p.lon0) * nmPerDegree * p.cosLat0
+	northNm := (latitude - p.lat0) * nmPerDegree
+
+	return float64(p.centerX) + eastNm*p.scale, float64(p.centerY) - northNm*p.scale
+}
+
+// reaching returns the same projection with a wider cut-off.
+//
+// The copy is taken rather than the receiver written to: a projector is passed
+// around by value everywhere else in here, and a method that quietly edited
+// the one it was called on would be the one exception.
+func (p projector) reaching(limitNm float64) projector {
+	wider := p
+	wider.limitNm = limitNm
+
+	return wider
 }
 
 // scopeGeometry is where the rings and the centre go.
@@ -165,11 +202,34 @@ func geometry(box image.Rectangle, inset int) (scopeGeometry, bool) {
 	return geom, geom.rangeR > 0
 }
 
-// drawScope paints the left half: rings, cardinals, the home marker, the
-// airports and the aircraft.
-func (s *Scene) drawScope(lay *layout, frame source.Frame) {
+// scopeFrame is the scope measured for one frame: where the rings go, how a
+// position becomes a pixel, and how far the outer ring reaches.
+//
+// plottable is false when nothing can be plotted against the receiver, which
+// is the state before any position is known. The rings and the cardinals are
+// still drawn then, because they say what the scope would show; the shore,
+// the airports and the aircraft are not, because there is nowhere to put them.
+type scopeFrame struct {
+	geom      scopeGeometry
+	proj      projector
+	scopeNm   float64
+	plottable bool
+}
+
+// measureScope works out the scope's geometry and projection, reporting false
+// when there is no room for a scope at all.
+//
+// It is measured twice per frame, once for the background layer and once for
+// the traffic drawn over it. The two have to agree to the pixel or an
+// aeroplane would sit beside its rings rather than on them, so they share this
+// function rather than a cached answer that could go stale between them.
+func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame, bool) {
+	if s.minimal {
+		return s.measureMinimal(lay.dst, receiver)
+	}
+
 	if lay.scope.Empty() {
-		return
+		return scopeFrame{}, false
 	}
 
 	// The boundary ring has to leave room outside itself for the N E S W
@@ -181,25 +241,96 @@ func (s *Scene) drawScope(lay *layout, frame source.Frame) {
 
 	geom, drawable := geometry(lay.scope, inset)
 	if !drawable {
-		return
+		return scopeFrame{}, false
+	}
+
+	scopeNm := s.scopeRange.GetCurrent()
+	proj, plottable := newProjector(geom, receiver, scopeNm)
+
+	return scopeFrame{geom: geom, proj: proj, scopeNm: scopeNm, plottable: plottable}, true
+}
+
+// measureMinimal is the scope minimal mode projects with.
+//
+// The scope is the whole canvas rather than a box beside a column, so the
+// centre is the centre of the frame and the range maps to half the short edge.
+// Nothing is clipped to that radius: the cut-off is pushed out to the furthest
+// corner, which is the last place a position can land on a pixel, so the
+// corners show traffic the range ring would have hidden.
+func (s *Scene) measureMinimal(dst *canvas.Canvas, receiver source.Receiver) (scopeFrame, bool) {
+	geom, drawable := minimalGeometry(dst.Bounds())
+	if !drawable {
+		return scopeFrame{}, false
 	}
 
 	scopeNm := s.scopeRange.GetCurrent()
 
-	s.drawRings(lay, geom, scopeNm)
-	s.drawCardinals(lay, geom)
-	s.drawHome(lay, geom, frame.Receiver.Mode)
+	proj, plottable := newProjector(geom, receiver, scopeNm)
+	if plottable {
+		proj = proj.reaching(scopeNm * cornerReach(dst.Bounds(), geom))
+	}
 
-	proj, plottable := newProjector(geom, frame.Receiver, scopeNm)
-	if !plottable {
+	return scopeFrame{geom: geom, proj: proj, scopeNm: scopeNm, plottable: plottable}, true
+}
+
+// minimalGeometry centres the scope on the canvas with the range at half the
+// short edge. There are no rings to draw, so the boundary and the range radius
+// are the same number.
+func minimalGeometry(bounds image.Rectangle) (scopeGeometry, bool) {
+	half := min(bounds.Dx(), bounds.Dy()) / 2
+
+	return scopeGeometry{
+		centerX: bounds.Min.X + bounds.Dx()/2,
+		centerY: bounds.Min.Y + bounds.Dy()/2,
+		outer:   half,
+		rangeR:  half,
+	}, half > 0
+}
+
+// cornerReach is how much further than the range radius the furthest corner of
+// the canvas sits, as a multiple of that radius.
+func cornerReach(bounds image.Rectangle, geom scopeGeometry) float64 {
+	wide := float64(max(geom.centerX-bounds.Min.X, bounds.Max.X-geom.centerX))
+	tall := float64(max(geom.centerY-bounds.Min.Y, bounds.Max.Y-geom.centerY))
+
+	return math.Hypot(wide, tall) / float64(geom.rangeR)
+}
+
+// drawField paints everything on the scope that does not move between frames:
+// the shore, the rings, the cardinals, the range labels, the home marker and
+// the airports.
+//
+// This is the whole of the background layer's contents. The shore goes down
+// first so the rings and the markers read above it, which is the point of
+// giving it the quietest colour in the palette.
+func (s *Scene) drawField(lay *layout, frame source.Frame) {
+	view, drawable := s.measureScope(lay, frame.Receiver)
+	if !drawable {
 		return
 	}
 
-	if s.airports {
-		s.drawAirports(lay, proj)
+	if s.shoreOn && view.plottable {
+		s.drawShore(lay.dst, view, frame.Receiver)
 	}
 
-	s.drawAircraft(lay, proj, frame)
+	s.drawRings(lay, view.geom, view.scopeNm)
+	s.drawCardinals(lay, view.geom)
+	s.drawHome(lay, view.geom, frame.Receiver.Mode)
+
+	if s.airports && view.plottable {
+		s.drawAirports(lay, view.proj)
+	}
+}
+
+// drawTraffic paints the part of the scope that changes every frame: the
+// trails, the aircraft and the selection marker.
+func (s *Scene) drawTraffic(lay *layout, frame source.Frame) {
+	view, drawable := s.measureScope(lay, frame.Receiver)
+	if !drawable || !view.plottable {
+		return
+	}
+
+	s.drawAircraft(lay, view.proj, frame)
 }
 
 // drawRings draws the boundary and the range rings, with the range written on
@@ -412,6 +543,13 @@ func (s *Scene) drawContact(dst *canvas.Canvas, x, y int, plane airplane.Snapsho
 func (s *Scene) drawSelection(lay *layout, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
 	dst := lay.dst
 	dst.Circle(x, y, selectionRadius, s.pal.Accent)
+
+	// Minimal keeps the ring and drops the rest. The leader line exists to
+	// carry a callsign out to where it can be read, and minimal sets no type
+	// on screen at all, so the line would be a tick pointing at nothing.
+	if s.minimal {
+		return
+	}
 
 	endX, endY := x+leaderRun, y-leaderRun
 	dst.Line(x+selectionRadius/2, y-selectionRadius/2, endX, endY, s.pal.Accent)

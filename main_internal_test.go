@@ -20,6 +20,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/battery"
+	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
@@ -27,6 +28,7 @@ import (
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/fbdev"
 	"github.com/hyperized/uScope/pkg/rotate"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // Numbers built from flags.go's own constants, so the tests do not drift
@@ -65,6 +67,9 @@ const (
 	flagColour   = "--colour"
 	flagBattery  = "--battery"
 	flagAirports = "--airports"
+	flagShore    = "--shore"
+	flagRange    = "--range"
+	flagMinimal  = "--minimal"
 
 	// patternValue and specimenValue are the two non-default --scene
 	// spellings, named because they turn up in several tables.
@@ -86,6 +91,8 @@ const (
 	caseDefault   = "default"
 	caseMaxEdge   = "maximum edge"
 	caseWrongCase = "wrong case"
+	caseEmpty     = "empty"
+	caseAutoGiven = "auto explicit"
 
 	// batteryPathWithSpace is a --battery value that is not whitespace-only
 	// despite containing some: only an all-whitespace value is refused, so a
@@ -119,6 +126,7 @@ func defaultConfig() config {
 		theme:      theme.KindNight,
 		colour:     radar.ColourAltitude,
 		airports:   radar.ToggleOn,
+		shore:      radar.ToggleOn,
 	}
 }
 
@@ -261,7 +269,7 @@ func TestParseFlagsRotate(t *testing.T) {
 		wantAuto bool
 	}{
 		{name: "auto default", args: nil, wantRot: rotate.None, wantAuto: true},
-		{name: "auto explicit", args: []string{flagRotate, defaultRotate}, wantRot: rotate.None, wantAuto: true},
+		{name: caseAutoGiven, args: []string{flagRotate, defaultRotate}, wantRot: rotate.None, wantAuto: true},
 		{name: "upright", args: []string{"--rotate=0"}, wantRot: rotate.None, wantAuto: false},
 		{name: "clockwise", args: []string{"-rotate", "1"}, wantRot: rotate.Clockwise, wantAuto: false},
 		{name: "upside down", args: []string{flagRotate, "2"}, wantRot: rotate.UpsideDown, wantAuto: false},
@@ -375,7 +383,7 @@ func TestParseFlagsBackend(t *testing.T) {
 		want backend.Kind
 	}{
 		{name: caseDefault, args: nil, want: backend.Auto},
-		{name: "auto explicit", args: []string{flagBackend, defaultBackend}, want: backend.Auto},
+		{name: caseAutoGiven, args: []string{flagBackend, defaultBackend}, want: backend.Auto},
 		{name: "framebuffer", args: []string{flagBackend, "fb"}, want: backend.Framebuffer},
 		{name: "kitty", args: []string{flagBackend, kittyValue}, want: backend.Kitty},
 		{name: "blocks", args: []string{flagBackend, blocksValue}, want: backend.Blocks},
@@ -1215,7 +1223,7 @@ func TestParseFlagsAirportsRejections(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "empty", args: []string{flagAirports, ""}},
+		{name: caseEmpty, args: []string{flagAirports, ""}},
 		{
 			// --airports is an allow list, not free text, and not
 			// strconv.ParseBool: only the two exact spellings are accepted.
@@ -1836,5 +1844,213 @@ func TestPollBattery(t *testing.T) {
 				t.Errorf("pollBattery(%q) = %v, want nil on this platform", testCase.path, err)
 			}
 		})
+	}
+}
+
+// --- shore, range and minimal ---------------------------------------------
+
+// midRangeNm is a --range value comfortably inside the scope's limits. The
+// limits themselves are read off a scope rather than written here, so this is
+// the only figure in these tests that has to be picked by hand.
+const midRangeNm = 200
+
+// rangeText spells a range the way an operator would type it, with no
+// trailing zeros to make the flag look like something it is not.
+func rangeText(nauticalMiles float64) string {
+	return strconv.FormatFloat(nauticalMiles, 'f', -1, 64)
+}
+
+func TestParseFlagsShore(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want radar.Toggle
+	}{
+		{name: caseDefault, args: nil, want: radar.ToggleOn},
+		{name: "on explicit", args: []string{flagShore, defaultOn}, want: radar.ToggleOn},
+		{name: offValue, args: []string{flagShore, offValue}, want: radar.ToggleOff},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.shore = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsShoreRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: caseEmpty, args: []string{flagShore, ""}},
+		{
+			// --shore is the same allow list --airports is, so the same
+			// near-misses have to be refused rather than guessed at.
+			name: caseWrongCase, args: []string{flagShore, "Off"},
+		},
+		{name: "a bool spelling is not one of the two words", args: []string{flagShore, "false"}},
+		{name: "coast is not one of the two words either", args: []string{flagShore, "coast"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errShore) {
+				t.Fatalf("parseFlags(%v) error = %v, want errShore", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, radar.ErrToggle) {
+				t.Errorf("parseFlags(%v) error = %v, want radar.ErrToggle wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+func TestParseFlagsRange(t *testing.T) {
+	t.Parallel()
+
+	limits := scope.New()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want float64
+	}{
+		{name: caseDefault, args: nil, want: 0},
+		{name: caseAutoGiven, args: []string{flagRange, defaultRange}, want: 0},
+		{
+			name: "the closest the scope can show",
+			args: []string{flagRange, rangeText(limits.GetMin())}, want: limits.GetMin(),
+		},
+		{name: "a range in between", args: []string{flagRange, rangeText(midRangeNm)}, want: midRangeNm},
+		{
+			name: "the furthest the scope can show",
+			args: []string{flagRange, rangeText(limits.GetMax())}, want: limits.GetMax(),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.rangeNm = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsRangeRejections(t *testing.T) {
+	t.Parallel()
+
+	limits := scope.New()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: caseEmpty, args: []string{flagRange, ""}},
+		{name: "not a number", args: []string{flagRange, "forty"}},
+		{
+			// ParseFloat is happy to read "NaN", so the guard that refuses it
+			// is the range check rather than the parse.
+			name: "not a number the scope could show", args: []string{flagRange, "NaN"},
+		},
+		{name: "below the closest the scope can show", args: []string{flagRange, rangeText(limits.GetMin() - 1)}},
+		{name: "past the furthest the scope can show", args: []string{flagRange, rangeText(limits.GetMax() + 1)}},
+		{name: "negative", args: []string{flagRange, "-40"}},
+		{
+			// auto is the only word the flag takes, so a synonym is refused
+			// the same way a misspelling would be.
+			name: caseWrongCase, args: []string{flagRange, "Auto"},
+		},
+		{name: "a synonym for auto", args: []string{flagRange, "fit"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errRange) {
+				t.Fatalf("parseFlags(%v) error = %v, want errRange", testCase.args, err)
+			}
+
+			if !errors.Is(err, radar.ErrRange) {
+				t.Errorf("parseFlags(%v) error = %v, want radar.ErrRange wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+func TestParseFlagsMinimal(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: caseDefault, args: nil, want: false},
+		{name: "given", args: []string{flagMinimal}, want: true},
+		{name: "given as true", args: []string{flagMinimal + "=true"}, want: true},
+		{name: "given as false", args: []string{flagMinimal + "=false"}, want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.minimal = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestRunReportsShoreDataItCannotDecode covers the branch that cannot happen
+// in a shipped binary: the embedded coastline is a fixed file that decodes or
+// does not, and it does. The branch still has to be there, because a build
+// whose data was corrupted on the way into the binary is exactly the run
+// somebody needs a clear line on stderr from.
+//
+// Not parallel on purpose, for the same reason the newSource test is not: it
+// rewrites a package-level seam, and parallel tests only resume once every
+// sequential test has finished.
+func TestRunReportsShoreDataItCannotDecode(t *testing.T) { //nolint:paralleltest // rewrites the loadShore seam
+	original := loadShore
+	loadShore = func() (*shore.Set, error) { return nil, errUnrelated }
+
+	t.Cleanup(func() { loadShore = original })
+
+	var stdout, stderr bytes.Buffer
+
+	if got := run([]string{flagDemo}, &stdout, &stderr); got != exitFailure {
+		t.Errorf("run() exit code = %d, want %d", got, exitFailure)
+	}
+
+	if !strings.Contains(stderr.String(), errUnrelated.Error()) {
+		t.Errorf("run() stderr = %q, want it to name the failure", stderr.String())
 	}
 }

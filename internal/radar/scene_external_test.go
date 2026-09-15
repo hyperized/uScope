@@ -1,6 +1,7 @@
 package radar_test
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"math"
@@ -15,6 +16,7 @@ import (
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/shore"
 	"github.com/hyperized/uScope/pkg/sprite"
 )
 
@@ -479,26 +481,29 @@ func TestHandleTakesItsOwnKeys(t *testing.T) {
 		{name: "T toggles trails", key: input.Key{Kind: input.Rune, Rune: 'T'}, want: true},
 		{name: "a toggles airports", key: input.Key{Kind: input.Rune, Rune: 'a'}, want: true},
 		{name: "A toggles airports", key: input.Key{Kind: input.Rune, Rune: 'A'}, want: true},
+		{name: "m toggles the shore", key: input.Key{Kind: input.Rune, Rune: 'm'}, want: true},
+		{name: "M toggles the shore", key: input.Key{Kind: input.Rune, Rune: 'M'}, want: true},
+		{name: "z flips minimal", key: input.Key{Kind: input.Rune, Rune: 'z'}, want: true},
+		{name: "Z flips minimal", key: input.Key{Kind: input.Rune, Rune: 'Z'}, want: true},
 		{name: "c cycles the colour mode", key: input.Key{Kind: input.Rune, Rune: 'c'}, want: true},
 		{name: "C cycles the colour mode", key: input.Key{Kind: input.Rune, Rune: 'C'}, want: true},
 		{name: "down selects the next", key: input.Key{Kind: input.Down}, want: true},
 		{name: "up selects the previous", key: input.Key{Kind: input.Up}, want: true},
 
 		// The false cases are the ones that matter. Anything the scene takes
-		// here is a key the run loop never sees, and q is how you get out. m is
-		// reserved for a later block and s moved to v, so both fall through now.
+		// here is a key the run loop never sees, and q is how you get out. s
+		// moved to v, so it falls through as an ordinary unbound letter.
 		{name: "q falls through", key: input.Key{Kind: input.Rune, Rune: 'q'}},
 		{name: "Q falls through", key: input.Key{Kind: input.Rune, Rune: 'Q'}},
 		{name: "s falls through", key: input.Key{Kind: input.Rune, Rune: 's'}},
 		{name: "S falls through", key: input.Key{Kind: input.Rune, Rune: 'S'}},
 		{name: "v falls through", key: input.Key{Kind: input.Rune, Rune: 'v'}},
-		{name: "m falls through", key: input.Key{Kind: input.Rune, Rune: 'm'}},
 		{name: "esc falls through", key: input.Key{Kind: input.Esc}},
 		{name: "ctrl-c falls through", key: input.Key{Kind: input.CtrlC}},
 		{name: "left falls through", key: input.Key{Kind: input.Left}},
 		{name: "right falls through", key: input.Key{Kind: input.Right}},
 		{name: "enter falls through", key: input.Key{Kind: input.Enter}},
-		{name: "an unbound rune falls through", key: input.Key{Kind: input.Rune, Rune: 'z'}},
+		{name: "an unbound rune falls through", key: input.Key{Kind: input.Rune, Rune: 'x'}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1650,5 +1655,305 @@ func TestDetailsSquawkEmergency(t *testing.T) {
 
 	if countColour(canv, detailsBlockBox, theme.Night.Accent) == 0 {
 		t.Error("an emergency squawk did not paint the accent colour in the details block")
+	}
+}
+
+// syntheticShoreSet builds a *shore.Set with one polyline, by encoding it
+// into the packed format and decoding it straight back. shore.Set has no
+// exported constructor, so this round trip is the only way a test builds one
+// by hand.
+func syntheticShoreSet(tb testing.TB, line shore.Polyline) *shore.Set {
+	tb.Helper()
+
+	var buf bytes.Buffer
+
+	if err := shore.Encode(&buf, []shore.Polyline{line}); err != nil {
+		tb.Fatalf("shore.Encode: %v", err)
+	}
+
+	set, err := shore.Decode(&buf)
+	if err != nil {
+		tb.Fatalf("shore.Decode: %v", err)
+	}
+
+	return set
+}
+
+// shoreLineThroughReceiver is a synthetic coastline running north-south
+// straight through the scene's receiver position, long enough to cross the
+// scope at the range these tests draw at.
+func shoreLineThroughReceiver() shore.Polyline {
+	const shoreHalfSpanDeg = 1.0
+
+	return shore.Polyline{
+		{Lat: receiverLat - shoreHalfSpanDeg, Lon: receiverLon},
+		{Lat: receiverLat, Lon: receiverLon},
+		{Lat: receiverLat + shoreHalfSpanDeg, Lon: receiverLon},
+	}
+}
+
+// TestShoreDrawsThroughTheReceiver checks the ordinary case: a synthetic
+// coastline that runs through the receiver's own position paints the scope's
+// shore colour.
+func TestShoreDrawsThroughTheReceiver(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, scopeBox, theme.Night.Shore); got == 0 {
+		t.Errorf("Draw with a coastline through the receiver = %d shore pixels, want more than 0", got)
+	}
+}
+
+// TestShoreOffSettingRemovesIt checks that Settings.Shore actually stops the
+// coastline being drawn, rather than only being accepted.
+func TestShoreOffSettingRemovesIt(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
+	scene.Apply(radar.Settings{Shore: radar.ToggleOff})
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, scopeBox, theme.Night.Shore); got != 0 {
+		t.Errorf("Draw with the shore off = %d shore pixels, want 0", got)
+	}
+}
+
+// TestShoreNilSetDrawsNothing checks the state a run never handed shore data
+// is in: a nil set draws no coastline, and the rest of the frame is exactly
+// what the shore being toggled off would have drawn.
+func TestShoreNilSetDrawsNothing(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	noSet, noSetCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	noSet.Draw(noSetCanvas, 0)
+
+	if got := countColour(noSetCanvas, scopeBox, theme.Night.Shore); got != 0 {
+		t.Errorf("Draw with a nil shore set = %d shore pixels, want 0", got)
+	}
+
+	toggledOff, toggledOffCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame,
+		radar.WithShore(syntheticShoreSet(t, shoreLineThroughReceiver())))
+	toggledOff.Apply(radar.Settings{Shore: radar.ToggleOff})
+	toggledOff.Draw(toggledOffCanvas, 0)
+
+	if !identical(noSetCanvas, toggledOffCanvas) {
+		t.Error("a nil shore set drew differently from the shore being toggled off, want the same frame")
+	}
+}
+
+// TestShoreKeyFlipsItLive checks that m and M flip the shore through Handle,
+// proved by the shore pixel count going from many to none and back.
+func TestShoreKeyFlipsItLive(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
+	scene.Draw(canv, 0)
+
+	withShore := countColour(canv, scopeBox, theme.Night.Shore)
+	if withShore == 0 {
+		t.Fatal("the fixture drew no shore pixels to begin with, so this comparison proves nothing")
+	}
+
+	if !press(scene, 'm') {
+		t.Fatal("Handle('m') = false, want the scene to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, scopeBox, theme.Night.Shore); got != 0 {
+		t.Errorf("Draw after m = %d shore pixels, want 0", got)
+	}
+
+	press(scene, 'M')
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, scopeBox, theme.Night.Shore); got != withShore {
+		t.Errorf("Draw after M = %d shore pixels, want it restored to %d", got, withShore)
+	}
+}
+
+// TestMinimalModeStripsChrome checks that minimal mode draws none of the
+// scope's furniture (the header band, the key caps, the range rings) while
+// still drawing the aircraft on the field. Paper is used throughout rather
+// than the default Night, because Night's header band repeats the field
+// colour on purpose, which would make a band-colour count meaningless.
+func TestMinimalModeStripsChrome(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	full, fullCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
+	full.Draw(fullCanvas, 0)
+
+	if countColour(fullCanvas, fullCanvas.Bounds(), theme.Paper.Band) == 0 {
+		t.Fatal("the full scope drew no header-band pixels, so this comparison proves nothing")
+	}
+
+	minimal, minimalCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
+	minimal.Apply(radar.Settings{Minimal: true})
+	minimal.Draw(minimalCanvas, 0)
+
+	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Band); got != 0 {
+		t.Errorf("minimal mode drew %d header-band pixels, want 0", got)
+	}
+
+	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Ink); got != 0 {
+		t.Errorf("minimal mode drew %d key-cap pixels, want 0", got)
+	}
+
+	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Rule); got != 0 {
+		t.Errorf("minimal mode drew %d range-ring pixels, want 0", got)
+	}
+
+	if countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.AltLow) == 0 {
+		t.Error("minimal mode drew no low-band pixels, want the aircraft's own sprite to survive")
+	}
+}
+
+// TestMinimalModeDropsTheColumn checks that the right column, the legend and
+// the key bar leave no trace: an empty sky paints nothing at all, and an
+// aircraft kept away from the old column's own area leaves that area
+// untouched.
+func TestMinimalModeDropsTheColumn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an empty sky paints only the field", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame())
+		scene.Apply(radar.Settings{Minimal: true})
+		scene.Draw(canv, 0)
+
+		if got := painted(canv, canv.Bounds()); got != 0 {
+			t.Errorf("minimal mode with nothing on screen painted %d pixels, want 0", got)
+		}
+	})
+
+	t.Run("the old column's area is untouched with traffic elsewhere", func(t *testing.T) {
+		t.Parallel()
+
+		// Bearing 180 puts this aircraft due south of the receiver, which
+		// under minimal's canvas-centred projection lands below the middle
+		// rather than in the right third the column used to occupy.
+		frame := sceneFrame(scenePlane("484AC1", "KLM123", 180, 12, 2400, 41))
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		scene.Apply(radar.Settings{Minimal: true})
+		scene.Draw(canv, 0)
+
+		rightThird := image.Rect(2*panelWidth/3, 0, panelWidth, panelHeight)
+		if got := painted(canv, rightThird); got != 0 {
+			t.Errorf("minimal mode painted %d pixels in the old column's area, want 0", got)
+		}
+	})
+}
+
+// TestMinimalModeSelectionWithoutLabel checks that the selected aircraft
+// keeps its accent ring in minimal mode but gets no callsign label: two
+// callsigns of different lengths draw identical pictures once neither is
+// labelled.
+func TestMinimalModeSelectionWithoutLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the ring survives", func(t *testing.T) {
+		t.Parallel()
+
+		frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		scene.Apply(radar.Settings{Minimal: true})
+		scene.Draw(canv, 0)
+
+		if countColour(canv, canv.Bounds(), theme.Night.Accent) == 0 {
+			t.Error("minimal mode drew no accent pixels, want the selection ring to survive")
+		}
+	})
+
+	t.Run("no label is drawn regardless of callsign length", func(t *testing.T) {
+		t.Parallel()
+
+		short := sceneFrame(scenePlane("484AC1", "KL1", 45, 12, 2400, 41))
+		long := sceneFrame(scenePlane("484AC1", "KLM1234567LONG", 45, 12, 2400, 41))
+
+		shortScene, shortCanvas, _ := sceneOn(t, panelWidth, panelHeight, short)
+		shortScene.Apply(radar.Settings{Minimal: true})
+		shortScene.Draw(shortCanvas, 0)
+
+		longScene, longCanvas, _ := sceneOn(t, panelWidth, panelHeight, long)
+		longScene.Apply(radar.Settings{Minimal: true})
+		longScene.Draw(longCanvas, 0)
+
+		if !identical(shortCanvas, longCanvas) {
+			t.Error("a longer callsign changed the minimal-mode picture, want no label drawn at all")
+		}
+	})
+}
+
+// TestMinimalModeCornerTraffic checks the reason minimal mode widens its
+// cut-off past the inscribed circle: an aircraft well beyond the nominal
+// range still lands on the field when its own pixel sits within the canvas's
+// own corner.
+func TestMinimalModeCornerTraffic(t *testing.T) {
+	t.Parallel()
+
+	// Bearing 60 and 100 nm out lands this aircraft around (1160, 60) on the
+	// panel canvas at the pinned 60 nm range: past the 360-pixel circle
+	// minimal mode inscribes, but still inside the wider limit reaching
+	// pushes out to the actual corner. RangeNm is pinned so auto range does
+	// not widen past it to fit this same aircraft first.
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 60, 100, 2400, 41))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Apply(radar.Settings{Minimal: true, RangeNm: sceneRangeNm})
+	scene.Draw(canv, 0)
+
+	corner := image.Rect(1100, 0, panelWidth, 150)
+	if countColour(canv, corner, theme.Night.AltLow) == 0 {
+		t.Error("no low-band sprite pixels landed in the corner, want the far aircraft plotted there")
+	}
+}
+
+// TestMinimalModeKeyFlipsBothWays checks that z and Z flip minimal mode
+// through Handle, proved by the picture changing and then changing back.
+func TestMinimalModeKeyFlipsBothWays(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Draw(canv, 0)
+
+	full, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	scene.Draw(full, 0)
+
+	if !press(scene, 'z') {
+		t.Fatal("Handle('z') = false, want the scene to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if identical(canv, full) {
+		t.Fatal("z did not change the picture, so minimal mode did not engage")
+	}
+
+	press(scene, 'Z')
+	scene.Draw(canv, 0)
+
+	if !identical(canv, full) {
+		t.Error("Z did not undo z, so minimal mode does not flip back")
 	}
 }

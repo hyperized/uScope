@@ -32,6 +32,7 @@ const (
 	defaultTheme   = "night"
 	defaultColour  = "altitude"
 	defaultOn      = "on"
+	defaultRange   = "auto"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -93,6 +94,8 @@ var (
 	errTheme      = errors.New(appName + ": --theme must be night or paper")
 	errColour     = errors.New(appName + ": --colour must be altitude or airline")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
+	errShore      = errors.New(appName + ": --shore must be on or off")
+	errRange      = errors.New(appName + ": --range must be auto or a range the scope can show")
 	errBattery    = errors.New(appName + ": --battery must not be empty")
 	errLatitude   = errors.New(appName + ": --lat out of range")
 	errLongitude  = errors.New(appName + ": --lon out of range")
@@ -118,6 +121,9 @@ type config struct {
 	theme       theme.Kind
 	colour      radar.ColourMode
 	airports    radar.Toggle
+	shore       radar.Toggle
+	rangeNm     float64
+	minimal     bool
 
 	// battery is the power-supply file to read instead of looking one up. It
 	// is empty for the normal case, which is autodiscovery.
@@ -146,6 +152,8 @@ type rawFlags struct {
 	theme       string
 	colour      string
 	airports    string
+	shore       string
+	scopeRange  string
 	battery     string
 	beast       string
 	replay      string
@@ -154,6 +162,7 @@ type rawFlags struct {
 	fps         int
 	frames      int
 	testPattern bool
+	minimal     bool
 	demo        bool
 }
 
@@ -201,6 +210,12 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"what an aircraft's colour means: altitude or airline")
 	set.StringVar(&raw.airports, "airports", defaultOn,
 		"draw the airfield markers on the scope: on or off")
+	set.StringVar(&raw.shore, "shore", defaultOn,
+		"draw the coastline under the scope: on or off")
+	set.StringVar(&raw.scopeRange, "range", defaultRange,
+		"scope range in nautical miles, or auto to fit the aircraft on the field")
+	set.BoolVar(&raw.minimal, "minimal", false,
+		"draw only the aircraft and their trails, edge to edge, with no header, key bar or column")
 	set.StringVar(&raw.battery, "battery", "",
 		"power-supply uevent file to read the battery from; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
@@ -274,6 +289,16 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
+	shoreToggle, err := parseShore(raw.shore)
+	if err != nil {
+		return display{}, err
+	}
+
+	rangeNm, err := parseRange(raw.scopeRange)
+	if err != nil {
+		return display{}, err
+	}
+
 	return display{
 		rotation:   rotation,
 		autoRotate: auto,
@@ -281,7 +306,13 @@ func (raw rawFlags) display() (display, error) {
 		backend:    kind,
 		scene:      scene,
 		theme:      themeKind,
-		radar:      radar.Settings{Colour: colour, Airports: airports},
+		radar: radar.Settings{
+			Colour:   colour,
+			Airports: airports,
+			Shore:    shoreToggle,
+			RangeNm:  rangeNm,
+			Minimal:  raw.minimal,
+		},
 	}, nil
 }
 
@@ -338,6 +369,9 @@ func (raw rawFlags) validated() (config, error) {
 		theme:       show.theme,
 		colour:      show.radar.Colour,
 		airports:    show.radar.Airports,
+		shore:       show.radar.Shore,
+		rangeNm:     show.radar.RangeNm,
+		minimal:     show.radar.Minimal,
 		battery:     raw.battery,
 		source:      chosen,
 		beast:       raw.beast,
@@ -494,6 +528,27 @@ func parseAirports(text string) (radar.Toggle, error) {
 	}
 
 	return toggle, nil
+}
+
+// parseShore reads --shore against internal/radar's on/off allow list.
+func parseShore(text string) (radar.Toggle, error) {
+	toggle, err := radar.ParseToggle(text)
+	if err != nil {
+		return radar.ToggleOn, fmt.Errorf("%w: %w", errShore, err)
+	}
+
+	return toggle, nil
+}
+
+// parseRange reads --range against internal/radar's allow list, which takes
+// its limits from the scope control rather than from numbers written here.
+func parseRange(text string) (float64, error) {
+	value, err := radar.ParseRange(text)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errRange, err)
+	}
+
+	return value, nil
 }
 
 // checkBattery rejects an override that was given as an empty string.

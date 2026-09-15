@@ -5,16 +5,20 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uAirwaves/pkg/scope"
+	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/airlines"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // Headings at and around the compass's eight point boundaries, plus the
@@ -2199,4 +2203,654 @@ func TestApply(t *testing.T) {
 			t.Error("airports = false, want the zero value to read as on")
 		}
 	})
+}
+
+// TestParseRange checks the allow list --range reads: "auto", every value
+// inside the scope's own limits, and everything outside them refused with an
+// error errors.Is can match against ErrRange. The limits come from scope.New
+// rather than being retyped here, so a change to that package's own defaults
+// cannot leave this test checking numbers ParseRange no longer enforces.
+func TestParseRange(t *testing.T) {
+	t.Parallel()
+
+	limits := scope.New()
+	low, high := limits.GetMin(), limits.GetMax()
+
+	for _, testCase := range []struct {
+		name    string
+		input   string
+		want    float64
+		wantErr bool
+	}{
+		{name: "auto reads as zero", input: RangeAuto, want: 0},
+		{name: "the minimum round-trips", input: strconv.FormatFloat(low, 'f', -1, 64), want: low},
+		{name: "the maximum round-trips", input: strconv.FormatFloat(high, 'f', -1, 64), want: high},
+		{name: "just under the minimum is rejected", input: strconv.FormatFloat(low-1, 'f', -1, 64), wantErr: true},
+		{name: "just over the maximum is rejected", input: strconv.FormatFloat(high+1, 'f', -1, 64), wantErr: true},
+		{name: "NaN parses as a number but fails the guard", input: "NaN", wantErr: true},
+		{name: "an empty string is rejected", input: "", wantErr: true},
+		{name: "a non-number is rejected", input: "forty", wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseRange(testCase.input)
+			if got != testCase.want {
+				t.Errorf("ParseRange(%q) = %v, want %v", testCase.input, got, testCase.want)
+			}
+
+			if testCase.wantErr {
+				if !errors.Is(err, ErrRange) {
+					t.Errorf("ParseRange(%q) err = %v, want it to match ErrRange", testCase.input, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("ParseRange(%q) unexpected error: %v", testCase.input, err)
+			}
+		})
+	}
+}
+
+// stubSource hands back whatever frame it currently holds. It is this
+// package's own analogue of radar_test's fakeSource: a package-radar test
+// file cannot reach into radar_test to reuse it, and a test below wants to
+// change the receiver's position between two draws by mutating the frame
+// field directly rather than rebuilding the scene around it.
+type stubSource struct {
+	frame source.Frame
+}
+
+func (s *stubSource) Frame() source.Frame { return s.frame }
+
+func (*stubSource) Close() error { return nil }
+
+// layerTestFaces loads all four embedded faces, for the tests below that
+// draw a whole frame rather than measuring one glyph.
+func layerTestFaces(tb testing.TB) Faces {
+	tb.Helper()
+
+	small, err := fonts.Small()
+	if err != nil {
+		tb.Fatalf("fonts.Small: %v", err)
+	}
+
+	body, err := fonts.Body()
+	if err != nil {
+		tb.Fatalf("fonts.Body: %v", err)
+	}
+
+	bold, err := fonts.BodyBold()
+	if err != nil {
+		tb.Fatalf("fonts.BodyBold: %v", err)
+	}
+
+	large, err := fonts.Large()
+	if err != nil {
+		tb.Fatalf("fonts.Large: %v", err)
+	}
+
+	return Faces{Small: small, Body: body, BodyBold: bold, Large: large}
+}
+
+// The background-layer tests' fixed geometry and receiver position.
+const (
+	layerCanvasWidth  = 1280
+	layerCanvasHeight = 720
+
+	// layerBaseLat and layerBaseLon sit exactly on the 1e-4 degree grid the
+	// layer key snaps coordinates to, so a perturbation lands a known
+	// distance from the nearest grid line rather than depending on where in
+	// a cell the base position happens to fall.
+	layerBaseLat = 52.3100
+	layerBaseLon = 4.7700
+
+	// layerSubGridMove is comfortably under that grid; layerOverGridMove is
+	// comfortably over it.
+	layerSubGridMove  = 0.00003
+	layerOverGridMove = 0.0002
+
+	// layerRangeNm is the range the redraw tests run at, picked only to be a
+	// fixed, valid value so a change away from it is a real change.
+	layerRangeNm = 60.0
+)
+
+// layerFrame is a frame with an empty sky at a fixed receiver longitude and
+// the given latitude. An empty sky keeps fitRange from moving the range
+// underneath a test that is reading layerRuns rather than the picture; the
+// latitude is the only coordinate any caller below varies.
+func layerFrame(lat float64) source.Frame {
+	return source.Frame{
+		Receiver: source.Receiver{Latitude: lat, Longitude: layerBaseLon, HasFix: true, Mode: source.FixManual},
+	}
+}
+
+// layerScene builds a Scene and canvas for the redraw-counting tests below,
+// plus the source itself so a test can swap its frame between two draws.
+func layerScene(tb testing.TB) (*Scene, *canvas.Canvas, *stubSource) {
+	tb.Helper()
+
+	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	src := &stubSource{frame: layerFrame(layerBaseLat)}
+	scene := New(layerTestFaces(tb), src, scope.New(scope.WithCurrent(layerRangeNm)))
+
+	return scene, canv, src
+}
+
+// TestBackgroundLayerSkipsUnchangedDraws checks the whole point of the
+// background layer: two frames whose key has not moved copy the same layer
+// rather than drawing the rings, the labels and the shore twice.
+func TestBackgroundLayerSkipsUnchangedDraws(t *testing.T) {
+	t.Parallel()
+
+	scene, canv, _ := layerScene(t)
+
+	scene.Draw(canv, 0)
+	scene.Draw(canv, 0)
+
+	if scene.layerRuns != 1 {
+		t.Errorf("layerRuns after two identical draws = %d, want 1", scene.layerRuns)
+	}
+}
+
+// TestBackgroundLayerRedrawsOnKeyChanges checks that everything the layer key
+// carries actually triggers a redraw when it changes: the range, the
+// palette, the airfield markers and the shore, plus the canvas size, which is
+// part of the key but not one of the run-time toggles.
+func TestBackgroundLayerRedrawsOnKeyChanges(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a range change redraws", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := layerScene(t)
+		scene.Draw(canv, 0)
+
+		scene.Apply(Settings{RangeNm: layerRangeNm * 2})
+		scene.Draw(canv, 0)
+
+		if scene.layerRuns != 2 {
+			t.Errorf("layerRuns after a range change = %d, want 2", scene.layerRuns)
+		}
+	})
+
+	t.Run("a new palette redraws", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := layerScene(t)
+		scene.Draw(canv, 0)
+
+		scene.SetPalette(theme.Paper)
+		scene.Draw(canv, 0)
+
+		if scene.layerRuns != 2 {
+			t.Errorf("layerRuns after SetPalette = %d, want 2", scene.layerRuns)
+		}
+	})
+
+	t.Run("toggling the airports redraws", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := layerScene(t)
+		scene.Draw(canv, 0)
+
+		if !scene.Handle(input.Key{Kind: input.Rune, Rune: 'a'}) {
+			t.Fatal("Handle('a') = false, want the scene to take it")
+		}
+
+		scene.Draw(canv, 0)
+
+		if scene.layerRuns != 2 {
+			t.Errorf("layerRuns after toggling the airports = %d, want 2", scene.layerRuns)
+		}
+	})
+
+	t.Run("toggling the shore redraws", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := layerScene(t)
+		scene.Draw(canv, 0)
+
+		if !scene.Handle(input.Key{Kind: input.Rune, Rune: 'm'}) {
+			t.Fatal("Handle('m') = false, want the scene to take it")
+		}
+
+		scene.Draw(canv, 0)
+
+		if scene.layerRuns != 2 {
+			t.Errorf("layerRuns after toggling the shore = %d, want 2", scene.layerRuns)
+		}
+	})
+
+	t.Run("a different canvas size redraws", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := layerScene(t)
+		scene.Draw(canv, 0)
+
+		other, err := canvas.New(layerCanvasWidth/2, layerCanvasHeight/2)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scene.Draw(other, 0)
+
+		if scene.layerRuns != 2 {
+			t.Errorf("layerRuns after a different canvas size = %d, want 2", scene.layerRuns)
+		}
+	})
+}
+
+// TestBackgroundLayerSnapTolerance checks the reason layerKeyFor rounds the
+// receiver's position before comparing it: a self-locate estimate that
+// drifts in its last decimal every frame must not cost a redraw, but a
+// receiver that has genuinely moved must.
+func TestBackgroundLayerSnapTolerance(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a move under the grid does not redraw", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, src := layerScene(t)
+		scene.Draw(canv, 0)
+
+		src.frame = layerFrame(layerBaseLat + layerSubGridMove)
+
+		scene.Draw(canv, 0)
+
+		if scene.layerRuns != 1 {
+			t.Errorf("layerRuns after a sub-grid move = %d, want 1", scene.layerRuns)
+		}
+	})
+
+	t.Run("a move past the grid redraws", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, src := layerScene(t)
+		scene.Draw(canv, 0)
+
+		src.frame = layerFrame(layerBaseLat + layerOverGridMove)
+
+		scene.Draw(canv, 0)
+
+		if scene.layerRuns != 2 {
+			t.Errorf("layerRuns after a move past the grid = %d, want 2", scene.layerRuns)
+		}
+	})
+}
+
+// TestSnap checks the layer key's own rounding directly: the NaN guard, the
+// clamp at either end, and an ordinary value settling on the grid.
+func TestSnap(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		degrees float64
+		want    int64
+	}{
+		{name: "NaN folds to zero", degrees: math.NaN(), want: 0},
+		{name: "an ordinary value rounds to the grid", degrees: 52.31003, want: 523100},
+		{
+			name:    "a value past the positive clamp pins to it",
+			degrees: maxDegrees + 1, want: int64(maxDegrees * fixPrecision),
+		},
+		{
+			name:    "a value past the negative clamp pins to it",
+			degrees: -maxDegrees - 1, want: int64(-maxDegrees * fixPrecision),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := snap(testCase.degrees); got != testCase.want {
+				t.Errorf("snap(%v) = %d, want %d", testCase.degrees, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestMinimalGeometry checks the guard on a canvas too small to have a radius
+// at all, alongside the ordinary case.
+func TestMinimalGeometry(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		bounds image.Rectangle
+		wantOK bool
+	}{
+		{name: "an ordinary canvas has a radius", bounds: image.Rect(0, 0, 200, 200), wantOK: true},
+		{name: "a canvas too small to have a radius reports false", bounds: image.Rect(0, 0, 1, 1), wantOK: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			geom, ok := minimalGeometry(testCase.bounds)
+			if ok != testCase.wantOK {
+				t.Fatalf("minimalGeometry(%v) ok = %v, want %v", testCase.bounds, ok, testCase.wantOK)
+			}
+
+			if ok && geom.rangeR <= 0 {
+				t.Errorf("minimalGeometry(%v) rangeR = %d, want > 0", testCase.bounds, geom.rangeR)
+			}
+		})
+	}
+}
+
+// TestMeasureMinimal checks the two guards measureMinimal has of its own: a
+// canvas too small for minimalGeometry to give it a radius, and a receiver
+// with no position, the "nothing known" state a Receiver and a Snapshot
+// share.
+func TestMeasureMinimal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a canvas too small for a radius is not drawable", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(1, 1)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scene := &Scene{}
+
+		if _, drawable := scene.measureMinimal(canv, source.Receiver{}); drawable {
+			t.Error("measureMinimal(...) drawable = true, want false on a canvas too small for a radius")
+		}
+	})
+
+	t.Run("a receiver with no position is not plottable", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(200, 200)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scene := &Scene{scopeRange: scope.New(scope.WithCurrent(layerRangeNm))}
+
+		view, drawable := scene.measureMinimal(canv, source.Receiver{})
+		if !drawable {
+			t.Fatal("measureMinimal(...) drawable = false, want true")
+		}
+
+		if view.plottable {
+			t.Error("measureMinimal(...) plottable = true with a (0, 0) receiver, want false")
+		}
+	})
+}
+
+// clipEpsilon is how close two floats have to be to count as equal in the
+// clip cases below, whose endpoints come out of a square root rather than
+// out of integer arithmetic.
+const clipEpsilon = 1e-9
+
+// approxEqual reports whether two floats are within clipEpsilon of each
+// other.
+func approxEqual(got, want float64) bool {
+	return math.Abs(got-want) <= clipEpsilon
+}
+
+// TestCircleClip drives every branch of clip: wholly inside, wholly outside
+// in the two different ways a segment can miss, a crossing chord, one end on
+// each side in both directions, a zero-length segment on each side, and a
+// tangent that touches the circle without leaving anything wide enough to
+// draw.
+func TestCircleClip(t *testing.T) {
+	t.Parallel()
+
+	ring := circle{centerX: 0, centerY: 0, radius: 10}
+
+	for _, testCase := range []struct {
+		name       string
+		ring       circle
+		seg        segment
+		wantInside bool
+		want       segment
+	}{
+		{
+			name:       "wholly inside is returned unchanged",
+			ring:       ring,
+			seg:        segment{fromX: -1, fromY: 0, toX: 1, toY: 0},
+			wantInside: true,
+			want:       segment{fromX: -1, fromY: 0, toX: 1, toY: 0},
+		},
+		{
+			name:       "wholly outside, missing the circle entirely",
+			ring:       ring,
+			seg:        segment{fromX: 20, fromY: 20, toX: 30, toY: 20},
+			wantInside: false,
+		},
+		{
+			name:       "wholly outside, its line crosses the circle beyond the segment's own span",
+			ring:       ring,
+			seg:        segment{fromX: 20, fromY: 0, toX: 30, toY: 0},
+			wantInside: false,
+		},
+		{
+			name:       "a chord with both ends outside crosses through the middle",
+			ring:       ring,
+			seg:        segment{fromX: -20, fromY: 0, toX: 20, toY: 0},
+			wantInside: true,
+			want:       segment{fromX: -10, fromY: 0, toX: 10, toY: 0},
+		},
+		{
+			name:       "one end inside, one end outside, entering",
+			ring:       ring,
+			seg:        segment{fromX: 0, fromY: 0, toX: 20, toY: 0},
+			wantInside: true,
+			want:       segment{fromX: 0, fromY: 0, toX: 10, toY: 0},
+		},
+		{
+			name:       "one end outside, one end inside, the other way round",
+			ring:       ring,
+			seg:        segment{fromX: 20, fromY: 0, toX: 0, toY: 0},
+			wantInside: true,
+			want:       segment{fromX: 10, fromY: 0, toX: 0, toY: 0},
+		},
+		{
+			name:       "a zero-length segment inside",
+			ring:       ring,
+			seg:        segment{fromX: 1, fromY: 1, toX: 1, toY: 1},
+			wantInside: true,
+			want:       segment{fromX: 1, fromY: 1, toX: 1, toY: 1},
+		},
+		{
+			name:       "a zero-length segment outside",
+			ring:       ring,
+			seg:        segment{fromX: 20, fromY: 20, toX: 20, toY: 20},
+			wantInside: false,
+		},
+		{
+			name:       "a tangent touches the circle at one point, too narrow to draw",
+			ring:       circle{centerX: 0, centerY: 0, radius: 5},
+			seg:        segment{fromX: -10, fromY: 5, toX: 10, toY: 5},
+			wantInside: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, inside := testCase.ring.clip(testCase.seg)
+			if inside != testCase.wantInside {
+				t.Fatalf("clip(%+v) inside = %v, want %v", testCase.seg, inside, testCase.wantInside)
+			}
+
+			if !inside {
+				return
+			}
+
+			same := approxEqual(got.fromX, testCase.want.fromX) &&
+				approxEqual(got.fromY, testCase.want.fromY) &&
+				approxEqual(got.toX, testCase.want.toX) &&
+				approxEqual(got.toY, testCase.want.toY)
+			if !same {
+				t.Errorf("clip(%+v) = %+v, want %+v", testCase.seg, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestDrawShoreLineDecimation checks the two things the shore's own
+// decimation does that a plain per-segment draw would not: points closer
+// together than shoreMinSegment are folded into the next segment rather than
+// dropped, and the last point of a polyline is always reached even when it is
+// one of the close ones. A polyline of fewer than two points draws nothing at
+// all.
+func TestDrawShoreLineDecimation(t *testing.T) {
+	t.Parallel()
+
+	scene := &Scene{pal: theme.Night}
+	proj := projector{centerX: 100, centerY: 100, radius: 90, scopeNm: 60, limitNm: 60, cosLat0: 1, scale: 1}
+	ring := circle{centerX: 100, centerY: 100, radius: 90}
+
+	t.Run("fewer than two points draws nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(200, 200)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scene.drawShoreLine(canv, proj, ring, nil)
+
+		if got := colourCount(canv, canv.Bounds(), theme.Night.Shore); got != 0 {
+			t.Errorf("drawShoreLine with a nil polyline painted %d pixels, want 0", got)
+		}
+	})
+
+	t.Run("close points are folded in and the last point is still reached", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(200, 200)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		// The middle point sits 0.006 pixels from the first, well inside
+		// shoreMinSegment, so it is folded into the segment that follows
+		// rather than drawn on its own. The last point sits 30 pixels out,
+		// which is what draws the line this test looks for.
+		line := shore.Polyline{{Lat: 0, Lon: 0}, {Lat: 0, Lon: 0.0001}, {Lat: 0, Lon: 0.5}}
+
+		scene.drawShoreLine(canv, proj, ring, line)
+
+		if got := colourCount(canv, canv.Bounds(), theme.Night.Shore); got == 0 {
+			t.Error("drawShoreLine with folded points painted 0 pixels, want the line to the last point")
+		}
+	})
+}
+
+// TestApplyRangePinsTheScope checks the other half of Settings.RangeNm that
+// TestApply does not: a positive value pins the scope and blocks auto range
+// from moving it even with a far aircraft on screen, and zero leaves auto
+// range in charge.
+func TestApplyRangePinsTheScope(t *testing.T) {
+	t.Parallel()
+
+	// pinnedRangeNm is comfortably inside the scope's own limits, and
+	// farAircraftNm is far enough out that auto range would certainly widen
+	// past it, so a held range proves the pin rather than a coincidence.
+	const (
+		pinnedRangeNm = 50.0
+		farAircraftNm = 300.0
+	)
+
+	farFrame := func() source.Frame {
+		frame := layerFrame(layerBaseLat)
+		frame.Planes = []airplane.Snapshot{
+			{ICAO: "484AC1", Latitude: layerBaseLat + farAircraftNm/nmPerDegree, Longitude: layerBaseLon},
+		}
+
+		return frame
+	}
+
+	t.Run("a positive RangeNm pins the scope and blocks auto range", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scopeRange := scope.New(scope.WithCurrent(pinnedRangeNm))
+		scene := New(layerTestFaces(t), &stubSource{frame: farFrame()}, scopeRange)
+		scene.Apply(Settings{RangeNm: pinnedRangeNm})
+
+		scene.Draw(canv, 0)
+
+		if got := scopeRange.GetCurrent(); got != pinnedRangeNm {
+			t.Errorf("range after Apply(RangeNm: %g) with a %g nm contact = %g, want it held at %g",
+				pinnedRangeNm, farAircraftNm, got, pinnedRangeNm)
+		}
+	})
+
+	t.Run("a zero RangeNm leaves auto range fitting the fleet", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scopeRange := scope.New(scope.WithCurrent(pinnedRangeNm))
+		scene := New(layerTestFaces(t), &stubSource{frame: farFrame()}, scopeRange)
+		scene.Apply(Settings{RangeNm: 0})
+
+		scene.Draw(canv, 0)
+
+		if got := scopeRange.GetCurrent(); got == pinnedRangeNm {
+			t.Errorf("range after Apply(RangeNm: 0) with a %g nm contact = %g, want auto range to widen it",
+				farAircraftNm, got)
+		}
+	})
+}
+
+// BenchmarkBackground measures the background layer on its own, at a narrow
+// and a wide range, against the real embedded coastline rather than a
+// synthetic one. BenchmarkDraw already prices a whole frame; this isolates
+// the one part of it that does not run every frame, so a regression in the
+// rings, the shore or the airports shows up here rather than being lost in
+// the aircraft's own cost.
+//
+// It lives in this file, rather than in the _test package, because it calls
+// renderLayer and layerKeyFor directly, both unexported.
+func BenchmarkBackground(b *testing.B) {
+	set, err := shore.Load()
+	if err != nil {
+		b.Fatalf("shore.Load: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name    string
+		rangeNm float64
+	}{
+		{name: "40nm", rangeNm: 40},
+		{name: "400nm", rangeNm: 400},
+	} {
+		b.Run(testCase.name, func(b *testing.B) {
+			canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
+			if err != nil {
+				b.Fatalf("canvas.New: %v", err)
+			}
+
+			frame := layerFrame(layerBaseLat)
+			scene := New(layerTestFaces(b), &stubSource{frame: frame},
+				scope.New(scope.WithCurrent(testCase.rangeNm)), WithShore(set))
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				scene.renderLayer(canv, scene.layerKeyFor(canv, frame), frame)
+			}
+		})
+	}
 }

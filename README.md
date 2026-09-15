@@ -59,11 +59,19 @@ startup is a worse trade than falling back to blocks.
 ## The radar
 
 `--scene radar` is the default. The left half is the scope: a square field
-with three dashed range rings, the cardinal letters, a marker where the
-receiver is, and the airfields that fall inside the current range as small
-hollow squares with their ICAO codes beside them. `a` turns those off when the
-field is busy enough that they are in the way, and `--airports off` starts
-without them.
+with the coastline under it, three dashed range rings, the cardinal letters, a
+marker where the receiver is, and the airfields that fall inside the current
+range as small hollow squares with their ICAO codes beside them. `a` turns the
+airfields off when the field is busy enough that they are in the way, and
+`--airports off` starts without them.
+
+None of that is redrawn every frame. It goes onto a background layer of its
+own and gets copied under each frame, and the layer is rebuilt only when
+something it depends on moves: the canvas size, the range, the receiver's
+position, the theme, or one of the two overlay toggles. Drawing a few thousand
+coastline segments thirty times a second would otherwise be the most expensive
+thing in the frame, and none of it changes between two frames that agree on
+all of that.
 
 The home marker's ring says where the receiver's own position came from, so
 the fix state is one glance rather than a line to read:
@@ -133,6 +141,42 @@ and where from.
 Units are nautical miles, feet and knots throughout, because that is what
 aviation uses and converting would only make the numbers harder to check
 against anything else.
+
+### Shore
+
+The coastlines and lake shores are drawn under everything else, in the
+quietest colour either theme has, so the surroundings are recognisable without
+turning the scope into a map with aircraft on it. `m` turns them off and
+`--shore off` starts without them.
+
+The data is compiled into the binary, about 2 MB of it, covering the whole
+world. uScope runs on a handheld with no network and is used outside the
+Netherlands as well as in it, so there was never a version of this
+that asked a tile server or an Overpass endpoint for anything while it drew.
+
+> Made with Natural Earth. Free vector and raster map data at
+> [naturalearthdata.com](https://www.naturalearthdata.com).
+
+Natural Earth is public domain. `pkg/shore/README.md` has the provenance, the
+packed format and how to rebuild it; `make shore-data` is the one command.
+
+### Minimal
+
+`--minimal`, or `z` while it is running, strips the scene back to the aircraft
+sprites and their trails on the bare field, edge to edge. No header, no key
+bar, no right column, no rings, cardinals, range labels, home marker, airfields
+or shore.
+
+The projection is centred on the canvas with the range mapped to half the short
+edge, and nothing is clipped to a ring, so the corners show traffic that the
+ring would have cut off. The selected aircraft keeps its accent ring, which is
+the only feedback `n` and `p` have left, and loses its callsign label along
+with the card.
+
+Every key still works, including `a` and `m`. They change whether the airfields
+and the shore would be drawn rather than whether they are, so turning one off
+in minimal and pressing `z` shows a scope without it. `z` is not on the key
+bar, because minimal is what hides the key bar.
 
 ### Colour modes
 
@@ -219,6 +263,12 @@ scope does not snap back to its minimum every time the feed goes quiet. `a`
 turns auto off and `+` and `-` step the range by hand, which also turns auto
 off: asking for a range and having it overridden on the next frame is not what
 pressing the key meant.
+
+`--range NM` starts at a range instead, with auto off, which is what to reach
+for when rendering a still frame: the demo fleet fits inside 40 nautical miles
+and auto range will not show you a coastline three countries wide. It takes
+anything from 20 to 500, or `auto`, and refuses the rest rather than clamping
+it silently.
 
 ## The other two scenes
 
@@ -418,6 +468,8 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `r`, `R` | auto range on or off |
 | `t`, `T` | trails on or off |
 | `a`, `A` | airfield markers on or off |
+| `m`, `M` | coastline on or off |
+| `z`, `Z` | minimal view on or off |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `l`, `L` | cycle the colour theme |
 | `Esc` | quit |
@@ -428,9 +480,10 @@ uConsole's keyboard, and the unshifted twins of `+` and `-` are bound for the
 same reason.
 
 The letters name what they do rather than where the thing lives: `r` for range,
-`a` for airports, `t` for trails, `c` for colour, `l` for look, `v` for view.
-`m` is bound to nothing, and is being kept for a shore overlay rather than
-handed to something else in the meantime.
+`a` for airports, `m` for map, `t` for trails, `c` for colour, `l` for look,
+`v` for view. `z` is the odd one out and is meant to be: it is an escape hatch
+back out of minimal rather than a feature, and it has no key cap because
+minimal is what hides the bar the cap would sit on.
 
 The radar scene gets first refusal on every key and passes on the ones it does
 not want, which is what keeps `q` and `v` working while it is on screen. The
@@ -449,6 +502,9 @@ the selected one goes out of range the selection falls to the nearest.
 | `--theme` | `night` | `night` or `paper` colour theme |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
 | `--airports` | `on` | draw the airfield markers: `on` or `off` |
+| `--shore` | `on` | draw the coastline: `on` or `off` |
+| `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
+| `--minimal` | off | aircraft and trails only, edge to edge |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
 | `--demo` | off | fly twelve invented aircraft instead of decoding any |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
@@ -484,8 +540,10 @@ make run-demo       # go run . --demo
 make run-airline    # go run . --demo --colour airline
 make run-beast      # go run . --beast $(BEAST)
 make run-blocks     # go run . --backend blocks --demo
+make run-minimal    # go run . --demo --minimal
 make run-pattern    # go run . --scene pattern
 make run-specimen   # go run . --scene specimen
+make shore-data     # rebuild pkg/shore/shore.bin.gz from Natural Earth
 make test           # go test -race -cover ./...
 make lint           # golangci-lint run ./...
 make radar          # ship, then paint one radar frame on the panel
@@ -501,6 +559,11 @@ as it does here.
 Tests that touch a real framebuffer or a real terminal sit behind the
 `integration` build tag, so `make test` never opens a device. `make
 test-device` is what runs them, on the hardware where they mean something.
+
+`make shore-data` is the only target that needs the network. It downloads 15 MB
+of GeoJSON to a temporary directory, packs it, and writes the 2 MB result into
+`pkg/shore`. Run it when Natural Earth publishes a new release, not as part of
+a build: the same two files always produce the same bytes.
 
 ## Layout
 
@@ -519,6 +582,7 @@ pkg/termbackend       owns the terminal, drives kitty or blocks
 pkg/psf               PSF1 and PSF2 console font parser
 pkg/fonts             the four embedded Terminus faces
 pkg/text              draws strings with a PSF font
+pkg/shore             the embedded world coastlines and the packed format
 internal/term         raw tty mode
 internal/input        bytes to key events
 internal/theme        the colour palettes
@@ -527,6 +591,7 @@ internal/radar        the radar scene
 internal/pattern      the orientation scene
 internal/specimen     the type specimen scene
 internal/app          the run loop
+internal/tools/shoregen  packs Natural Earth into pkg/shore/shore.bin.gz
 ```
 
 `pkg/kitty` and `pkg/blocks` are pure encoders: they take an image and an

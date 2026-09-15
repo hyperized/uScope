@@ -11,6 +11,7 @@ import (
 	"github.com/hyperized/uScope/internal/specimen"
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // The --scene spellings, kept next to the Kind they parse into so the flag
@@ -88,9 +89,29 @@ func (k SceneKind) String() string {
 // builder below can take four of them and a test can hand it one that fails.
 type fontLoader func() (*psf.Font, error)
 
+// sceneDeps is what the scenes need from the run loop: where the aircraft come
+// from, what controls the range, what reads the battery, and what the
+// coastline is drawn from.
+//
+// They travel as a struct rather than as four more parameters for the same
+// reason radar.Settings does. The list keeps growing, and a builder taking
+// eight positional arguments is one where a caller eventually swaps two of
+// them and the compiler says nothing because they are both pointers.
+type sceneDeps struct {
+	source     source.Source
+	scopeRange *scope.Scope
+	battery    radar.BatteryReader
+	shoreSet   *shore.Set
+}
+
 // defaultScenes is the production scene set.
 func (r *runner) defaultScenes() ([]Drawer, error) {
-	return buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, r.source, r.scopeRange, r.battery)
+	return buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, sceneDeps{
+		source:     r.source,
+		scopeRange: r.scopeRange,
+		battery:    r.battery,
+		shoreSet:   r.shoreSet,
+	})
 }
 
 // buildScenes loads the fonts and builds all three scenes, in SceneKind order.
@@ -100,15 +121,15 @@ func (r *runner) defaultScenes() ([]Drawer, error) {
 // screen over, instead of an empty block ten frames into a run on a device
 // with no other diagnostics.
 //
-// All three are built even when --scene picks one of them, because s switches
+// All three are built even when --scene picks one of them, because v switches
 // between them while the loop is running and a set that was only half built
 // would fail at the moment someone pressed a key. A nil source or range gets
 // an empty stand-in for the same reason: the radar has to exist even when
-// nothing has been wired to it.
-func buildScenes(
-	small, body, bodyBold, large fontLoader, src source.Source, scopeRange *scope.Scope,
-	battery radar.BatteryReader,
-) ([]Drawer, error) {
+// nothing has been wired to it. A nil shore set is not a stand-in but the
+// ordinary answer for a caller that has no coastline data, and the scope draws
+// without one.
+func buildScenes(small, body, bodyBold, large fontLoader, deps sceneDeps) ([]Drawer, error) {
+	src := deps.source
 	if src == nil {
 		src = source.Empty{}
 	}
@@ -118,12 +139,14 @@ func buildScenes(
 		return nil, err
 	}
 
+	scopeRange := deps.scopeRange
 	if scopeRange == nil {
 		scopeRange = scope.New()
 	}
 
 	return []Drawer{
-		radar.New(radar.Faces(faces), src, scopeRange, radar.WithBattery(battery)),
+		radar.New(radar.Faces(faces), src, scopeRange,
+			radar.WithBattery(deps.battery), radar.WithShore(deps.shoreSet)),
 		pattern.New(),
 		specimen.New(specimen.Faces(faces)),
 	}, nil

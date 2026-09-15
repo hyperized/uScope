@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"math"
+	"strconv"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/pkg/airlines"
 )
 
@@ -95,6 +98,41 @@ func ParseToggle(text string) (Toggle, error) {
 	}
 }
 
+// RangeAuto is the --range spelling that leaves the scope fitting itself to
+// the fleet, which is what it does when nobody says otherwise.
+const RangeAuto = "auto"
+
+// ErrRange is returned for a --range value that is neither auto nor a range
+// the scope can show. One sentinel covers both, because from the operator's
+// side "forty" and "900" are the same mistake: a value the flag will not take.
+var ErrRange = errors.New("radar: not a range the scope can show")
+
+// ParseRange reads a --range value, returning zero for auto.
+//
+// The limits are read off a scope.Scope rather than written out here, because
+// that is what enforces them at run time: scope clamps whatever it is given,
+// so a flag that accepted 900 would be silently pulled back to the maximum on
+// the first frame. Refusing it says so while there is still somebody reading.
+func ParseRange(text string) (float64, error) {
+	if text == RangeAuto {
+		return 0, nil
+	}
+
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q is not a number", ErrRange, text)
+	}
+
+	limits := scope.New()
+	low, high := limits.GetMin(), limits.GetMax()
+
+	if math.IsNaN(value) || value < low || value > high {
+		return 0, fmt.Errorf("%w: got %s, want %s or %g to %g", ErrRange, text, RangeAuto, low, high)
+	}
+
+	return value, nil
+}
+
 // Settings are what the command line picked before the scene existed.
 //
 // They travel as one struct rather than as a setter each, because the radar
@@ -109,6 +147,20 @@ type Settings struct {
 	// Airports is whether the airfield markers start on. Zero reads as on,
 	// which is the scope at its most useful before anyone touches a key.
 	Airports Toggle
+
+	// Shore is whether the coastline starts on. Zero reads as on, the same way
+	// Airports does, and it draws nothing at all unless the scene was also
+	// handed the data through WithShore.
+	Shore Toggle
+
+	// RangeNm pins the scope to a range in nautical miles and turns auto range
+	// off with it. Zero means nobody asked, which leaves the scope fitting
+	// itself to the fleet.
+	RangeNm float64
+
+	// Minimal starts the scene in minimal mode: the aircraft and their trails
+	// on the bare field, edge to edge. Zero is off, which is the full scope.
+	Minimal bool
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
@@ -116,6 +168,27 @@ type Settings struct {
 func (s *Scene) Apply(set Settings) {
 	s.colour = set.Colour
 	s.airports = set.Airports.On()
+	s.shoreOn = set.Shore.On()
+	s.minimal = set.Minimal
+	s.applyRange(set.RangeNm)
+}
+
+// applyRange pins the scope to the range the command line asked for.
+//
+// Auto range goes off with it, because asking for a range and having it
+// overridden on the next frame is not what --range meant. Zero is nobody
+// asking, which puts auto back on: every field of Settings has to read as the
+// scene's own default when it is left unset, or a config built by a caller who
+// only cared about one flag would quietly change the rest.
+func (s *Scene) applyRange(rangeNm float64) {
+	if rangeNm <= 0 {
+		s.autoRange = true
+
+		return
+	}
+
+	s.autoRange = false
+	s.scopeRange.Update(scope.WithCurrent(rangeNm))
 }
 
 // WithSettings applies a settings block at construction.

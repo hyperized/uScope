@@ -19,8 +19,8 @@ GOARCH_DEV ?= arm64
 BEAST ?=
 
 .PHONY: all build build-aarch64 build-macos run run-demo run-airline run-beast \
-        run-blocks run-pattern run-specimen test test-coverage lint fmt ship \
-        pattern specimen radar test-device clean
+        run-blocks run-minimal run-pattern run-specimen shore-data test \
+        test-coverage lint fmt ship pattern specimen radar test-device clean
 
 all: build
 
@@ -65,6 +65,11 @@ run-beast:
 run-blocks:
 	go run . --backend blocks --demo
 
+# The stripped-back view: aircraft and trails on the bare field, edge to edge,
+# nothing else. z switches back while it runs.
+run-minimal:
+	go run . --demo --minimal
+
 # The orientation pattern, live. v steps on to the specimen and round to the
 # radar; q quits.
 run-pattern:
@@ -75,6 +80,27 @@ run-pattern:
 # without a uConsole on the desk. v switches back to the pattern, q quits.
 run-specimen:
 	go run . --scene specimen
+
+# Rebuild the embedded shorelines from Natural Earth.
+#
+# The two GeoJSON files come to 15 MB and go to a temporary directory, never
+# into the repository; only the packed 2 MB result is committed. Run this when
+# Natural Earth publishes a new release, not as part of a build: the data does
+# not change between one and the next.
+NE_GEOJSON ?= https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson
+
+shore-data:
+	@set -e; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	echo "downloading Natural Earth into $$tmp"; \
+	curl -sSfL -o "$$tmp/coastline.geojson" $(NE_GEOJSON)/ne_10m_coastline.geojson; \
+	curl -sSfL -o "$$tmp/lakes.geojson"     $(NE_GEOJSON)/ne_10m_lakes.geojson; \
+	go run ./internal/tools/shoregen \
+	  -coastline "$$tmp/coastline.geojson" \
+	  -lakes "$$tmp/lakes.geojson" \
+	  -out pkg/shore/shore.bin.gz; \
+	ls -l pkg/shore/shore.bin.gz
 
 test:
 	go test -race -cover ./...

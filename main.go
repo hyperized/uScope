@@ -34,6 +34,7 @@ import (
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/fbdev"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 const (
@@ -91,6 +92,17 @@ var newSource = sourceFor
 //nolint:gochecknoglobals // test seam; production always holds pollBattery.
 var watchBattery = pollBattery
 
+// loadShore is a seam for the same reason.
+//
+// The embedded coastline is a fixed file that either decodes or does not, so
+// the branch that reports a failure is unreachable without one. It still has
+// to exist: a build whose data was corrupted in the binary is exactly the run
+// somebody needs a clear message from, rather than a scope that quietly draws
+// no coast.
+//
+//nolint:gochecknoglobals // test seam; production always holds shore.Load.
+var loadShore = shore.Load
+
 func main() {
 	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -138,6 +150,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	defer waitBattery()
 	defer stopBattery()
 
+	coast, err := loadShore()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: reading the embedded shore data: %v\n", appName, err)
+
+		return exitFailure
+	}
+
 	settings := app.Config{
 		FBPath:      cfg.fbPath,
 		Rotation:    cfg.rotation,
@@ -150,14 +169,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Backend:     cfg.backend,
 		Scene:       cfg.scene,
 		Theme:       cfg.theme,
-		Radar:       radar.Settings{Colour: cfg.colour, Airports: cfg.airports},
+		Radar: radar.Settings{
+			Colour:   cfg.colour,
+			Airports: cfg.airports,
+			Shore:    cfg.shore,
+			RangeNm:  cfg.rangeNm,
+			Minimal:  cfg.minimal,
+		},
 	}
 
 	// Warnings go to stderr because a terminal backend is busy writing
 	// frames to stdout, and a warning in the middle of a frame is a mess on
 	// screen and an unparseable stream in a pipe.
 	if err := app.Run(ctx, settings, stdout,
-		app.WithStderr(stderr), app.WithSource(src), app.WithBattery(status)); err != nil {
+		app.WithStderr(stderr), app.WithSource(src), app.WithBattery(status),
+		app.WithShore(coast)); err != nil {
 		_, _ = fmt.Fprintln(stderr, explain(err, cfg))
 
 		return exitFailure

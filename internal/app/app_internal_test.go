@@ -25,6 +25,7 @@ import (
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/rotate"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // errStub is a sentinel used wherever a test only needs some non-nil error,
@@ -251,6 +252,7 @@ const (
 	fieldSource        = "source"
 	fieldScopeRange    = "scopeRange"
 	fieldBattery       = "battery"
+	fieldShoreSet      = "shoreSet"
 )
 
 // overrideRangeNm is a display range no default Scope starts at, so a test can
@@ -376,6 +378,7 @@ func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 		{fieldSource, run.source == source.Source(source.Empty{})},
 		{fieldScopeRange, run.scopeRange.GetCurrent() != overrideRangeNm},
 		{fieldBattery, run.battery == nil},
+		{fieldShoreSet, run.shoreSet == nil},
 	} {
 		wantDefault := field.name != target
 		if field.isDefault != wantDefault {
@@ -413,6 +416,7 @@ func TestOptionsReplaceOnlyNamedField(t *testing.T) {
 			target: fieldScopeRange,
 		},
 		{name: "WithBattery", option: WithBattery(fakeBatteryReader{}), target: fieldBattery},
+		{name: "WithShore", option: WithShore(&shore.Set{}), target: fieldShoreSet},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -880,7 +884,7 @@ func TestBuildScenesFontFailure(t *testing.T) {
 			loaders := [...]fontLoader{fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large}
 			loaders[index] = failingFontLoader
 
-			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3], nil, nil, nil)
+			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3], sceneDeps{})
 			if !errors.Is(err, errStub) {
 				t.Fatalf("buildScenes with a failing %s loader = %v, want the loader's error", name, err)
 			}
@@ -899,7 +903,8 @@ func TestBuildScenesFontFailure(t *testing.T) {
 func TestBuildScenesSucceeds(t *testing.T) {
 	t.Parallel()
 
-	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, source.Empty{}, scope.New(), nil)
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large,
+		sceneDeps{source: source.Empty{}, scopeRange: scope.New()})
 	if err != nil {
 		t.Fatalf("buildScenes: %v", err)
 	}
@@ -1055,7 +1060,7 @@ func TestNilOptionsKeepTheirDefaults(t *testing.T) {
 func TestBuildScenesFillsInWhatItWasNotGiven(t *testing.T) {
 	t.Parallel()
 
-	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, nil, nil, nil)
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, sceneDeps{})
 	if err != nil {
 		t.Fatalf("buildScenes with no source and no range: %v", err)
 	}
