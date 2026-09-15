@@ -12,8 +12,8 @@
 
 GOARCH_DEV ?= arm64
 
-.PHONY: all build build-aarch64 build-macos test test-coverage lint fmt \
-        ship pattern test-device clean
+.PHONY: all build build-aarch64 build-macos run run-blocks test test-coverage \
+        lint fmt ship pattern test-device clean
 
 all: build
 
@@ -26,6 +26,17 @@ build-aarch64:
 
 build-macos:
 	env GOOS=darwin GOARCH=arm64 go build -o uScope .
+
+# Run it here, on the machine you are sitting at. With no --backend it works
+# out where to draw: Kitty graphics in a terminal that has them, half-blocks
+# in one that does not. q quits.
+run:
+	go run .
+
+# Force the half-block renderer, which is what to compare against when the
+# kitty output looks wrong.
+run-blocks:
+	go run . --backend blocks
 
 test:
 	go test -race -cover ./...
@@ -67,8 +78,9 @@ test-device:
 	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/fbdev.test ./pkg/fbdev
 	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/vt.test    ./pkg/vt
 	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/term.test  ./internal/term
-	scp dist/fbdev.test dist/vt.test dist/term.test $(DEVICE):~/
-	ssh $(DEVICE) './fbdev.test -test.v && ./vt.test -test.v && ./term.test -test.v'
+	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/winsize.test ./pkg/winsize
+	scp dist/fbdev.test dist/vt.test dist/term.test dist/winsize.test $(DEVICE):~/
+	ssh $(DEVICE) './fbdev.test -test.v && ./vt.test -test.v && ./term.test -test.v && ./winsize.test -test.v'
 
 clean:
 	rm -rf dist uScope uScope-aarch64 coverage.out coverage.html

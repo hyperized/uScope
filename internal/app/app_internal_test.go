@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/pattern"
+	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
@@ -218,6 +221,10 @@ func TestQuits(t *testing.T) {
 // tables cannot drift out of sync with each other.
 const (
 	fieldOpenFB        = "openFB"
+	fieldOpenTerm      = "openTerm"
+	fieldGetenv        = "getenv"
+	fieldGOOS          = "goos"
+	fieldStderr        = "stderr"
 	fieldEnterGraphics = "enterGraphics"
 	fieldMakeRawStdin  = "makeRawStdin"
 	fieldReadRotation  = "readRotation"
@@ -238,6 +245,10 @@ func TestNewRunnerDefaults(t *testing.T) {
 		isNil bool
 	}{
 		{name: fieldOpenFB, isNil: run.openFB == nil},
+		{name: fieldOpenTerm, isNil: run.openTerm == nil},
+		{name: fieldGetenv, isNil: run.getenv == nil},
+		{name: fieldGOOS, isNil: run.goos == ""},
+		{name: fieldStderr, isNil: run.stderr == nil},
 		{name: fieldEnterGraphics, isNil: run.enterGraphics == nil},
 		{name: fieldMakeRawStdin, isNil: run.makeRawStdin == nil},
 		{name: fieldReadRotation, isNil: run.readRotation == nil},
@@ -265,6 +276,11 @@ func funcPtr(fn any) uintptr {
 
 //nolint:ireturn // the seam under test returns the interface; the fake must match it.
 func fakeOpenFB(string) (Blitter, error) { return nil, errStub }
+
+//nolint:ireturn // as above: the terminal seam is the interface too.
+func fakeOpenTerm(Config, backend.Kind) (backend.Backend, error) { return nil, errStub }
+
+func fakeGetenv(string) string { return "" }
 
 func fakeEnterGraphics() (func() error, error) { return nil, errStub }
 
@@ -296,8 +312,8 @@ func isDefaultScene(scene Drawer) bool {
 }
 
 // assertOptionReplacesOnly checks that applying an Option changed exactly
-// the field named target and left the other eight at their production
-// defaults.
+// the field named target and left every other seam at its production
+// default.
 func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 	t.Helper()
 
@@ -306,6 +322,10 @@ func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 		isDefault bool
 	}{
 		{fieldOpenFB, funcPtr(run.openFB) == funcPtr(openDevice)},
+		{fieldOpenTerm, funcPtr(run.openTerm) == funcPtr(openTerminal)},
+		{fieldGetenv, funcPtr(run.getenv) == funcPtr(os.Getenv)},
+		{fieldGOOS, run.goos == runtime.GOOS},
+		{fieldStderr, run.stderr == io.Writer(os.Stderr)},
 		{fieldEnterGraphics, funcPtr(run.enterGraphics) == funcPtr(enterConsoleGraphics)},
 		{fieldMakeRawStdin, funcPtr(run.makeRawStdin) == funcPtr(rawStdin)},
 		{fieldReadRotation, funcPtr(run.readRotation) == funcPtr(rotate.FromSysfs)},
@@ -331,6 +351,10 @@ func TestOptionsReplaceOnlyNamedField(t *testing.T) {
 		target string
 	}{
 		{name: "WithFramebuffer", option: WithFramebuffer(fakeOpenFB), target: fieldOpenFB},
+		{name: "WithTerminal", option: WithTerminal(fakeOpenTerm), target: fieldOpenTerm},
+		{name: "WithEnv", option: WithEnv(fakeGetenv), target: fieldGetenv},
+		{name: "WithGOOS", option: WithGOOS("uscope-test-os"), target: fieldGOOS},
+		{name: "WithStderr", option: WithStderr(io.Discard), target: fieldStderr},
 		{name: "WithConsoleSwitch", option: WithConsoleSwitch(fakeEnterGraphics), target: fieldEnterGraphics},
 		{name: "WithRawMode", option: WithRawMode(fakeMakeRawStdin), target: fieldMakeRawStdin},
 		{name: "WithRotationReader", option: WithRotationReader(fakeReadRotation), target: fieldReadRotation},
@@ -518,5 +542,168 @@ func TestNewScene(t *testing.T) {
 
 	if newScene() == nil {
 		t.Fatal("newScene() = nil, want a Drawer")
+	}
+}
+
+// --- the framebuffer adapter ---------------------------------------------
+
+// stubBlitter is a Blitter that records what it was handed. The external
+// tests have a channel-based double for watching a running loop; this one is
+// for calling the adapter directly.
+type stubBlitter struct {
+	width    int
+	height   int
+	rot      rotate.Rotation
+	blitErr  error
+	closeErr error
+	closed   bool
+}
+
+func (s *stubBlitter) Blit(_ *image.RGBA, rot rotate.Rotation) error {
+	s.rot = rot
+
+	return s.blitErr
+}
+
+func (s *stubBlitter) Close() error {
+	s.closed = true
+
+	return s.closeErr
+}
+
+func (s *stubBlitter) Width() int      { return s.width }
+func (s *stubBlitter) Height() int     { return s.height }
+func (*stubBlitter) BitsPerPixel() int { return 16 }
+func (*stubBlitter) Stride() int       { return 0 }
+func (*stubBlitter) String() string    { return "stub" }
+
+// TestFBBackendSize checks the adapter swaps the axes for the two quarter
+// turns and leaves them alone for the other two, because that is the whole
+// reason the rotation is bound at open rather than passed per frame.
+func TestFBBackendSize(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name          string
+		rot           rotate.Rotation
+		width, height int
+	}{
+		{name: "upright", rot: rotate.None, width: 720, height: 1280},
+		{name: "clockwise", rot: rotate.Clockwise, width: 1280, height: 720},
+		{name: "upside down", rot: rotate.UpsideDown, width: 720, height: 1280},
+		{name: "counter-clockwise", rot: rotate.CounterClockwise, width: 1280, height: 720},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			back := &fbBackend{dev: &stubBlitter{width: 720, height: 1280}, rot: testCase.rot}
+
+			width, height := back.Size()
+			if width != testCase.width || height != testCase.height {
+				t.Errorf("Size() = %dx%d, want %dx%d", width, height, testCase.width, testCase.height)
+			}
+		})
+	}
+}
+
+func TestFBBackendBlit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("passes the bound rotation through", func(t *testing.T) {
+		t.Parallel()
+
+		dev := &stubBlitter{width: 10, height: 10}
+		back := &fbBackend{dev: dev, rot: rotate.CounterClockwise}
+
+		if err := back.Blit(image.NewRGBA(image.Rect(0, 0, 10, 10))); err != nil {
+			t.Fatalf("Blit: %v", err)
+		}
+
+		if dev.rot != rotate.CounterClockwise {
+			t.Errorf("device got rotation %v, want %v", dev.rot, rotate.CounterClockwise)
+		}
+	})
+
+	t.Run("wraps a device failure", func(t *testing.T) {
+		t.Parallel()
+
+		back := &fbBackend{dev: &stubBlitter{width: 10, height: 10, blitErr: errStub}, rot: rotate.None}
+
+		if err := back.Blit(image.NewRGBA(image.Rect(0, 0, 10, 10))); !errors.Is(err, errStub) {
+			t.Errorf("err = %v, want wrapping %v", err, errStub)
+		}
+	})
+}
+
+func TestFBBackendClose(t *testing.T) {
+	t.Parallel()
+
+	t.Run("closes the device", func(t *testing.T) {
+		t.Parallel()
+
+		dev := &stubBlitter{}
+
+		if err := (&fbBackend{dev: dev}).Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		if !dev.closed {
+			t.Error("the device was not closed")
+		}
+	})
+
+	t.Run("wraps a device failure", func(t *testing.T) {
+		t.Parallel()
+
+		if err := (&fbBackend{dev: &stubBlitter{closeErr: errStub}}).Close(); !errors.Is(err, errStub) {
+			t.Errorf("err = %v, want wrapping %v", err, errStub)
+		}
+	})
+}
+
+// TestOpenTerminal exercises the production terminal builder on whatever
+// machine the tests are running on.
+//
+// TestPattern is set in every case on purpose: it turns the alternate screen
+// off, so running the test binary straight from a terminal cannot clear the
+// operator's screen. `go test` hands the binary a pipe anyway, which is the
+// path this covers: no window to measure, so the backend falls back to an
+// assumed grid and still works.
+//
+// Coverage note: the error return needs termbackend.Open to fail, which
+// takes a terminal that refuses a write. That is the same kind of shortfall
+// as openDevice above, and pkg/termbackend's own tests cover the failure
+// with a writer that errors.
+func TestOpenTerminal(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		kind backend.Kind
+		size image.Point
+	}{
+		{name: "blocks", kind: backend.Blocks},
+		{name: "kitty with the default canvas", kind: backend.Kitty},
+		{name: "kitty with an explicit canvas", kind: backend.Kitty, size: image.Pt(320, 240)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			dev, err := openTerminal(Config{TestPattern: true, Size: testCase.size}, testCase.kind)
+			if err != nil {
+				t.Fatalf("openTerminal: %v", err)
+			}
+
+			t.Cleanup(func() { _ = dev.Close() })
+
+			width, height := dev.Size()
+			if width < 1 || height < 1 {
+				t.Errorf("Size() = %dx%d, want something drawable", width, height)
+			}
+
+			if testCase.size != (image.Point{}) && (width != testCase.size.X || height != testCase.size.Y) {
+				t.Errorf("Size() = %dx%d, want the requested %v", width, height, testCase.size)
+			}
+		})
 	}
 }

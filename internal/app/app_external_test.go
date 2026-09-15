@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/term"
+	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/rotate"
 	"github.com/hyperized/uScope/pkg/vt"
@@ -358,6 +360,7 @@ func TestRunTestPatternHappyPath(t *testing.T) {
 		FBPath:      fbPath,
 		TestPattern: true,
 		Rotation:    rotate.Clockwise,
+		Backend:     backend.Framebuffer,
 	}
 
 	var buf bytes.Buffer
@@ -414,7 +417,7 @@ const (
 func TestRunTestPatternFramebufferError(t *testing.T) {
 	t.Parallel()
 
-	cfg := app.Config{FBPath: fbPath, TestPattern: true}
+	cfg := app.Config{FBPath: fbPath, TestPattern: true, Backend: backend.Framebuffer}
 
 	var buf bytes.Buffer
 
@@ -433,7 +436,7 @@ func TestRunTestPatternBlitError(t *testing.T) {
 	blitter := newFakeBlitter(100, 100, 16, 200, "fake")
 	blitter.blitErr = errStub
 
-	cfg := app.Config{FBPath: fbPath, TestPattern: true}
+	cfg := app.Config{FBPath: fbPath, TestPattern: true, Backend: backend.Framebuffer}
 
 	var buf bytes.Buffer
 
@@ -457,7 +460,7 @@ func TestRunTestPatternZeroSizeCanvasError(t *testing.T) {
 
 	blitter := newFakeBlitter(0, 0, 0, 0, "empty")
 
-	cfg := app.Config{FBPath: fbPath, TestPattern: true}
+	cfg := app.Config{FBPath: fbPath, TestPattern: true, Backend: backend.Framebuffer}
 
 	var buf bytes.Buffer
 
@@ -595,7 +598,7 @@ func (r *stagedReader) Read(buf []byte) (int, error) {
 // liveConfig is the shared Config for live-mode tests: a square canvas
 // keeps rotation out of the way of tests that are not about geometry.
 func liveConfig(fps int) app.Config {
-	return app.Config{FBPath: fbPath, FPS: fps}
+	return app.Config{FBPath: fbPath, FPS: fps, Backend: backend.Framebuffer}
 }
 
 // --- live mode: quit keys -------------------------------------------------
@@ -1026,5 +1029,405 @@ func TestRunLiveRestoreOrder(t *testing.T) {
 	want := []string{"term", "vt"}
 	if len(order) != len(want) || order[0] != want[0] || order[1] != want[1] {
 		t.Errorf("restore order = %v, want %v", order, want)
+	}
+}
+
+// --- terminal backends ----------------------------------------------------
+
+// fakeBackend is the backend.Backend double. Its size can change between
+// frames, which is how a terminal window being resized looks from the run
+// loop's side of the interface.
+type fakeBackend struct {
+	mutex    sync.Mutex
+	width    int
+	height   int
+	blitErr  error
+	closeErr error
+	calls    chan image.Rectangle
+	closed   chan struct{}
+}
+
+func newFakeBackend(width, height int) *fakeBackend {
+	return &fakeBackend{
+		width:  width,
+		height: height,
+		calls:  make(chan image.Rectangle, 8),
+		closed: make(chan struct{}),
+	}
+}
+
+func (f *fakeBackend) Size() (int, int) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	return f.width, f.height
+}
+
+func (f *fakeBackend) Blit(img *image.RGBA) error {
+	f.calls <- img.Bounds()
+
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	return f.blitErr
+}
+
+func (f *fakeBackend) Close() error {
+	close(f.closed)
+
+	return f.closeErr
+}
+
+// resize is what a SIGWINCH amounts to from the run loop's point of view.
+func (f *fakeBackend) resize(width, height int) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	f.width, f.height = width, height
+}
+
+// termSpy stands in for the terminal backend builder and records which kind
+// the run loop asked for, which is the observable half of auto detection.
+type termSpy struct {
+	kinds chan backend.Kind
+	back  *fakeBackend
+	err   error
+}
+
+func newTermSpy(back *fakeBackend) *termSpy {
+	return &termSpy{kinds: make(chan backend.Kind, 4), back: back}
+}
+
+//nolint:ireturn // the seam returns the interface, so the double has to.
+func (s *termSpy) open(_ app.Config, kind backend.Kind) (backend.Backend, error) {
+	s.kinds <- kind
+
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return s.back, nil
+}
+
+// goosLinux is the only platform auto mode tries the framebuffer on.
+const goosLinux = "linux"
+
+// envFrom turns a map into the environment lookup the detector takes.
+func envFrom(vars map[string]string) func(string) string {
+	return func(name string) string { return vars[name] }
+}
+
+// checkTerminalFrame asserts the one frame landed and that the status line
+// went to stderr. The frames are on stdout, so a status line there would sit
+// in the middle of the picture.
+func checkTerminalFrame(t *testing.T, back *fakeBackend, stdout, stderr, wantLabel string) {
+	t.Helper()
+
+	call := recvOrTimeout(t, back.calls, testTimeout, "Blit call")
+	if call.Dx() != termWidth || call.Dy() != termHeight {
+		t.Errorf("canvas handed to Blit is %dx%d, want %dx%d", call.Dx(), call.Dy(), termWidth, termHeight)
+	}
+
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing on it", stdout)
+	}
+
+	if stderr != wantLabel {
+		t.Errorf("stderr = %q, want %q", stderr, wantLabel)
+	}
+}
+
+// The fake terminal's size, repeated across the terminal-backend tables.
+const (
+	termWidth  = 100
+	termHeight = 80
+)
+
+func TestRunTerminalTestPattern(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		kind      backend.Kind
+		wantLabel string
+	}{
+		{name: "blocks", kind: backend.Blocks, wantLabel: "blocks 100x80 logical=100x80\n"},
+		{name: "kitty", kind: backend.Kitty, wantLabel: "kitty 100x80 logical=100x80\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			back := newFakeBackend(termWidth, termHeight)
+			spy := newTermSpy(back)
+			console := &switchSpy{}
+
+			var stdout, stderr bytes.Buffer
+
+			cfg := app.Config{TestPattern: true, Backend: testCase.kind}
+
+			err := app.Run(t.Context(), cfg, &stdout,
+				app.WithTerminal(spy.open),
+				app.WithStderr(&stderr),
+				app.WithConsoleSwitch(console.switchMode),
+			)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			if got := recvOrTimeout(t, spy.kinds, testTimeout, "backend kind"); got != testCase.kind {
+				t.Errorf("asked for backend %v, want %v", got, testCase.kind)
+			}
+
+			checkTerminalFrame(t, back, stdout.String(), stderr.String(), testCase.wantLabel)
+
+			// Switching the VT into graphics mode would blank the very
+			// screen a terminal backend is drawing on.
+			if console.called {
+				t.Error("console switch was called for a terminal backend, want it untouched")
+			}
+		})
+	}
+}
+
+func TestRunTerminalOpenError(t *testing.T) {
+	t.Parallel()
+
+	spy := newTermSpy(nil)
+	spy.err = errStub
+
+	var stdout bytes.Buffer
+
+	err := app.Run(t.Context(), app.Config{Backend: backend.Blocks}, &stdout,
+		app.WithTerminal(spy.open),
+		app.WithStderr(io.Discard),
+	)
+
+	if !errors.Is(err, errStub) {
+		t.Errorf("err = %v, want wrapping %v", err, errStub)
+	}
+}
+
+// autoCase is one auto-detection scenario.
+type autoCase struct {
+	name    string
+	goos    string
+	fbOpens bool
+	vars    map[string]string
+	wantFB  bool
+	wantHow backend.Kind
+}
+
+// autoCases pins the order auto mode decides in: the device's own screen
+// first, then the terminal, with Kitty graphics only where the terminal is
+// known to draw them.
+func autoCases() []autoCase {
+	return []autoCase{
+		{name: "linux with a framebuffer", goos: goosLinux, fbOpens: true, wantFB: true},
+		{
+			name:    "linux without a framebuffer falls through to the terminal",
+			goos:    goosLinux,
+			vars:    map[string]string{"TERM": "linux"},
+			wantHow: backend.Blocks,
+		},
+		{
+			name:    "linux without a framebuffer in ghostty",
+			goos:    goosLinux,
+			vars:    map[string]string{"TERM": "xterm-ghostty"},
+			wantHow: backend.Kitty,
+		},
+		{
+			name:    "mac in ghostty never tries the framebuffer",
+			goos:    "darwin",
+			fbOpens: true,
+			vars:    map[string]string{"TERM_PROGRAM": "ghostty"},
+			wantHow: backend.Kitty,
+		},
+		{
+			name:    "mac in a plain terminal",
+			goos:    "darwin",
+			fbOpens: true,
+			vars:    map[string]string{},
+			wantHow: backend.Blocks,
+		},
+	}
+}
+
+// runAutoCase runs one scenario in test-pattern mode, which is the shortest
+// path that still goes all the way through backend selection.
+func runAutoCase(t *testing.T, testCase autoCase) {
+	t.Helper()
+
+	blitter := newFakeBlitter(100, 100, 16, 200, "fake")
+	spy := newTermSpy(newFakeBackend(termWidth, termHeight))
+
+	openFB := func(string) (app.Blitter, error) {
+		if testCase.fbOpens {
+			return blitter, nil
+		}
+
+		return nil, errStub
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	err := app.Run(t.Context(), app.Config{FBPath: fbPath, TestPattern: true}, &stdout,
+		app.WithFramebuffer(openFB),
+		app.WithTerminal(spy.open),
+		app.WithGOOS(testCase.goos),
+		app.WithEnv(envFrom(testCase.vars)),
+		app.WithStderr(&stderr),
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if testCase.wantFB {
+		if !strings.HasPrefix(stdout.String(), "fb=") {
+			t.Errorf("stdout = %q, want the framebuffer status line", stdout.String())
+		}
+
+		return
+	}
+
+	if got := recvOrTimeout(t, spy.kinds, testTimeout, "backend kind"); got != testCase.wantHow {
+		t.Errorf("auto picked %v, want %v", got, testCase.wantHow)
+	}
+}
+
+func TestRunAutoBackend(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range autoCases() {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			runAutoCase(t, testCase)
+		})
+	}
+}
+
+// TestRunLiveFrameLimit checks --frames: the loop ends on its own after the
+// count, with nobody pressing anything. This is what makes uScope testable
+// from a shell pipeline.
+func TestRunLiveFrameLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	back := newFakeBackend(64, 48)
+	spy := newTermSpy(back)
+	ticker := newFakeTicker()
+
+	cfg := app.Config{FPS: 30, Frames: 2, Backend: backend.Blocks}
+
+	done := runAsync(ctx, cfg, &bytes.Buffer{},
+		app.WithTerminal(spy.open),
+		app.WithStderr(io.Discard),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(idleReader{}),
+		app.WithTicker(ticker.new),
+	)
+
+	for frame := range 3 {
+		select {
+		case ticker.ch <- time.Now():
+		case err := <-done:
+			if frame < 2 {
+				t.Fatalf("Run returned after %d frames: %v, want 2", frame, err)
+			}
+
+			return
+		case <-time.After(testTimeout):
+			t.Fatal("timed out feeding the ticker")
+		}
+	}
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return after 2 frames"); err != nil {
+		t.Errorf("Run: %v", err)
+	}
+
+	if len(back.calls) != 2 {
+		t.Errorf("blits = %d, want 2", len(back.calls))
+	}
+}
+
+// TestRunLiveResize checks that a backend changing its mind about the size
+// gets a canvas that matches, rather than an ErrSize on the next blit.
+func TestRunLiveResize(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	back := newFakeBackend(64, 48)
+	spy := newTermSpy(back)
+	ticker := newFakeTicker()
+
+	cfg := app.Config{FPS: 30, Frames: 2, Backend: backend.Blocks}
+
+	done := runAsync(ctx, cfg, &bytes.Buffer{},
+		app.WithTerminal(spy.open),
+		app.WithStderr(io.Discard),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(idleReader{}),
+		app.WithTicker(ticker.new),
+	)
+
+	ticker.ch <- time.Now()
+
+	first := recvOrTimeout(t, back.calls, testTimeout, "first Blit")
+	if first.Dx() != 64 || first.Dy() != 48 {
+		t.Fatalf("first frame is %dx%d, want 64x48", first.Dx(), first.Dy())
+	}
+
+	back.resize(80, 60)
+
+	ticker.ch <- time.Now()
+
+	second := recvOrTimeout(t, back.calls, testTimeout, "second Blit")
+	if second.Dx() != 80 || second.Dy() != 60 {
+		t.Errorf("frame after the resize is %dx%d, want 80x60", second.Dx(), second.Dy())
+	}
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return"); err != nil {
+		t.Errorf("Run: %v", err)
+	}
+}
+
+// TestRunLiveResizeToNothing covers the backend reporting a size no canvas
+// can be built from. A terminal reporting zero columns should end the run
+// with the reason, not panic somewhere inside the drawing code.
+func TestRunLiveResizeToNothing(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	back := newFakeBackend(64, 48)
+	spy := newTermSpy(back)
+	ticker := newFakeTicker()
+
+	cfg := app.Config{FPS: 30, Backend: backend.Blocks}
+
+	done := runAsync(ctx, cfg, &bytes.Buffer{},
+		app.WithTerminal(spy.open),
+		app.WithStderr(io.Discard),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(idleReader{}),
+		app.WithTicker(ticker.new),
+	)
+
+	ticker.ch <- time.Now()
+
+	recvOrTimeout(t, back.calls, testTimeout, "first Blit")
+
+	back.resize(0, 0)
+
+	ticker.ch <- time.Now()
+
+	err := recvOrTimeout(t, done, testTimeout, "Run to fail on an impossible canvas")
+	if !errors.Is(err, canvas.ErrSize) {
+		t.Errorf("err = %v, want wrapping %v", err, canvas.ErrSize)
 	}
 }

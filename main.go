@@ -3,9 +3,9 @@
 // still behaves like a console program: one binary, started from tty1,
 // keyboard driven, q to get back to the shell.
 //
-// Slice 1 is the shell around that idea. It opens the framebuffer, works out
-// which way the panel is turned, paints a test pattern, and puts the console
-// back the way it found it. The radar comes later.
+// It also draws in a terminal, over ssh or on a laptop, with the same canvas
+// code: Kitty graphics where the terminal has them, half-block characters
+// where it does not. There is still no radar in it, only a test pattern.
 //
 // Exit status is 0 on a clean quit and 1 on any failure, with the reason on
 // stderr.
@@ -62,12 +62,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Rotation:    cfg.rotation,
 		AutoRotate:  cfg.autoRotate,
 		FPS:         cfg.fps,
+		Frames:      cfg.frames,
 		TestPattern: cfg.testPattern,
 		PNG:         cfg.pngPath,
 		Size:        cfg.size,
+		Backend:     cfg.backend,
 	}
 
-	if err := app.Run(ctx, settings, stdout); err != nil {
+	// Warnings go to stderr because a terminal backend is busy writing
+	// frames to stdout, and a warning in the middle of a frame is a mess on
+	// screen and an unparseable stream in a pipe.
+	if err := app.Run(ctx, settings, stdout, app.WithStderr(stderr)); err != nil {
 		_, _ = fmt.Fprintln(stderr, explain(err, cfg))
 
 		return exitFailure
@@ -80,8 +85,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 // is what someone running uScope on their laptop has just hit.
 func explain(err error, cfg config) string {
 	if errors.Is(err, fbdev.ErrUnsupported) && cfg.pngPath == "" {
-		return "no framebuffer backend on " + runtime.GOOS +
-			"; use --png to render the pattern to a file"
+		return "no framebuffer on " + runtime.GOOS +
+			"; use --backend blocks or --backend kitty to draw in the terminal, or --png for a file"
 	}
 
 	return err.Error()

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/fbdev"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
@@ -29,6 +30,10 @@ const (
 
 	fpsAboveRange = maxFPS + 1
 
+	// midFrames sits halfway through the accepted --frames range, the same
+	// way midDimension does for --size.
+	midFrames = (minFrames + maxFrames) / 2
+
 	// Repeated literals, named once so goconst has nothing to complain
 	// about and a typo in one table cannot silently diverge from another.
 	altFB       = "/dev/fb1"
@@ -36,6 +41,12 @@ const (
 	flagRotate  = "--rotate"
 	flagSize    = "--size"
 	flagFPS     = "--fps"
+	flagBackend = "--backend"
+	flagFrames  = "--frames"
+	flagPNG     = "--png"
+	kittyValue  = "kitty"
+	blocksValue = "blocks"
+	pngValue    = "png"
 	caseDefault = "default"
 	caseMaxEdge = "maximum edge"
 )
@@ -112,7 +123,7 @@ func TestMainFunc(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			args := testCase.rawArgs
 			if testCase.useTempPNG {
-				args = []string{"--png", filepath.Join(t.TempDir(), outPNG)}
+				args = []string{flagPNG, filepath.Join(t.TempDir(), outPNG)}
 			}
 
 			got := runMainWith(t, args)
@@ -281,10 +292,14 @@ func TestParseFlagsMisc(t *testing.T) {
 		args        []string
 		testPattern bool
 		pngPath     string
+		// wantBackend is backend.Auto (the zero value) except when --png is
+		// set: parseBackend resolves an unspecified --backend to PNG once a
+		// path is given, so these rows have to expect that too.
+		wantBackend backend.Kind
 	}{
 		{name: "test pattern", args: []string{"--test-pattern"}, testPattern: true},
-		{name: "png dash form", args: []string{"-png", outPNG}, pngPath: outPNG},
-		{name: "png equals form", args: []string{"--png=out.png"}, pngPath: outPNG},
+		{name: "png dash form", args: []string{"-png", outPNG}, pngPath: outPNG, wantBackend: backend.PNG},
+		{name: "png equals form", args: []string{"--png=out.png"}, pngPath: outPNG, wantBackend: backend.PNG},
 	}
 
 	for _, testCase := range tests {
@@ -299,6 +314,70 @@ func TestParseFlagsMisc(t *testing.T) {
 			want := defaultConfig()
 			want.testPattern = testCase.testPattern
 			want.pngPath = testCase.pngPath
+			want.backend = testCase.wantBackend
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsBackend(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want backend.Kind
+	}{
+		{name: caseDefault, args: nil, want: backend.Auto},
+		{name: "auto explicit", args: []string{flagBackend, defaultBackend}, want: backend.Auto},
+		{name: "framebuffer", args: []string{flagBackend, "fb"}, want: backend.Framebuffer},
+		{name: "kitty", args: []string{flagBackend, kittyValue}, want: backend.Kitty},
+		{name: "blocks", args: []string{flagBackend, blocksValue}, want: backend.Blocks},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.backend = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsFrames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{name: caseDefault, args: nil, want: minFrames},
+		{name: "one dash form", args: []string{"-frames", "1"}, want: 1},
+		{name: caseMaxEdge, args: []string{"--frames=" + strconv.Itoa(maxFrames)}, want: maxFrames},
+		{name: "mid-range equals form", args: []string{"--frames=" + strconv.Itoa(midFrames)}, want: midFrames},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.frames = testCase.want
 
 			checkConfig(t, got, want)
 		})
@@ -340,6 +419,17 @@ func TestParseFlagsRejections(t *testing.T) {
 		{name: "size width over max", args: []string{flagSize, "8193x720"}, sentinel: errSize},
 		{name: "size height over max", args: []string{flagSize, "1280x8193"}, sentinel: errSize},
 		{name: "size negative width", args: []string{flagSize, "-5x720"}, sentinel: errSize},
+		{name: "backend invalid", args: []string{flagBackend, "nope"}, sentinel: errBackend},
+		{name: "frames below range", args: []string{flagFrames, "-1"}, sentinel: errFrames},
+		{name: "frames above range", args: []string{flagFrames, "1001"}, sentinel: errFrames},
+		{name: "backend png without a png path", args: []string{flagBackend, pngValue}, sentinel: errPNGPath},
+		{
+			// fb, kitty and blocks all disagree with --png the same way; fb
+			// stands in for the group.
+			name:     "png with an incompatible backend",
+			args:     []string{flagPNG, outPNG, flagBackend, "fb"},
+			sentinel: errPNGBoth,
+		},
 	}
 
 	for _, testCase := range tests {
@@ -409,6 +499,63 @@ func TestParseRotate(t *testing.T) {
 			if gotRot != testCase.wantRot || gotAuto != testCase.wantAuto {
 				t.Errorf("parseRotate(%q) = (%v, %v), want (%v, %v)",
 					testCase.text, gotRot, gotAuto, testCase.wantRot, testCase.wantAuto)
+			}
+		})
+	}
+}
+
+// TestParseBackend covers every branch of parseBackend directly, including
+// the --png/--backend combinations that a plain --backend value never
+// reaches on its own.
+func TestParseBackend(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		text     string
+		pngPath  string
+		want     backend.Kind
+		sentinel error
+	}{
+		{name: "bad backend name", text: "nope", sentinel: errBackend},
+		{name: "png backend without a path", text: pngValue, sentinel: errPNGPath},
+		{
+			// fb, kitty and blocks all take this branch; fb stands in for
+			// the group since the check does not depend on which one it is.
+			name:     "png path with an incompatible backend",
+			text:     "fb",
+			pngPath:  outPNG,
+			sentinel: errPNGBoth,
+		},
+		{name: "png path with auto becomes png", text: defaultBackend, pngPath: outPNG, want: backend.PNG},
+		{name: "png path with explicit png stays png", text: pngValue, pngPath: outPNG, want: backend.PNG},
+		{name: "auto with no png path", text: defaultBackend, want: backend.Auto},
+		{name: "fb with no png path", text: "fb", want: backend.Framebuffer},
+		{name: "kitty with no png path", text: kittyValue, want: backend.Kitty},
+		{name: "blocks with no png path", text: blocksValue, want: backend.Blocks},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseBackend(testCase.text, testCase.pngPath)
+
+			if testCase.sentinel != nil {
+				if !errors.Is(err, testCase.sentinel) {
+					t.Errorf("parseBackend(%q, %q) error = %v, want errors.Is(%v)",
+						testCase.text, testCase.pngPath, err, testCase.sentinel)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseBackend(%q, %q) unexpected error: %v", testCase.text, testCase.pngPath, err)
+			}
+
+			if got != testCase.want {
+				t.Errorf("parseBackend(%q, %q) = %v, want %v", testCase.text, testCase.pngPath, got, testCase.want)
 			}
 		})
 	}
@@ -540,8 +687,10 @@ func TestBind(t *testing.T) {
 		{name: "rotate", flagName: "rotate", wantDef: defaultRotate},
 		{name: "fps", flagName: "fps", wantDef: strconv.Itoa(defaultFPS)},
 		{name: "test-pattern", flagName: "test-pattern", wantDef: "false"},
-		{name: "png", flagName: "png", wantDef: ""},
+		{name: "png", flagName: pngValue, wantDef: ""},
 		{name: "size", flagName: "size", wantDef: defaultSize},
+		{name: "backend", flagName: "backend", wantDef: defaultBackend},
+		{name: "frames", flagName: "frames", wantDef: strconv.Itoa(minFrames)},
 	}
 
 	for _, testCase := range tests {
@@ -610,7 +759,7 @@ func TestRunSuccess(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	got := run([]string{"--png", pngPath}, &stdout, &stderr)
+	got := run([]string{flagPNG, pngPath}, &stdout, &stderr)
 
 	if got != exitOK {
 		t.Fatalf("run() exit code = %d, want %d", got, exitOK)
@@ -654,13 +803,14 @@ func TestRunAppFailure(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	// With no --png this opens a framebuffer, and no machine running tests
-	// has one: off Linux fbdev.Open is a stub that always fails, and on a
-	// Linux builder or container /dev/fb0 is absent. The two produce
-	// different messages, so this only pins the outcome. TestExplain pins
-	// the wording of the no-backend advice, and does it on any platform by
-	// building the error itself.
-	got := run(nil, &stdout, &stderr)
+	// --backend fb is what forces the failure reliably: auto no longer
+	// does, since it now falls back to a terminal backend and would run the
+	// live loop forever instead of failing. Off Linux fbdev.Open is a stub
+	// that always fails, and on a Linux builder or container /dev/fb0 is
+	// absent, so the two produce different messages and this only pins the
+	// outcome. TestExplain pins the wording of the no-backend advice, and
+	// does it on any platform by building the error itself.
+	got := run([]string{flagBackend, "fb"}, &stdout, &stderr)
 
 	if got != exitFailure {
 		t.Fatalf("run() exit code = %d, want %d", got, exitFailure)
@@ -689,7 +839,8 @@ func TestExplain(t *testing.T) {
 		{
 			name: "unsupported without png gets advice",
 			err:  wrappedUnsupported,
-			want: "no framebuffer backend on " + runtime.GOOS + "; use --png to render the pattern to a file",
+			want: "no framebuffer on " + runtime.GOOS +
+				"; use --backend blocks or --backend kitty to draw in the terminal, or --png for a file",
 		},
 		{
 			// This is the branch that must NOT show the --png advice: the

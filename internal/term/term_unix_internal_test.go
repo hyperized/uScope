@@ -14,6 +14,7 @@ import (
 // below (goconst).
 const (
 	nameENOTTY = "ENOTTY"
+	nameENODEV = "ENODEV"
 	nameEIO    = "EIO"
 )
 
@@ -134,6 +135,7 @@ func TestClassify(t *testing.T) {
 		wantNotTerminal bool
 	}{
 		{name: nameENOTTY, errno: syscall.ENOTTY, wantNotTerminal: true},
+		{name: nameENODEV, errno: syscall.ENODEV, wantNotTerminal: true},
 		{name: nameEIO, errno: syscall.EIO, wantNotTerminal: false},
 	}
 
@@ -234,6 +236,7 @@ func TestRawModeGetFails(t *testing.T) {
 		wantNotTerminal bool
 	}{
 		{name: nameENOTTY, errno: syscall.ENOTTY, wantNotTerminal: true},
+		{name: nameENODEV, errno: syscall.ENODEV, wantNotTerminal: true},
 		{name: nameEIO, errno: syscall.EIO, wantNotTerminal: false},
 	}
 
@@ -268,6 +271,7 @@ func TestRawModeSetFails(t *testing.T) {
 		wantNotTerminal bool
 	}{
 		{name: nameENOTTY, errno: syscall.ENOTTY, wantNotTerminal: true},
+		{name: nameENODEV, errno: syscall.ENODEV, wantNotTerminal: true},
 		{name: nameEIO, errno: syscall.EIO, wantNotTerminal: false},
 	}
 

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
 
@@ -17,15 +18,21 @@ const appName = "uScope"
 // Flag defaults. The framebuffer path and the size match the uConsole, since
 // that is the machine this is for.
 const (
-	defaultFB     = "/dev/fb0"
-	defaultRotate = "auto"
-	defaultFPS    = 30
-	defaultSize   = "1280x720"
+	defaultFB      = "/dev/fb0"
+	defaultRotate  = "auto"
+	defaultFPS     = 30
+	defaultSize    = "1280x720"
+	defaultBackend = "auto"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
 
 	minFPS, maxFPS = 1, 120
+
+	// --frames 0 means run until the user quits. The ceiling is there so a
+	// mistyped argument cannot pin a terminal for a week; nothing needs more
+	// than a thousand frames from a single invocation.
+	minFrames, maxFrames = 0, 1000
 
 	// maxDimension is a sanity ceiling for --size, not a hardware limit. It
 	// exists so a typo allocates a rejected flag instead of 40 GB of canvas.
@@ -39,6 +46,10 @@ var (
 	errFPSRange = errors.New(appName + ": --fps out of range")
 	errRotate   = errors.New(appName + ": --rotate must be auto, 0, 1, 2 or 3")
 	errSize     = errors.New(appName + ": --size must be WxH")
+	errFrames   = errors.New(appName + ": --frames out of range")
+	errBackend  = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
+	errPNGBoth  = errors.New(appName + ": --png and --backend disagree")
+	errPNGPath  = errors.New(appName + ": --backend png needs --png PATH to write to")
 )
 
 // config is the validated command line. Everything in it has already been
@@ -48,9 +59,11 @@ type config struct {
 	rotation    rotate.Rotation
 	autoRotate  bool
 	fps         int
+	frames      int
 	testPattern bool
 	pngPath     string
 	size        image.Point
+	backend     backend.Kind
 }
 
 // rawFlags is the command line before validation: whatever the flag package
@@ -60,7 +73,9 @@ type rawFlags struct {
 	rotate      string
 	png         string
 	size        string
+	backend     string
 	fps         int
+	frames      int
 	testPattern bool
 }
 
@@ -95,9 +110,13 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.BoolVar(&raw.testPattern, "test-pattern", false,
 		"paint one test frame and exit, leaving console and terminal untouched")
 	set.StringVar(&raw.png, "png", "",
-		"render the scene to this PNG file instead of a framebuffer, for checking the layout off-device")
+		"render the scene to this PNG file instead of drawing it on a screen")
 	set.StringVar(&raw.size, "size", defaultSize,
-		"canvas size as WxH, used only with --png")
+		"canvas size as WxH, used by --png and by the kitty backend")
+	set.StringVar(&raw.backend, "backend", defaultBackend,
+		"where to draw: auto, fb, kitty, blocks or png")
+	set.IntVar(&raw.frames, "frames", 0,
+		"stop after this many frames, 0 to run until quit, up to 1000")
 
 	return raw
 }
@@ -112,6 +131,10 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, fmt.Errorf("%w: got %d, want %d to %d", errFPSRange, raw.fps, minFPS, maxFPS)
 	}
 
+	if raw.frames < minFrames || raw.frames > maxFrames {
+		return config{}, fmt.Errorf("%w: got %d, want %d to %d", errFrames, raw.frames, minFrames, maxFrames)
+	}
+
 	rot, auto, err := parseRotate(raw.rotate)
 	if err != nil {
 		return config{}, err
@@ -122,15 +145,49 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, err
 	}
 
+	kind, err := parseBackend(raw.backend, raw.png)
+	if err != nil {
+		return config{}, err
+	}
+
 	return config{
 		fbPath:      raw.fb,
 		rotation:    rot,
 		autoRotate:  auto,
 		fps:         raw.fps,
+		frames:      raw.frames,
 		testPattern: raw.testPattern,
 		pngPath:     raw.png,
 		size:        size,
+		backend:     kind,
 	}, nil
+}
+
+// parseBackend reads --backend and reconciles it with --png.
+//
+// The two flags overlap, and guessing which one the operator meant is worse
+// than saying they disagree: --png with --backend kitty could reasonably
+// mean either "write a file" or "draw in the terminal and also write a
+// file", and only one of those is implemented.
+func parseBackend(text, pngPath string) (backend.Kind, error) {
+	kind, err := backend.Parse(text)
+	if err != nil {
+		return backend.Auto, fmt.Errorf("%w: %w", errBackend, err)
+	}
+
+	if pngPath == "" {
+		if kind == backend.PNG {
+			return backend.Auto, errPNGPath
+		}
+
+		return kind, nil
+	}
+
+	if kind != backend.Auto && kind != backend.PNG {
+		return backend.Auto, fmt.Errorf("%w: --png with --backend %s", errPNGBoth, kind)
+	}
+
+	return backend.PNG, nil
 }
 
 // parseRotate reads --rotate. The bool reports whether to autodetect.

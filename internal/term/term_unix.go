@@ -94,9 +94,21 @@ func applyRaw(attr *syscall.Termios) {
 // classify turns the not-a-terminal case into a sentinel the caller can
 // degrade on, and leaves anything else as a real failure.
 func classify(err error, what string) error {
-	if errors.Is(err, syscall.ENOTTY) {
+	if notTerminal(err) {
 		return fmt.Errorf("%w: %s: %w", ErrNotTerminal, what, err)
 	}
 
 	return fmt.Errorf("term: %s: %w", what, err)
+}
+
+// notTerminal reports whether an errno means "this descriptor is not a
+// terminal".
+//
+// There are two answers to the same question. A pipe gives ENOTTY on both
+// kernels, but /dev/null gives ENODEV on Darwin, which is what a program
+// started with stdin redirected from /dev/null hits. Treating only ENOTTY as
+// degradable made uScope refuse to start there instead of running on without
+// a keyboard.
+func notTerminal(err error) bool {
+	return errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.ENODEV)
 }

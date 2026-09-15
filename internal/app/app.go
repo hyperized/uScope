@@ -1,14 +1,17 @@
 // Package app is the run loop and the wiring around it.
 //
 // Three modes share one entry point. --png renders a still frame to a file
-// and never touches a device, which is how the scene gets checked on a
-// laptop. --test-pattern paints one frame on the framebuffer and exits
-// without changing console or terminal state, so it is safe over ssh and the
-// frame stays up until something else repaints. Everything else is the live
-// loop.
+// and never opens a device, which is how the scene gets checked on a laptop.
+// --test-pattern paints one frame and exits without taking the screen over,
+// so it is safe over ssh and the frame stays up until something else
+// repaints. Everything else is the live loop.
 //
-// Every device this package talks to arrives through a function field, so
-// the whole of Run is exercised on a Mac with fakes.
+// Slice 2 put a backend.Backend between the loop and the screen. The loop
+// asks how big a canvas the backend wants, draws that, and hands it over,
+// which is the same code whether the frame ends up in /dev/fb0 on the
+// uConsole, in Kitty graphics escape sequences over ssh, or in half-block
+// characters. Every device this package talks to arrives through a function
+// field, so the whole of Run is exercised on a Mac with fakes.
 package app
 
 import (
@@ -25,9 +28,11 @@ import (
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/pattern"
 	"github.com/hyperized/uScope/internal/term"
+	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fbdev"
 	"github.com/hyperized/uScope/pkg/rotate"
+	"github.com/hyperized/uScope/pkg/termbackend"
 	"github.com/hyperized/uScope/pkg/vt"
 )
 
@@ -43,9 +48,13 @@ const (
 	// keyBuffer stops a burst of key repeats from blocking the reader
 	// between frames. At 30 fps the loop drains it 30 times a second.
 	keyBuffer = 16
+
+	// linuxGOOS is the only platform with a framebuffer, so it is the only
+	// one where auto mode bothers trying to open one.
+	linuxGOOS = "linux"
 )
 
-// Blitter is the part of a framebuffer the run loop uses. It is declared
+// Blitter is the part of a framebuffer the fb backend uses. It is declared
 // here, where it is consumed, so fbdev does not have to know about it.
 type Blitter interface {
 	Blit(img *image.RGBA, rot rotate.Rotation) error
@@ -57,8 +66,8 @@ type Blitter interface {
 	String() string
 }
 
-// Drawer paints one frame. pattern.Scene is the only implementation in
-// slice 1; the radar will be the second.
+// Drawer paints one frame. pattern.Scene is the only implementation so far;
+// the radar will be the second.
 type Drawer interface {
 	Draw(dst *canvas.Canvas, elapsed time.Duration)
 }
@@ -69,38 +78,45 @@ type Config struct {
 	Rotation    rotate.Rotation
 	AutoRotate  bool
 	FPS         int
+	Frames      int
 	TestPattern bool
 	PNG         string
 	Size        image.Point
+	Backend     backend.Kind
 }
 
-// session groups the three things every frame needs, so the loop signature
-// stays readable.
+// session is one backend plus the canvas that fits it, and the label that
+// describes the pair in the startup line.
 type session struct {
-	dev  Blitter
-	canv *canvas.Canvas
-	rot  rotate.Rotation
+	back  backend.Backend
+	canv  *canvas.Canvas
+	label string
+
+	// console is true only for the framebuffer. It is the framebuffer that
+	// needs the VT switched into graphics mode; doing that to a terminal
+	// backend would blank the very screen it is drawing on.
+	console bool
 }
 
-// Run executes one of the three modes and returns when it is done.
+// Run executes one of the modes and returns when it is done.
 //
 // It returns nil for a clean quit, including a cancelled context: the user
 // pressing q and the user pressing Ctrl-C are the same outcome.
 func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) error {
 	run := newRunner(opts...)
 
-	if cfg.PNG != "" {
+	if cfg.PNG != "" || cfg.Backend == backend.PNG {
 		return run.renderPNG(cfg, stdout)
 	}
 
-	return run.renderDevice(ctx, cfg, stdout)
+	return run.renderBackend(ctx, cfg, stdout)
 }
 
 // sayf writes a line to the console.
 //
-// The error is dropped on purpose. If stdout has gone away there is nothing
-// useful left to do about it, and failing a render because a status line did
-// not print would be worse than the missing line.
+// The error is dropped on purpose. If the writer has gone away there is
+// nothing useful left to do about it, and failing a render because a status
+// line did not print would be worse than the missing line.
 func sayf(dst io.Writer, format string, args ...any) {
 	_, _ = fmt.Fprintf(dst, format, args...)
 }
@@ -116,7 +132,7 @@ func sayf(dst io.Writer, format string, args ...any) {
 // The bool reports whether the switch actually applied, which is how the
 // caller tells "running without a keyboard" from "running with one".
 func enter(
-	stdout io.Writer,
+	status io.Writer,
 	what string,
 	switchMode func() (func() error, error),
 	degrade ...error,
@@ -128,7 +144,7 @@ func enter(
 
 	for _, tolerated := range degrade {
 		if errors.Is(err, tolerated) {
-			sayf(stdout, "warning: %s unavailable: %v\n", what, err)
+			sayf(status, "warning: %s unavailable: %v\n", what, err)
 
 			return func() error { return nil }, false, nil
 		}
@@ -152,7 +168,7 @@ func quits(key input.Key) bool {
 }
 
 // renderPNG draws one frame to a file. No device is opened, so this is the
-// path that works on a Mac.
+// path that works anywhere.
 func (r *runner) renderPNG(cfg Config, stdout io.Writer) error {
 	// Only an entirely unset size falls back. Half a size, say a width with
 	// a negative height, is a caller mistake, and canvas.New says so rather
@@ -189,32 +205,102 @@ func (r *runner) renderPNG(cfg Config, stdout io.Writer) error {
 	return nil
 }
 
-// renderDevice opens the framebuffer, sizes a canvas for it, and hands off
-// to the one-shot or the live path.
-func (r *runner) renderDevice(ctx context.Context, cfg Config, stdout io.Writer) error {
-	dev, err := r.openFB(cfg.FBPath)
+// renderBackend opens a backend, sizes a canvas for it, and hands off to the
+// one-shot or the live path.
+func (r *runner) renderBackend(ctx context.Context, cfg Config, stdout io.Writer) error {
+	ses, err := r.selectBackend(cfg, stdout)
 	if err != nil {
-		return fmt.Errorf("app: framebuffer: %w", err)
+		return err
 	}
 
-	defer func() { _ = dev.Close() }()
+	defer func() { _ = ses.back.Close() }()
 
-	rot := r.resolveRotation(cfg, stdout)
-
-	width, height := rot.Logical(dev.Width(), dev.Height())
+	width, height := ses.back.Size()
 
 	canv, err := canvas.New(width, height)
 	if err != nil {
-		return fmt.Errorf("app: canvas for %s: %w", dev, err)
+		return fmt.Errorf("app: canvas for %s: %w", ses.label, err)
 	}
 
-	ses := session{dev: dev, canv: canv, rot: rot}
+	ses.canv = canv
+
+	// A terminal backend is writing frames to stdout, so the startup line
+	// and any warning have to go somewhere else or they land in the middle
+	// of the picture.
+	status := stdout
+	if !ses.console {
+		status = r.stderr
+	}
 
 	if cfg.TestPattern {
-		return r.once(ses, cfg.FBPath, stdout)
+		return r.once(ses, status)
 	}
 
-	return r.live(ctx, cfg, ses, stdout)
+	return r.live(ctx, cfg, ses, status)
+}
+
+// selectBackend builds the backend the operator asked for, or works one out.
+func (r *runner) selectBackend(cfg Config, stdout io.Writer) (*session, error) {
+	switch cfg.Backend {
+	case backend.Framebuffer:
+		return r.framebuffer(cfg, stdout)
+	case backend.Kitty, backend.Blocks:
+		return r.terminal(cfg, cfg.Backend)
+	case backend.Auto, backend.PNG:
+		fallthrough
+	default:
+		return r.autoBackend(cfg, stdout)
+	}
+}
+
+// autoBackend picks a backend without being told.
+//
+// The device's own screen wins when there is one, because that is the point
+// of the program. Failing to open it is not an error here: a Linux box with
+// no framebuffer, or an ssh session onto one where the device is busy, still
+// has a terminal, and falling through to it is more useful than refusing to
+// start.
+func (r *runner) autoBackend(cfg Config, stdout io.Writer) (*session, error) {
+	if r.goos == linuxGOOS {
+		if ses, err := r.framebuffer(cfg, stdout); err == nil {
+			return ses, nil
+		}
+	}
+
+	if backend.KittyCapable(r.getenv) {
+		return r.terminal(cfg, backend.Kitty)
+	}
+
+	return r.terminal(cfg, backend.Blocks)
+}
+
+// framebuffer opens the device and wraps it with the rotation, which is the
+// only thing standing between fbdev's API and the Backend one.
+func (r *runner) framebuffer(cfg Config, stdout io.Writer) (*session, error) {
+	dev, err := r.openFB(cfg.FBPath)
+	if err != nil {
+		return nil, fmt.Errorf("app: framebuffer: %w", err)
+	}
+
+	rot := r.resolveRotation(cfg, stdout)
+
+	return &session{
+		back:    &fbBackend{dev: dev, rot: rot},
+		label:   fmt.Sprintf("fb=%s %s rotate=%s", cfg.FBPath, dev, rot),
+		console: true,
+	}, nil
+}
+
+// terminal opens one of the two terminal backends.
+func (r *runner) terminal(cfg Config, kind backend.Kind) (*session, error) {
+	back, err := r.openTerm(cfg, kind)
+	if err != nil {
+		return nil, fmt.Errorf("app: terminal: %w", err)
+	}
+
+	width, height := back.Size()
+
+	return &session{back: back, label: fmt.Sprintf("%s %dx%d", kind, width, height)}, nil
 }
 
 // resolveRotation picks the rotation, preferring what the operator asked for
@@ -240,18 +326,16 @@ func (r *runner) resolveRotation(cfg Config, stdout io.Writer) rotate.Rotation {
 
 // once paints a single frame and reports the geometry it used.
 //
-// It deliberately does not touch console or terminal state. That is what
-// makes it usable over ssh, and it leaves the pattern on screen until the
-// console repaints over it.
-func (r *runner) once(ses session, path string, stdout io.Writer) error {
-	r.scene.Draw(ses.canv, 0)
-
-	if err := ses.dev.Blit(ses.canv.Image(), ses.rot); err != nil {
-		return fmt.Errorf("app: blit: %w", err)
+// It deliberately does not switch the console or the terminal into anything.
+// That is what makes it usable over ssh, and it leaves the frame on screen
+// until something else repaints.
+func (r *runner) once(ses *session, status io.Writer) error {
+	if err := ses.frame(r.scene, 0); err != nil {
+		return err
 	}
 
 	bounds := ses.canv.Bounds()
-	sayf(stdout, "fb=%s %s rotate=%s logical=%dx%d\n", path, ses.dev, ses.rot, bounds.Dx(), bounds.Dy())
+	sayf(status, "%s logical=%dx%d\n", ses.label, bounds.Dx(), bounds.Dy())
 
 	return nil
 }
@@ -260,18 +344,18 @@ func (r *runner) once(ses session, path string, stdout io.Writer) error {
 //
 // The deferred calls unwind in exactly the order the console needs: stop the
 // ticker, cancel the reader and wait for it, restore the terminal, restore
-// the console mode, close the device. Deferred calls also run while a panic
+// the console mode, close the backend. Deferred calls also run while a panic
 // unwinds, so there is no recover here: a crash still hands back a console
 // in text mode with echo on.
-func (r *runner) live(ctx context.Context, cfg Config, ses session, stdout io.Writer) error {
-	restoreVT, _, err := enter(stdout, "console graphics mode", r.enterGraphics, vt.ErrNotConsole)
+func (r *runner) live(ctx context.Context, cfg Config, ses *session, status io.Writer) error {
+	restoreVT, err := r.enterConsole(ses, status)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = restoreVT() }()
 
-	restoreTerm, raw, err := enter(stdout, "raw keyboard mode", r.makeRawStdin,
+	restoreTerm, raw, err := enter(status, "raw keyboard mode", r.makeRawStdin,
 		term.ErrNotTerminal, term.ErrUnsupported)
 	if err != nil {
 		return err
@@ -303,8 +387,21 @@ func (r *runner) live(ctx context.Context, cfg Config, ses session, stdout io.Wr
 	return r.loop(ctx, cfg, ses, keys)
 }
 
+// enterConsole switches the VT into graphics mode, but only for the
+// framebuffer. A terminal backend draws through the console rather than
+// underneath it, so switching would blank its own output.
+func (r *runner) enterConsole(ses *session, status io.Writer) (func() error, error) {
+	if !ses.console {
+		return func() error { return nil }, nil
+	}
+
+	restore, _, err := enter(status, "console graphics mode", r.enterGraphics, vt.ErrNotConsole)
+
+	return restore, err
+}
+
 // loop draws a frame per tick until something asks it to stop.
-func (r *runner) loop(ctx context.Context, cfg Config, ses session, keys <-chan input.Key) error {
+func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan input.Key) error {
 	rate := cfg.FPS
 	if rate <= 0 {
 		rate = defaultFPS
@@ -314,6 +411,7 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses session, keys <-chan 
 	defer stopTick()
 
 	start := r.now()
+	drawn := 0
 
 	for {
 		select {
@@ -324,13 +422,55 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses session, keys <-chan 
 				return nil
 			}
 		case now := <-tick:
-			r.scene.Draw(ses.canv, now.Sub(start))
+			if err := ses.frame(r.scene, now.Sub(start)); err != nil {
+				return err
+			}
 
-			if err := ses.dev.Blit(ses.canv.Image(), ses.rot); err != nil {
-				return fmt.Errorf("app: blit: %w", err)
+			drawn++
+			if cfg.Frames > 0 && drawn >= cfg.Frames {
+				return nil
 			}
 		}
 	}
+}
+
+// frame resizes the canvas if it has to, draws, and blits.
+func (s *session) frame(scene Drawer, elapsed time.Duration) error {
+	if err := s.resize(); err != nil {
+		return err
+	}
+
+	scene.Draw(s.canv, elapsed)
+
+	if err := s.back.Blit(s.canv.Image()); err != nil {
+		return fmt.Errorf("app: blit: %w", err)
+	}
+
+	return nil
+}
+
+// resize rebuilds the canvas when the backend changes its mind about how big
+// it should be, which from here is what someone dragging the corner of a
+// terminal window looks like.
+//
+// The canvas is thrown away rather than reshaped because image.RGBA owns a
+// flat slice whose stride is baked in. Allocating one is cheap next to the
+// frames drawn between two resizes.
+func (s *session) resize() error {
+	width, height := s.back.Size()
+
+	if bounds := s.canv.Bounds(); bounds.Dx() == width && bounds.Dy() == height {
+		return nil
+	}
+
+	canv, err := canvas.New(width, height)
+	if err != nil {
+		return fmt.Errorf("app: canvas for %s: %w", s.label, err)
+	}
+
+	s.canv = canv
+
+	return nil
 }
 
 // openDevice is the production framebuffer opener.
@@ -353,6 +493,36 @@ func openDevice(path string) (Blitter, error) {
 	dev, err := fbdev.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+
+	return dev, nil
+}
+
+// openTerminal is the production terminal backend builder.
+//
+// The alternate screen is skipped for --test-pattern so a single frame stays
+// on the terminal after uScope exits, which is the same promise the
+// framebuffer path makes.
+//
+//nolint:ireturn // seam returns the interface, so its default has to.
+func openTerminal(cfg Config, kind backend.Kind) (backend.Backend, error) {
+	mode := termbackend.Blocks
+	if kind == backend.Kitty {
+		mode = termbackend.Kitty
+	}
+
+	size := cfg.Size
+	if size == (image.Point{}) {
+		size = image.Pt(defaultWidth, defaultHeight)
+	}
+
+	dev, err := termbackend.Open(
+		termbackend.WithMode(mode),
+		termbackend.WithCanvas(size),
+		termbackend.WithAltScreen(!cfg.TestPattern),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("opening terminal: %w", err)
 	}
 
 	return dev, nil
