@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
@@ -23,6 +24,7 @@ const (
 	defaultFPS     = 30
 	defaultSize    = "1280x720"
 	defaultBackend = "auto"
+	defaultScene   = "pattern"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -48,6 +50,7 @@ var (
 	errSize     = errors.New(appName + ": --size must be WxH")
 	errFrames   = errors.New(appName + ": --frames out of range")
 	errBackend  = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
+	errScene    = errors.New(appName + ": --scene must be pattern or specimen")
 	errPNGBoth  = errors.New(appName + ": --png and --backend disagree")
 	errPNGPath  = errors.New(appName + ": --backend png needs --png PATH to write to")
 )
@@ -64,6 +67,7 @@ type config struct {
 	pngPath     string
 	size        image.Point
 	backend     backend.Kind
+	scene       app.SceneKind
 }
 
 // rawFlags is the command line before validation: whatever the flag package
@@ -74,6 +78,7 @@ type rawFlags struct {
 	png         string
 	size        string
 	backend     string
+	scene       string
 	fps         int
 	frames      int
 	testPattern bool
@@ -108,13 +113,15 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.IntVar(&raw.fps, "fps", defaultFPS,
 		"frames per second in live mode, 1 to 120")
 	set.BoolVar(&raw.testPattern, "test-pattern", false,
-		"paint one test frame and exit, leaving console and terminal untouched")
+		"draw one still frame of the selected scene and exit, leaving console and terminal untouched")
 	set.StringVar(&raw.png, "png", "",
 		"render the scene to this PNG file instead of drawing it on a screen")
 	set.StringVar(&raw.size, "size", defaultSize,
 		"canvas size as WxH, used by --png and by the kitty backend")
 	set.StringVar(&raw.backend, "backend", defaultBackend,
 		"where to draw: auto, fb, kitty, blocks or png")
+	set.StringVar(&raw.scene, "scene", defaultScene,
+		"what to draw: pattern or specimen")
 	set.IntVar(&raw.frames, "frames", 0,
 		"stop after this many frames, 0 to run until quit, up to 1000")
 
@@ -150,6 +157,11 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, err
 	}
 
+	scene, err := parseScene(raw.scene)
+	if err != nil {
+		return config{}, err
+	}
+
 	return config{
 		fbPath:      raw.fb,
 		rotation:    rot,
@@ -160,7 +172,20 @@ func (raw rawFlags) validated() (config, error) {
 		pngPath:     raw.png,
 		size:        size,
 		backend:     kind,
+		scene:       scene,
 	}, nil
+}
+
+// parseScene reads --scene against the closed set internal/app knows how to
+// build. The list lives there because that is where the scenes are wired up,
+// and two lists would only drift.
+func parseScene(text string) (app.SceneKind, error) {
+	kind, err := app.ParseScene(text)
+	if err != nil {
+		return app.Pattern, fmt.Errorf("%w: %w", errScene, err)
+	}
+
+	return kind, nil
 }
 
 // parseBackend reads --backend and reconciles it with --png.

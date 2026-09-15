@@ -367,7 +367,7 @@ func TestRunTestPatternHappyPath(t *testing.T) {
 
 	err := app.Run(t.Context(), cfg, &buf,
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScene(drawer),
+		app.WithScenes(drawer),
 		app.WithConsoleSwitch(consoleSwitch.switchMode),
 		app.WithRawMode(rawSwitch.switchMode),
 	)
@@ -627,7 +627,7 @@ func TestRunLiveQuitKeys(t *testing.T) {
 
 			done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
 				app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-				app.WithScene(drawer),
+				app.WithScenes(drawer),
 				app.WithConsoleSwitch((&switchSpy{}).switchMode),
 				app.WithRawMode((&switchSpy{}).switchMode),
 				app.WithInput(&onceReader{data: testCase.data}),
@@ -663,7 +663,7 @@ func TestRunLiveNonQuitKeyContinues(t *testing.T) {
 
 	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScene(drawer),
+		app.WithScenes(drawer),
 		app.WithConsoleSwitch((&switchSpy{}).switchMode),
 		app.WithRawMode((&switchSpy{}).switchMode),
 		app.WithInput(reader),
@@ -699,7 +699,7 @@ func TestRunLiveContextCancellationEndsRun(t *testing.T) {
 
 	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScene(drawer),
+		app.WithScenes(drawer),
 		app.WithConsoleSwitch(degradeSwitch(vt.ErrNotConsole)),
 		app.WithRawMode(degradeSwitch(term.ErrNotTerminal)),
 		app.WithTicker(ticker.new),
@@ -743,7 +743,7 @@ func TestRunLiveTicksDrawFrames(t *testing.T) {
 
 	done := runAsync(runCtx, liveConfig(fps), &bytes.Buffer{},
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScene(drawer),
+		app.WithScenes(drawer),
 		app.WithConsoleSwitch(degradeSwitch(vt.ErrNotConsole)),
 		app.WithRawMode(degradeSwitch(term.ErrNotTerminal)),
 		app.WithTicker(ticker.new),
@@ -791,7 +791,7 @@ func TestRunLiveBlitError(t *testing.T) {
 
 	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScene(drawer),
+		app.WithScenes(drawer),
 		app.WithConsoleSwitch(degradeSwitch(vt.ErrNotConsole)),
 		app.WithRawMode(degradeSwitch(term.ErrNotTerminal)),
 		app.WithTicker(ticker.new),
@@ -877,7 +877,7 @@ func TestRunLiveConsoleSwitchDegrades(t *testing.T) {
 
 	done := runAsync(runCtx, liveConfig(30), &buf,
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScene(drawer),
+		app.WithScenes(drawer),
 		app.WithConsoleSwitch(degradeSwitch(vt.ErrNotConsole)),
 		app.WithRawMode(degradeSwitch(term.ErrNotTerminal)),
 		app.WithTicker(ticker.new),
@@ -928,7 +928,7 @@ func TestRunLiveRawModeDegrades(t *testing.T) {
 
 			done := runAsync(runCtx, liveConfig(30), &buf,
 				app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-				app.WithScene(drawer),
+				app.WithScenes(drawer),
 				app.WithConsoleSwitch((&switchSpy{}).switchMode),
 				app.WithRawMode(degradeSwitch(testCase.sentinel)),
 				app.WithInput(reader),
@@ -1429,5 +1429,189 @@ func TestRunLiveResizeToNothing(t *testing.T) {
 	err := recvOrTimeout(t, done, testTimeout, "Run to fail on an impossible canvas")
 	if !errors.Is(err, canvas.ErrSize) {
 		t.Errorf("err = %v, want wrapping %v", err, canvas.ErrSize)
+	}
+}
+
+// --- scene selection ------------------------------------------------------
+
+// namedDrawer is a Drawer that reports every frame it is asked for on its own
+// channel, so a test can tell which of two scenes the loop is drawing.
+type namedDrawer struct {
+	name  string
+	calls chan string
+}
+
+func newNamedDrawer(name string, calls chan string) *namedDrawer {
+	return &namedDrawer{name: name, calls: calls}
+}
+
+func (d *namedDrawer) Draw(*canvas.Canvas, time.Duration) {
+	d.calls <- d.name
+}
+
+func TestRunDrawsTheSelectedScene(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		kind app.SceneKind
+		want string
+	}{
+		{name: "pattern is the first scene", kind: app.Pattern, want: "first"},
+		{name: "specimen is the second", kind: app.Specimen, want: "second"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			calls := make(chan string, 2)
+			cfg := app.Config{
+				PNG:   filepath.Join(t.TempDir(), "out.png"),
+				Size:  image.Pt(16, 16),
+				Scene: testCase.kind,
+			}
+
+			err := app.Run(t.Context(), cfg, io.Discard,
+				app.WithScenes(newNamedDrawer("first", calls), newNamedDrawer("second", calls)))
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			got := recvOrTimeout(t, calls, testTimeout, "a Draw call")
+			if got != testCase.want {
+				t.Errorf("--scene %v drew %q, want %q", testCase.kind, got, testCase.want)
+			}
+
+			select {
+			case extra := <-calls:
+				t.Errorf("a second scene also drew (%q), want only the selected one", extra)
+			default:
+			}
+		})
+	}
+}
+
+func TestRunSceneOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	cfg := app.Config{
+		PNG:   filepath.Join(t.TempDir(), "out.png"),
+		Size:  image.Pt(16, 16),
+		Scene: app.Specimen,
+	}
+
+	// Only one scene was built, so there is no second one to start on. The
+	// flag layer's allow list makes this unreachable in the real program;
+	// the check is here so a future scene added to the enum and forgotten
+	// in the builder fails loudly instead of drawing the wrong thing.
+	err := app.Run(t.Context(), cfg, io.Discard, app.WithScenes(newFakeDrawer()))
+	if !errors.Is(err, app.ErrNoScene) {
+		t.Fatalf("Run with a scene index past the set = %v, want ErrNoScene", err)
+	}
+}
+
+func TestRunSceneLoaderError(t *testing.T) {
+	t.Parallel()
+
+	cfg := app.Config{PNG: filepath.Join(t.TempDir(), "out.png"), Size: image.Pt(16, 16)}
+
+	spy := &openFBSpy{}
+
+	err := app.Run(t.Context(), cfg, io.Discard,
+		app.WithFramebuffer(spy.open),
+		app.WithSceneLoader(func() ([]app.Drawer, error) { return nil, errStub }))
+	if !errors.Is(err, errStub) {
+		t.Fatalf("Run with a failing scene loader = %v, want the loader's error", err)
+	}
+
+	// A font that will not parse has to stop the program before it opens a
+	// device, which is the whole reason the fonts are loaded at startup.
+	if spy.called {
+		t.Error("the framebuffer opener was called after the scene loader failed, want it untouched")
+	}
+}
+
+// sceneSwitchBudget bounds how long a test will keep ticking while it waits
+// for the s keypress to be picked up. It is half of testTimeout so the run
+// context, which is bounded by the whole of it, cannot expire first and turn
+// a slow keypress into a timed-out tick.
+const sceneSwitchBudget = testTimeout / 2
+
+func TestRunLiveSwitchesScene(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	calls := make(chan string, 1)
+	blitter := newFakeBlitter(16, 16, 16, 32, "fake")
+	ticker := newFakeTicker()
+
+	done := runAsync(runCtx, liveConfig(30), io.Discard,
+		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
+		app.WithScenes(newNamedDrawer("first", calls), newNamedDrawer("second", calls)),
+		app.WithConsoleSwitch((&switchSpy{}).switchMode),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(&onceReader{data: []byte("s")}),
+		app.WithTicker(ticker.new),
+	)
+
+	if !drewSecondScene(t, ticker, blitter, calls) {
+		t.Error("the second scene never drew after s, want the loop to switch to it")
+	}
+
+	cancelRun()
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return"); err != nil {
+		t.Errorf("Run: %v, want nil", err)
+	}
+}
+
+// drewSecondScene ticks the loop until the second scene paints a frame, or
+// until the budget runs out.
+//
+// Ticking in a loop rather than once is the whole point. The s keypress
+// arrives on the reader's own goroutine, and nothing in the test can say when
+// that goroutine is scheduled or, once the key is queued, whether the loop's
+// select takes the key or a waiting tick first. A fixed number of tries is
+// not enough: on a loaded machine the reader can still be waiting to run
+// after a dozen frames have been drawn, which is exactly how the first
+// version of this test failed about once in a hundred runs. What is certain
+// is that once the key has been handled, every later tick draws the second
+// scene, so the test keeps ticking until it sees one.
+//
+// Both the draw and the blit channel are drained every round. The blitter's
+// buffer is small, and a full one stops the loop dead, which would wedge the
+// next tick rather than fail the test.
+func drewSecondScene(t *testing.T, ticker *fakeTicker, blitter *fakeBlitter, calls chan string) bool {
+	t.Helper()
+
+	deadline := time.Now().Add(sceneSwitchBudget)
+
+	for time.Now().Before(deadline) {
+		sendTick(t, ticker)
+
+		name := recvOrTimeout(t, calls, testTimeout, "a Draw call")
+		recvOrTimeout(t, blitter.calls, testTimeout, "a Blit call")
+
+		if name == "second" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sendTick delivers one frame tick, failing the test rather than blocking
+// for ever if the run loop has already stopped receiving.
+func sendTick(t *testing.T, ticker *fakeTicker) {
+	t.Helper()
+
+	select {
+	case ticker.ch <- time.Now():
+	case <-time.After(testTimeout):
+		t.Fatal("timed out delivering a tick to the run loop")
 	}
 }

@@ -12,6 +12,11 @@
 // uConsole, in Kitty graphics escape sequences over ssh, or in half-block
 // characters. Every device this package talks to arrives through a function
 // field, so the whole of Run is exercised on a Mac with fakes.
+//
+// Slice 3 made the scene a set rather than a single drawer. --scene picks
+// which one starts, and in the live loop s steps to the next. Building the
+// set loads the embedded fonts, which is why a font that will not parse
+// stops the program before it opens a device.
 package app
 
 import (
@@ -26,7 +31,6 @@ import (
 	"time"
 
 	"github.com/hyperized/uScope/internal/input"
-	"github.com/hyperized/uScope/internal/pattern"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -66,8 +70,8 @@ type Blitter interface {
 	String() string
 }
 
-// Drawer paints one frame. pattern.Scene is the only implementation so far;
-// the radar will be the second.
+// Drawer paints one frame. pattern.Scene and specimen.Scene implement it;
+// the radar will be the third.
 type Drawer interface {
 	Draw(dst *canvas.Canvas, elapsed time.Duration)
 }
@@ -83,6 +87,7 @@ type Config struct {
 	PNG         string
 	Size        image.Point
 	Backend     backend.Kind
+	Scene       SceneKind
 }
 
 // session is one backend plus the canvas that fits it, and the label that
@@ -91,6 +96,11 @@ type session struct {
 	back  backend.Backend
 	canv  *canvas.Canvas
 	label string
+
+	// scenes is the whole set in SceneKind order and active is the one on
+	// screen, because s cycles between them while the loop runs.
+	scenes []Drawer
+	active int
 
 	// console is true only for the framebuffer. It is the framebuffer that
 	// needs the VT switched into graphics mode; doing that to a terminal
@@ -105,12 +115,31 @@ type session struct {
 func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) error {
 	run := newRunner(opts...)
 
-	if cfg.PNG != "" || cfg.Backend == backend.PNG {
-		return run.renderPNG(cfg, stdout)
+	scenes, err := run.loadScenes()
+	if err != nil {
+		return err
 	}
 
-	return run.renderBackend(ctx, cfg, stdout)
+	active := int(cfg.Scene)
+	if active >= len(scenes) {
+		return fmt.Errorf("%w: %s", ErrNoScene, cfg.Scene)
+	}
+
+	if cfg.PNG != "" || cfg.Backend == backend.PNG {
+		return run.renderPNG(cfg, scenes[active], stdout)
+	}
+
+	return run.renderBackend(ctx, cfg, scenes, active, stdout)
 }
+
+// scene is the one currently on screen.
+//
+//nolint:ireturn // a scene is a Drawer; that is the whole point of the seam.
+func (s *session) scene() Drawer { return s.scenes[s.active] }
+
+// nextScene steps to the following scene, wrapping at the end. This is what
+// the s key is bound to.
+func (s *session) nextScene() { s.active = (s.active + 1) % len(s.scenes) }
 
 // sayf writes a line to the console.
 //
@@ -153,23 +182,48 @@ func enter(
 	return nil, false, fmt.Errorf("app: %s: %w", what, err)
 }
 
-// quits reports whether a key ends the run.
-func quits(key input.Key) bool {
+// command is what a keypress asks the live loop to do.
+type command uint8
+
+const (
+	// cmdNone is every key nothing is bound to, which includes the arrows:
+	// they are decoded, but slice 3 has nothing for them to steer.
+	cmdNone command = iota
+	cmdQuit
+	cmdNextScene
+)
+
+// classify maps a key onto a command.
+func classify(key input.Key) command {
 	switch key.Kind {
 	case input.Esc, input.CtrlC:
-		return true
+		return cmdQuit
 	case input.Rune:
-		return key.Rune == 'q' || key.Rune == 'Q'
+		return runeCommand(key.Rune)
 	case input.Up, input.Down, input.Left, input.Right, input.Enter:
 		fallthrough
 	default:
-		return false
+		return cmdNone
+	}
+}
+
+// runeCommand maps a printable key onto a command. Both cases are bound so
+// the keys keep working with caps lock on, which is easy to hit by accident
+// on the uConsole's small keyboard.
+func runeCommand(value rune) command {
+	switch value {
+	case 'q', 'Q':
+		return cmdQuit
+	case 's', 'S':
+		return cmdNextScene
+	default:
+		return cmdNone
 	}
 }
 
 // renderPNG draws one frame to a file. No device is opened, so this is the
 // path that works anywhere.
-func (r *runner) renderPNG(cfg Config, stdout io.Writer) error {
+func (r *runner) renderPNG(cfg Config, scene Drawer, stdout io.Writer) error {
 	// Only an entirely unset size falls back. Half a size, say a width with
 	// a negative height, is a caller mistake, and canvas.New says so rather
 	// than quietly rendering something nobody asked for.
@@ -183,7 +237,7 @@ func (r *runner) renderPNG(cfg Config, stdout io.Writer) error {
 		return fmt.Errorf("app: png canvas: %w", err)
 	}
 
-	r.scene.Draw(canv, 0)
+	scene.Draw(canv, 0)
 
 	file, err := r.createPNG(cfg.PNG)
 	if err != nil {
@@ -207,13 +261,15 @@ func (r *runner) renderPNG(cfg Config, stdout io.Writer) error {
 
 // renderBackend opens a backend, sizes a canvas for it, and hands off to the
 // one-shot or the live path.
-func (r *runner) renderBackend(ctx context.Context, cfg Config, stdout io.Writer) error {
+func (r *runner) renderBackend(ctx context.Context, cfg Config, scenes []Drawer, active int, stdout io.Writer) error {
 	ses, err := r.selectBackend(cfg, stdout)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = ses.back.Close() }()
+
+	ses.scenes, ses.active = scenes, active
 
 	width, height := ses.back.Size()
 
@@ -329,8 +385,8 @@ func (r *runner) resolveRotation(cfg Config, stdout io.Writer) rotate.Rotation {
 // It deliberately does not switch the console or the terminal into anything.
 // That is what makes it usable over ssh, and it leaves the frame on screen
 // until something else repaints.
-func (r *runner) once(ses *session, status io.Writer) error {
-	if err := ses.frame(r.scene, 0); err != nil {
+func (*runner) once(ses *session, status io.Writer) error {
+	if err := ses.frame(ses.scene(), 0); err != nil {
 		return err
 	}
 
@@ -418,11 +474,16 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan
 		case <-ctx.Done():
 			return nil
 		case key := <-keys:
-			if quits(key) {
+			action := classify(key)
+			if action == cmdQuit {
 				return nil
 			}
+
+			if action == cmdNextScene {
+				ses.nextScene()
+			}
 		case now := <-tick:
-			if err := ses.frame(r.scene, now.Sub(start)); err != nil {
+			if err := ses.frame(ses.scene(), now.Sub(start)); err != nil {
 				return err
 			}
 
@@ -594,11 +655,4 @@ func createFile(path string) (io.WriteCloser, error) {
 	}
 
 	return file, nil
-}
-
-// newScene is the production drawer.
-//
-//nolint:ireturn // the seam is Drawer so the radar can replace the pattern.
-func newScene() Drawer {
-	return pattern.New()
 }

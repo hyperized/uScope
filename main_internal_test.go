@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/fbdev"
 	"github.com/hyperized/uScope/pkg/rotate"
@@ -44,11 +45,16 @@ const (
 	flagBackend = "--backend"
 	flagFrames  = "--frames"
 	flagPNG     = "--png"
-	kittyValue  = "kitty"
-	blocksValue = "blocks"
-	pngValue    = "png"
-	caseDefault = "default"
-	caseMaxEdge = "maximum edge"
+	flagScene   = "--scene"
+
+	// specimenValue is the non-default --scene spelling, named because it
+	// turns up in several tables.
+	specimenValue = "specimen"
+	kittyValue    = "kitty"
+	blocksValue   = "blocks"
+	pngValue      = "png"
+	caseDefault   = "default"
+	caseMaxEdge   = "maximum edge"
 )
 
 // errUnrelated stands in for "some error that has nothing to do with the
@@ -867,5 +873,76 @@ func TestExplain(t *testing.T) {
 				t.Errorf("explain() = %q, want %q", got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestParseFlagsScene(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want app.SceneKind
+	}{
+		{name: caseDefault, args: nil, want: app.Pattern},
+		{name: "pattern explicit", args: []string{flagScene, defaultScene}, want: app.Pattern},
+		{name: specimenValue, args: []string{flagScene, specimenValue}, want: app.Specimen},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.scene = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsSceneRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown scene", args: []string{flagScene, "radar"}},
+		{name: "empty scene", args: []string{flagScene, ""}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errScene) {
+				t.Fatalf("parseFlags(%v) error = %v, want errScene", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, app.ErrScene) {
+				t.Errorf("parseFlags(%v) error = %v, want app.ErrScene wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestSceneReachesConfig pins that --scene actually arrives in the app.Config
+// main hands to app.Run, which is the one line of wiring no other test in
+// this file covers.
+func TestSceneReachesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagScene, specimenValue})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if cfg.scene != app.Specimen {
+		t.Errorf("config.scene = %v, want %v", cfg.scene, app.Specimen)
 	}
 }

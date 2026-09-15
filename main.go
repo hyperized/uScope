@@ -5,7 +5,9 @@
 //
 // It also draws in a terminal, over ssh or on a laptop, with the same canvas
 // code: Kitty graphics where the terminal has them, half-block characters
-// where it does not. There is still no radar in it, only a test pattern.
+// where it does not. There is still no radar in it. --scene picks between the
+// orientation pattern and the type specimen, and in the live loop s switches
+// between them.
 //
 // Exit status is 0 on a clean quit and 1 on any failure, with the reason on
 // stderr.
@@ -67,6 +69,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		PNG:         cfg.pngPath,
 		Size:        cfg.size,
 		Backend:     cfg.backend,
+		Scene:       cfg.scene,
 	}
 
 	// Warnings go to stderr because a terminal backend is busy writing

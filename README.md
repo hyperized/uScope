@@ -13,8 +13,9 @@ It still behaves like a console program. One static binary, started from the
 shell on tty1, keyboard driven, `q` to get back to the shell.
 
 There is no radar in it yet. What there is: a drawing surface, three ways of
-getting that surface onto a screen, raw keyboard input, a test pattern, and
-a clean exit that puts things back the way it found them.
+getting that surface onto a screen, raw keyboard input, text in embedded
+console fonts, two scenes to look at, and a clean exit that puts things back
+the way it found them.
 
 ## The three backends
 
@@ -32,10 +33,13 @@ pixel sizes. `blocks` gets one pixel per half cell, so an 80x24 window is an
 80x48 canvas, which is coarse enough to count the pixels. It is the fallback
 that always works.
 
-That coarseness used to show up in the test scene, whose shapes are sized in
-pixels for the panel. Below a 720 pixel short edge the scene now scales those
+That coarseness used to show up in the pattern scene, whose shapes are sized
+in pixels for the panel. Below a 720 pixel short edge the scene scales those
 sizes down to fit; at 1280x720 and above, on the panel and in `kitty` mode, it
-draws exactly as before.
+draws exactly as before. The specimen scene handles the same problem
+differently, by dropping whole blocks that will not fit rather than shrinking
+them. A bitmap face has one design size, and scaling it down does not make
+small text, it makes unreadable text.
 
 With `--backend auto`, which is the default, uScope tries in this order:
 
@@ -49,6 +53,58 @@ The Kitty check is an allow list rather than a probe. Asking a terminal what
 it supports means writing a query and waiting for an answer that never comes
 if it does not understand the question, and half a second of nothing at
 startup is a worse trade than falling back to blocks.
+
+## The two scenes
+
+`--scene` picks what gets drawn. In live mode `s` switches between them
+without restarting.
+
+`pattern` is the orientation check from slice 1: four coloured corner
+squares, a triangle pointing up, a circle and a sweeping line. Red square
+top-left and cyan triangle at the top means the frame landed the right way
+up, and the sweep moving means the loop is running.
+
+`specimen` is the slice 3 scene. It is half a font sample and half a mock of
+what the radar will look like: a header band with a clock, a selected-flight
+card with the callsign set large, two compact aircraft rows, all four
+embedded faces rendering the alphabet, and a key bar along the bottom. The
+aircraft in it are invented. The point is to find out whether Terminus at 12,
+16 and 32 pixels is readable at arm's length on a 5 inch panel before the
+radar is built on top of it.
+
+Every block in the specimen sizes itself from the canvas bounds and the
+metrics of the font it is set in. A block that does not fit is skipped rather
+than drawn over its neighbour, so the same scene renders at 1280x720 on the
+panel and on a canvas of a few dozen pixels. An 80x24 terminal of half blocks
+is a canvas 80 by 48, and all that fits there is the key bar. Give it a
+320x200 window and the header band and the two compact rows come back.
+
+## Fonts
+
+uScope draws text with PSF console fonts, the same bitmap format the kernel
+loads into a virtual terminal. Four faces are compiled into the binary:
+
+| Face | Size | What it sets |
+|---|---|---|
+| Terminus | 6x12 | labels, unit suffixes, key caps |
+| Terminus | 8x16 | body text and the compact rows |
+| Terminus Bold | 8x16 | the wordmark |
+| Terminus Bold | 16x32 | the clock and the figures on a card |
+
+They are Debian `console-setup`'s Uni3 builds of Terminus Font, taken byte
+for byte and gzipped as that package ships them. Two of the four are PSF1 and
+two are PSF2, which is why `pkg/psf` reads both formats.
+
+Terminus Font is licensed under the SIL Open Font License, Version 1.1,
+Copyright (c) 2010 Dimitar Toshkov Zhekov, with Reserved Font Name "Terminus
+Font". The full text is in `pkg/fonts/OFL-Terminus.txt` and
+`fonts.Licence()` returns it at run time. The files keep their original
+names because the licence reserves the font name; see
+[pkg/fonts/README.md](pkg/fonts/README.md).
+
+There is no font scaling beyond whole numbers. A console font is a grid of
+one-bit pixels drawn for a specific size, and interpolating it only makes it
+blurry, so `pkg/text` repeats each pixel as a square block instead.
 
 ## The device
 
@@ -108,7 +164,8 @@ make pattern
 ```
 
 That cross-compiles for arm64, ships the binary, and paints the test pattern
-on the panel.
+on the panel. `make specimen` does the same with the type specimen, which is
+the check that matters for the fonts.
 
 Red square top-left and the cyan triangle at the top means the rotation is
 right. The triangle points up, so it tells you which way up the frame landed.
@@ -127,7 +184,15 @@ make run
 ```
 
 That is `go run .`, and auto detection lands on the kitty backend. Press `q`
-to quit. To see the half-block renderer instead:
+to quit, `s` to switch scenes. To start on the type specimen instead:
+
+```sh
+make run-specimen
+```
+
+Ghostty draws the frame at its real pixel size, so that is the closest look
+at the fonts available without a uConsole on the desk. To see the half-block
+renderer:
 
 ```sh
 make run-blocks
@@ -170,21 +235,24 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | Key | Does |
 |---|---|
 | `q`, `Q` | quit |
+| `s`, `S` | switch between the pattern and the specimen |
 | `Esc` | quit |
 | `Ctrl-C` | quit |
 
-Arrow keys are decoded but nothing is bound to them yet.
+Both cases are bound because caps lock is easy to hit by accident on the
+uConsole's keyboard. Arrow keys are decoded but nothing is bound to them yet.
 
 ## Flags
 
 | Flag | Default | Does |
 |---|---|---|
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
+| `--scene` | `pattern` | `pattern` or `specimen` |
 | `--fb` | `/dev/fb0` | framebuffer device |
 | `--rotate` | `auto` | `auto` reads sysfs, or force `0`, `1`, `2`, `3` |
 | `--fps` | `30` | frames per second in live mode, 1 to 120 |
 | `--frames` | `0` | stop after this many frames, 0 runs until quit |
-| `--test-pattern` | off | paint one frame and exit |
+| `--test-pattern` | off | draw one still frame of the selected scene and exit |
 | `--png` | | render to a PNG instead of a screen |
 | `--size` | `1280x720` | canvas size for `--png` and for the kitty backend |
 
@@ -206,8 +274,11 @@ make build          # for the machine you're on
 make build-aarch64  # for the uConsole
 make run            # go run .
 make run-blocks     # go run . --backend blocks
+make run-specimen   # go run . --scene specimen
 make test           # go test -race -cover ./...
 make lint           # golangci-lint run ./...
+make pattern        # ship, then paint the test pattern on the panel
+make specimen       # ship, then paint the type specimen on the panel
 make test-device    # cross-compile the integration tests and run them on the device
 ```
 
@@ -228,9 +299,14 @@ pkg/winsize           TIOCGWINSZ (Linux and macOS; stub elsewhere)
 pkg/kitty             Kitty graphics protocol encoder
 pkg/blocks            half-block renderer
 pkg/termbackend       owns the terminal, drives kitty or blocks
+pkg/psf               PSF1 and PSF2 console font parser
+pkg/fonts             the four embedded Terminus faces
+pkg/text              draws strings with a PSF font
 internal/term         raw tty mode
 internal/input        bytes to key events
-internal/pattern      the test scene
+internal/theme        the colour palettes
+internal/pattern      the orientation scene
+internal/specimen     the type specimen scene
 internal/app          the run loop
 ```
 
@@ -238,14 +314,21 @@ internal/app          the run loop
 `io.Writer` and know nothing about terminals. `pkg/termbackend` is the one
 that owns the alternate screen, the cursor and the window size.
 
+`pkg/psf` and `pkg/text` are the same shape on the drawing side. The parser
+takes bytes and knows nothing about canvases; the drawer takes a font and a
+canvas and knows nothing about files. Neither of them has ever heard of a
+scene, which is what lets both be tested against fonts built inside a test.
+
 Standard library only. No third-party modules, and no `golang.org/x` either:
 the termios, ioctl and signal work is done with `syscall` behind build tags.
 
 ## What comes next
 
-Slice 3 adds PSF font rendering, since a radar needs labels and there is no
-text at all yet. After that, the radar itself: aircraft, tracks and range
-rings, sharing uAirwaves' decoding work but drawing it at pixel resolution.
+Slice 4 is the radar: aircraft as rotated silhouettes coloured by altitude
+band, one thin trail per aircraft rather than a few dots, range rings, and
+the selected-flight card fed by real decodes instead of the mock data in the
+specimen. It shares uAirwaves' decoding work and draws it at pixel
+resolution. [DESIGN.md](DESIGN.md) is the contract for how it should look.
 
 ## Licence
 

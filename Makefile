@@ -12,8 +12,8 @@
 
 GOARCH_DEV ?= arm64
 
-.PHONY: all build build-aarch64 build-macos run run-blocks test test-coverage \
-        lint fmt ship pattern test-device clean
+.PHONY: all build build-aarch64 build-macos run run-blocks run-specimen test \
+        test-coverage lint fmt ship pattern specimen test-device clean
 
 all: build
 
@@ -37,6 +37,12 @@ run:
 # kitty output looks wrong.
 run-blocks:
 	go run . --backend blocks
+
+# The type specimen, live. In Ghostty this lands on the kitty backend and the
+# fonts render at their real pixel sizes, which is the only way to judge them
+# without a uConsole on the desk. s switches back to the pattern, q quits.
+run-specimen:
+	go run . --scene specimen
 
 test:
 	go test -race -cover ./...
@@ -68,6 +74,13 @@ ship: build-aarch64
 # changes no console or terminal state.
 pattern: ship
 	@ssh $(DEVICE) './uScope --test-pattern'
+
+# Paint the type specimen on the panel and leave it there. Same one-frame,
+# no-state-changed deal as pattern, so it is safe over ssh. This is the check
+# that matters for slice 3: whether Terminus at 12, 16 and 32 pixels is
+# readable at arm's length on the real screen.
+specimen: ship
+	@ssh $(DEVICE) './uScope --scene specimen --test-pattern'
 
 # The framebuffer and console tests need real hardware, so they are built
 # here and run there. They are behind the integration tag, so a plain

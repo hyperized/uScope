@@ -26,7 +26,7 @@ type runner struct {
 	goos          string
 	stdin         io.Reader
 	stderr        io.Writer
-	scene         Drawer
+	loadScenes    func() ([]Drawer, error)
 }
 
 // newRunner builds the production wiring and then applies the overrides.
@@ -44,7 +44,7 @@ func newRunner(opts ...Option) *runner {
 		goos:          runtime.GOOS,
 		stdin:         os.Stdin,
 		stderr:        os.Stderr,
-		scene:         newScene(),
+		loadScenes:    defaultScenes,
 	}
 
 	for _, opt := range opts {
@@ -121,7 +121,16 @@ func WithStderr(dst io.Writer) Option {
 	return func(r *runner) { r.stderr = dst }
 }
 
-// WithScene replaces the thing being drawn.
-func WithScene(scene Drawer) Option {
-	return func(r *runner) { r.scene = scene }
+// WithScenes replaces the scenes the loop can draw, in SceneKind order. This
+// is how a test runs the loop without loading a font.
+func WithScenes(scenes ...Drawer) Option {
+	return func(r *runner) {
+		r.loadScenes = func() ([]Drawer, error) { return scenes, nil }
+	}
+}
+
+// WithSceneLoader replaces how the scene set is built, which is the seam the
+// font loading sits behind.
+func WithSceneLoader(load func() ([]Drawer, error)) Option {
+	return func(r *runner) { r.loadScenes = load }
 }

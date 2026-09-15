@@ -15,9 +15,10 @@ import (
 	"time"
 
 	"github.com/hyperized/uScope/internal/input"
-	"github.com/hyperized/uScope/internal/pattern"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/fonts"
+	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
 
@@ -187,30 +188,32 @@ func TestEnterWarnsOnStdout(t *testing.T) {
 	}
 }
 
-func TestQuits(t *testing.T) {
+func TestClassify(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
 		name string
 		key  input.Key
-		want bool
+		want command
 	}{
-		{name: "lowercase q quits", key: input.Key{Kind: input.Rune, Rune: 'q'}, want: true},
-		{name: "uppercase Q quits", key: input.Key{Kind: input.Rune, Rune: 'Q'}, want: true},
-		{name: "another rune does not quit", key: input.Key{Kind: input.Rune, Rune: 'x'}, want: false},
-		{name: "esc quits", key: input.Key{Kind: input.Esc}, want: true},
-		{name: "ctrl-c quits", key: input.Key{Kind: input.CtrlC}, want: true},
-		{name: "up does not quit", key: input.Key{Kind: input.Up}, want: false},
-		{name: "down does not quit", key: input.Key{Kind: input.Down}, want: false},
-		{name: "left does not quit", key: input.Key{Kind: input.Left}, want: false},
-		{name: "right does not quit", key: input.Key{Kind: input.Right}, want: false},
-		{name: "enter does not quit", key: input.Key{Kind: input.Enter}, want: false},
+		{name: "lowercase q quits", key: input.Key{Kind: input.Rune, Rune: 'q'}, want: cmdQuit},
+		{name: "uppercase Q quits", key: input.Key{Kind: input.Rune, Rune: 'Q'}, want: cmdQuit},
+		{name: "lowercase s switches scene", key: input.Key{Kind: input.Rune, Rune: 's'}, want: cmdNextScene},
+		{name: "uppercase S switches scene", key: input.Key{Kind: input.Rune, Rune: 'S'}, want: cmdNextScene},
+		{name: "another rune is unbound", key: input.Key{Kind: input.Rune, Rune: 'x'}, want: cmdNone},
+		{name: "esc quits", key: input.Key{Kind: input.Esc}, want: cmdQuit},
+		{name: "ctrl-c quits", key: input.Key{Kind: input.CtrlC}, want: cmdQuit},
+		{name: "up is unbound", key: input.Key{Kind: input.Up}, want: cmdNone},
+		{name: "down is unbound", key: input.Key{Kind: input.Down}, want: cmdNone},
+		{name: "left is unbound", key: input.Key{Kind: input.Left}, want: cmdNone},
+		{name: "right is unbound", key: input.Key{Kind: input.Right}, want: cmdNone},
+		{name: "enter is unbound", key: input.Key{Kind: input.Enter}, want: cmdNone},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := quits(testCase.key); got != testCase.want {
-				t.Errorf("quits(%+v) = %v, want %v", testCase.key, got, testCase.want)
+			if got := classify(testCase.key); got != testCase.want {
+				t.Errorf("classify(%+v) = %d, want %d", testCase.key, got, testCase.want)
 			}
 		})
 	}
@@ -232,8 +235,12 @@ const (
 	fieldCreatePNG     = "createPNG"
 	fieldNow           = "now"
 	fieldStdin         = "stdin"
-	fieldScene         = "scene"
+	fieldLoadScenes    = "loadScenes"
 )
+
+// wantSceneCount is how many scenes the production set holds: the pattern
+// and the specimen.
+const wantSceneCount = 2
 
 func TestNewRunnerDefaults(t *testing.T) {
 	t.Parallel()
@@ -256,7 +263,7 @@ func TestNewRunnerDefaults(t *testing.T) {
 		{name: fieldCreatePNG, isNil: run.createPNG == nil},
 		{name: fieldNow, isNil: run.now == nil},
 		{name: fieldStdin, isNil: run.stdin == nil},
-		{name: fieldScene, isNil: run.scene == nil},
+		{name: fieldLoadScenes, isNil: run.loadScenes == nil},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -302,14 +309,8 @@ type optionOverrideDrawer struct{}
 
 func (optionOverrideDrawer) Draw(*canvas.Canvas, time.Duration) {}
 
-// isDefaultScene reports whether scene is still the production default. All
-// instances of pattern.Scene are behaviourally identical empty structs, so
-// the type is the only thing worth checking rather than the pointer.
-func isDefaultScene(scene Drawer) bool {
-	_, ok := scene.(*pattern.Scene)
-
-	return ok
-}
+// fakeSceneLoader stands in for the production scene builder.
+func fakeSceneLoader() ([]Drawer, error) { return []Drawer{optionOverrideDrawer{}}, nil }
 
 // assertOptionReplacesOnly checks that applying an Option changed exactly
 // the field named target and left every other seam at its production
@@ -333,7 +334,7 @@ func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 		{fieldCreatePNG, funcPtr(run.createPNG) == funcPtr(createFile)},
 		{fieldNow, funcPtr(run.now) == funcPtr(time.Now)},
 		{fieldStdin, run.stdin == io.Reader(os.Stdin)},
-		{fieldScene, isDefaultScene(run.scene)},
+		{fieldLoadScenes, funcPtr(run.loadScenes) == funcPtr(defaultScenes)},
 	} {
 		wantDefault := field.name != target
 		if field.isDefault != wantDefault {
@@ -362,7 +363,8 @@ func TestOptionsReplaceOnlyNamedField(t *testing.T) {
 		{name: "WithPNGCreator", option: WithPNGCreator(fakeCreatePNG), target: fieldCreatePNG},
 		{name: "WithClock", option: WithClock(fakeNow), target: fieldNow},
 		{name: "WithInput", option: WithInput(optionOverrideReader{}), target: fieldStdin},
-		{name: "WithScene", option: WithScene(optionOverrideDrawer{}), target: fieldScene},
+		{name: "WithScenes", option: WithScenes(optionOverrideDrawer{}), target: fieldLoadScenes},
+		{name: "WithSceneLoader", option: WithSceneLoader(fakeSceneLoader), target: fieldLoadScenes},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -537,11 +539,22 @@ func TestCreateFile(t *testing.T) {
 	})
 }
 
-func TestNewScene(t *testing.T) {
+func TestDefaultScenes(t *testing.T) {
 	t.Parallel()
 
-	if newScene() == nil {
-		t.Fatal("newScene() = nil, want a Drawer")
+	scenes, err := defaultScenes()
+	if err != nil {
+		t.Fatalf("defaultScenes() = %v, want the production scene set", err)
+	}
+
+	if len(scenes) != wantSceneCount {
+		t.Fatalf("defaultScenes() returned %d scenes, want %d", len(scenes), wantSceneCount)
+	}
+
+	for index, scene := range scenes {
+		if scene == nil {
+			t.Errorf("defaultScenes()[%d] = nil, want a Drawer", index)
+		}
 	}
 }
 
@@ -705,5 +718,177 @@ func TestOpenTerminal(t *testing.T) {
 				t.Errorf("Size() = %dx%d, want the requested %v", width, height, testCase.size)
 			}
 		})
+	}
+}
+
+// --- scene selection ------------------------------------------------------
+
+// failingFontLoader is a fontLoader that never produces a font, so a test can
+// drop it into any of buildScenes' four positions.
+func failingFontLoader() (*psf.Font, error) { return nil, errStub }
+
+func TestParseScene(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		text    string
+		want    SceneKind
+		wantErr bool
+	}{
+		{name: scenePattern, text: scenePattern, want: Pattern},
+		{name: sceneSpecimen, text: sceneSpecimen, want: Specimen},
+		{name: "unknown name", text: "radar", wantErr: true},
+		{name: "empty", text: "", wantErr: true},
+		{name: "wrong case", text: "Pattern", wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseScene(testCase.text)
+
+			if testCase.wantErr {
+				if !errors.Is(err, ErrScene) {
+					t.Fatalf("ParseScene(%q) error = %v, want ErrScene", testCase.text, err)
+				}
+
+				// A rejected value still has to come back as the default
+				// rather than as whatever the switch happened to leave, so
+				// a caller that ignores the error draws something sane.
+				if got != Pattern {
+					t.Errorf("ParseScene(%q) = %v on error, want %v", testCase.text, got, Pattern)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("ParseScene(%q) = %v, want no error", testCase.text, err)
+			}
+
+			if got != testCase.want {
+				t.Errorf("ParseScene(%q) = %v, want %v", testCase.text, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSceneKindString(t *testing.T) {
+	t.Parallel()
+
+	// outOfRange is past the last scene, which is what a corrupted or
+	// hand-built value looks like.
+	const outOfRange SceneKind = 99
+
+	for _, testCase := range []struct {
+		name string
+		kind SceneKind
+		want string
+	}{
+		{name: scenePattern, kind: Pattern, want: scenePattern},
+		{name: sceneSpecimen, kind: Specimen, want: sceneSpecimen},
+		{name: "out of range", kind: outOfRange, want: "invalid"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.kind.String(); got != testCase.want {
+				t.Errorf("SceneKind(%d).String() = %q, want %q", testCase.kind, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSceneKindRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range [...]SceneKind{Pattern, Specimen} {
+		t.Run(kind.String(), func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseScene(kind.String())
+			if err != nil {
+				t.Fatalf("ParseScene(%q): %v", kind.String(), err)
+			}
+
+			if got != kind {
+				t.Errorf("ParseScene(%q) = %v, want %v", kind.String(), got, kind)
+			}
+		})
+	}
+}
+
+func TestBuildScenesFontFailure(t *testing.T) {
+	t.Parallel()
+
+	// One case per position, because each one is a separate error return
+	// with its own message naming the face that would not load.
+	for index, name := range [...]string{"small", "body", "bold", "large"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			loaders := [...]fontLoader{fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large}
+			loaders[index] = failingFontLoader
+
+			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3])
+			if !errors.Is(err, errStub) {
+				t.Fatalf("buildScenes with a failing %s loader = %v, want the loader's error", name, err)
+			}
+
+			if scenes != nil {
+				t.Errorf("buildScenes returned %d scenes alongside an error, want none", len(scenes))
+			}
+
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not name the face that failed (%q)", err, name)
+			}
+		})
+	}
+}
+
+func TestBuildScenesSucceeds(t *testing.T) {
+	t.Parallel()
+
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large)
+	if err != nil {
+		t.Fatalf("buildScenes: %v", err)
+	}
+
+	if len(scenes) != wantSceneCount {
+		t.Fatalf("buildScenes returned %d scenes, want %d", len(scenes), wantSceneCount)
+	}
+}
+
+// markerDrawer is a Drawer whose identity a test can check, which an empty
+// struct's would not be.
+type markerDrawer struct {
+	name string
+}
+
+func (*markerDrawer) Draw(*canvas.Canvas, time.Duration) {}
+
+func TestSessionScene(t *testing.T) {
+	t.Parallel()
+
+	first := &markerDrawer{name: "first"}
+	second := &markerDrawer{name: "second"}
+	ses := &session{scenes: []Drawer{first, second}}
+
+	if got := ses.scene(); got != Drawer(first) {
+		t.Fatalf("scene() = %v, want the first scene", got)
+	}
+
+	ses.nextScene()
+
+	if got := ses.scene(); got != Drawer(second) {
+		t.Fatalf("after nextScene(), scene() = %v, want the second scene", got)
+	}
+
+	// The step wraps rather than running off the end, so holding s down
+	// cycles instead of panicking on the third press.
+	ses.nextScene()
+
+	if got := ses.scene(); got != Drawer(first) {
+		t.Errorf("after two nextScene() calls, scene() = %v, want the first scene again", got)
 	}
 }
