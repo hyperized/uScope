@@ -1,0 +1,53 @@
+---
+version: '2'
+
+linters:
+  default: all
+  disable:
+    - depguard # We don't use dep
+    - exhaustruct # mutexes don't require exhaustive structs
+    - exhaustruct_v5 # same intent: replaced exhaustruct in golangci-lint v2.13, and default:all enables the successor.
+    - tagliatelle # We don't need opinions on struct tags
+    - noinlineerr # We don't need opinions on error handling'
+    - wsl # legacy
+    - cyclop # Already present in revive
+    - nolintlint
+    - gomodguard # replaced by gomodguard_v2 in golangci-lint v2.12; default:all already enables the v2 successor.
+  settings:
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: package-comments
+          disabled: true
+        - name: line-length-limit
+          arguments: [ 120 ]
+        - name: confusing-results
+          disabled: true # it conflicts with nonamedreturns
+        - name: add-constant
+          disabled: true
+        - name: function-length
+          arguments:
+            - 50
+            - 100
+        - name: cognitive-complexity
+          arguments: [ 20 ]
+        - name: cyclomatic
+          arguments: [ 15 ]
+        - name: max-public-structs
+          # pkg/canvas exposes the drawing surface plus its palette, and
+          # pkg/fbdev the device plus its options; the default of 5 forces
+          # unrelated splits.
+          arguments: [ 50 ]
+    mnd:
+      ignored-numbers: [ "0", "1", "2", "3" ] # quoted per v2.12 schema; these are often used as defaults, not magic numbers
+    funlen:
+      lines: 120
+
+formatters:
+  enable:
+    - gci
+    - gofmt

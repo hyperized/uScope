@@ -1,0 +1,10 @@
+.env
+uScope*
+coverage.out
+coverage.html
+dist/
+CLAUDE.md
+improvements.md
+plan.md
+PLAN.md
+.junie/

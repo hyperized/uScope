@@ -1,0 +1,74 @@
+# Build, test, and deploy targets for uScope.
+#
+# The deployment host is personal, so it lives in a gitignored .env file
+# next to this Makefile:
+#
+#   DEVICE = user@uconsole-host     # the uConsole with the framebuffer
+#
+# Targets that scp check for it and explain what to set when it is missing.
+# Plain builds and tests need no .env at all.
+
+-include .env
+
+GOARCH_DEV ?= arm64
+
+.PHONY: all build build-aarch64 build-macos test test-coverage lint fmt \
+        ship pattern test-device clean
+
+all: build
+
+# Build for the machine you're sitting at.
+build:
+	go build -o uScope .
+
+build-aarch64:
+	env GOOS=linux GOARCH=$(GOARCH_DEV) go build -o uScope-aarch64 .
+
+build-macos:
+	env GOOS=darwin GOARCH=arm64 go build -o uScope .
+
+test:
+	go test -race -cover ./...
+
+test-coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out
+
+lint:
+	golangci-lint run ./...
+
+fmt:
+	go fmt ./...
+
+# Upload beside the target and rename, rather than straight over it. scp onto
+# a running binary fails with ETXTBSY; rename(2) only swaps the directory
+# entry, so a session that is already open keeps running on the old inode and
+# picks the new build up next time it starts.
+ship: build-aarch64
+	@test -n "$(DEVICE)" || { echo "DEVICE not set. Create .env with: DEVICE = user@host"; exit 1; }
+	scp uScope-aarch64 $(DEVICE):~/uScope.new
+	ssh $(DEVICE) 'mv -f ~/uScope.new ~/uScope'
+
+# Paint the test pattern and leave it on screen.
+#
+# Read the result like this: red square top-left and the cyan triangle at the
+# top means the rotation is right. If the pattern lands on the wrong edge,
+# run it again with --rotate 3. This works over ssh because --test-pattern
+# changes no console or terminal state.
+pattern: ship
+	@ssh $(DEVICE) './uScope --test-pattern'
+
+# The framebuffer and console tests need real hardware, so they are built
+# here and run there. They are behind the integration tag, so a plain
+# `make test` never touches a device.
+test-device:
+	@test -n "$(DEVICE)" || { echo "DEVICE not set. Create .env with: DEVICE = user@host"; exit 1; }
+	mkdir -p dist
+	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/fbdev.test ./pkg/fbdev
+	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/vt.test    ./pkg/vt
+	env GOOS=linux GOARCH=$(GOARCH_DEV) go test -c -tags integration -o dist/term.test  ./internal/term
+	scp dist/fbdev.test dist/vt.test dist/term.test $(DEVICE):~/
+	ssh $(DEVICE) './fbdev.test -test.v && ./vt.test -test.v && ./term.test -test.v'
+
+clean:
+	rm -rf dist uScope uScope-aarch64 coverage.out coverage.html
