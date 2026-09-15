@@ -334,13 +334,16 @@ func TestSceneDrawSmallCanvas(t *testing.T) {
 
 		pattern.New().Draw(canv, 0)
 
-		// cornerSize (80) is bigger than the canvas, so all four corner
-		// squares cover it fully, last one drawn wins, and the diagonal
-		// runs exactly corner to corner because the canvas is square.
+		// At this canvas size the scaled corner squares are only a couple
+		// of pixels wide (round(80 * 10/720), floored to 2), so each corner
+		// keeps its own colour instead of being flooded by whichever square
+		// is drawn last. The diagonal still runs exactly corner to corner
+		// because the canvas is square, overwriting the top-left and
+		// bottom-right pixels with white.
 		assertPixel(t, canv, 0, 0, canvas.White, "top-left corner, on the diagonal")
 		assertPixel(t, canv, side-1, side-1, canvas.White, "bottom-right corner, on the diagonal")
-		assertPixel(t, canv, side-1, 0, canvas.Yellow, "top-right corner, off the diagonal")
-		assertPixel(t, canv, 0, side-1, canvas.Yellow, "bottom-left corner, off the diagonal")
+		assertPixel(t, canv, side-1, 0, canvas.Green, "top-right corner, off the diagonal")
+		assertPixel(t, canv, 0, side-1, canvas.Blue, "bottom-left corner, off the diagonal")
 	})
 
 	t.Run("1x1 canvas does not panic and paints a sane pixel", func(t *testing.T) {
@@ -356,6 +359,47 @@ func TestSceneDrawSmallCanvas(t *testing.T) {
 		// Every shape collapses onto the single pixel; the sweep line is
 		// drawn last, so its colour, white, is what remains.
 		assertPixel(t, canv, 0, 0, canvas.White, "the only pixel")
+	})
+}
+
+// TestSceneDrawBlocksCanvas checks the scene at 80x48, the canvas an 80x24
+// terminal window gives the half-block backend. Unscaled, the 80px corner
+// squares would cover this canvas outright; scaled (round(80 * 48/720),
+// floored to 5) the squares stay small enough for the rest of the scene to
+// survive alongside them.
+func TestSceneDrawBlocksCanvas(t *testing.T) {
+	t.Parallel()
+
+	const (
+		width  = 80
+		height = 48
+	)
+
+	canv, err := canvas.New(width, height)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pattern.New().Draw(canv, 0)
+
+	assertPixel(t, canv, 2, 2, canvas.Red, "inside the scaled top-left corner square")
+	assertPixel(t, canv, 10, 10, canvas.Black, "well clear of the corner square, untouched background")
+
+	t.Run("the ring survives at this size", func(t *testing.T) {
+		t.Parallel()
+
+		img := canv.Image()
+		bounds := img.Bounds()
+
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				if img.RGBAAt(x, y) == canvas.Magenta {
+					return
+				}
+			}
+		}
+
+		t.Error("no magenta pixel found, want the ring to still be drawn")
 	})
 }
 

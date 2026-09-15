@@ -67,17 +67,19 @@ func TestDrawCorners(t *testing.T) {
 	t.Parallel()
 
 	const (
-		width        = 300
-		height       = 250
-		insideOffset = 40
+		width  = 300
+		height = 250
 	)
+
+	sizes := metricsFor(width, height)
+	insideOffset := sizes.corner / 2
 
 	canv, err := canvas.New(width, height)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	drawCorners(canv, width, height)
+	drawCorners(canv, width, height, sizes)
 
 	for _, testCase := range []struct {
 		name string
@@ -93,8 +95,8 @@ func TestDrawCorners(t *testing.T) {
 		{name: "top-right square interior", x: width - insideOffset, y: insideOffset, want: canvas.Green},
 		{name: "bottom-left square interior", x: insideOffset, y: height - insideOffset, want: canvas.Blue},
 		{name: "bottom-right square interior", x: width - insideOffset, y: height - insideOffset, want: canvas.Yellow},
-		{name: "top-left square just inside the edge", x: cornerSize - 1, y: cornerSize - 1, want: canvas.Red},
-		{name: "top-left square just outside the edge", x: cornerSize, y: cornerSize, want: color.RGBA{}},
+		{name: "top-left square just inside the edge", x: sizes.corner - 1, y: sizes.corner - 1, want: canvas.Red},
+		{name: "top-left square just outside the edge", x: sizes.corner, y: sizes.corner, want: color.RGBA{}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -111,15 +113,17 @@ func TestDrawTriangle(t *testing.T) {
 		width   = 250
 		height  = 100
 		centerX = 100
-		baseY   = apexInset + triangleHeight
 	)
+
+	sizes := metricsFor(width, height)
+	baseY := sizes.apexInset + sizes.triangleHeight
 
 	canv, err := canvas.New(width, height)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	drawTriangle(canv, centerX)
+	drawTriangle(canv, centerX, sizes)
 
 	for _, testCase := range []struct {
 		name string
@@ -127,13 +131,19 @@ func TestDrawTriangle(t *testing.T) {
 		y    int
 		want color.RGBA
 	}{
-		{name: "apex", x: centerX, y: apexInset, want: canvas.Cyan},
-		{name: "row above apex is untouched", x: centerX, y: apexInset - 1, want: color.RGBA{}},
-		{name: "base row left edge", x: centerX - triangleHalfBase, y: baseY, want: canvas.Cyan},
+		{name: "apex", x: centerX, y: sizes.apexInset, want: canvas.Cyan},
+		{name: "row above apex is untouched", x: centerX, y: sizes.apexInset - 1, want: color.RGBA{}},
+		{name: "base row left edge", x: centerX - sizes.triangleHalfBase, y: baseY, want: canvas.Cyan},
 		{name: "base row center", x: centerX, y: baseY, want: canvas.Cyan},
-		{name: "base row right edge", x: centerX + triangleHalfBase, y: baseY, want: canvas.Cyan},
-		{name: "base row just outside left edge", x: centerX - triangleHalfBase - 1, y: baseY, want: color.RGBA{}},
-		{name: "base row just outside right edge", x: centerX + triangleHalfBase + 1, y: baseY, want: color.RGBA{}},
+		{name: "base row right edge", x: centerX + sizes.triangleHalfBase, y: baseY, want: canvas.Cyan},
+		{
+			name: "base row just outside left edge",
+			x:    centerX - sizes.triangleHalfBase - 1, y: baseY, want: color.RGBA{},
+		},
+		{
+			name: "base row just outside right edge",
+			x:    centerX + sizes.triangleHalfBase + 1, y: baseY, want: color.RGBA{},
+		},
 		{name: "row below base is untouched", x: centerX, y: baseY + 1, want: color.RGBA{}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -193,11 +203,12 @@ func TestConstants(t *testing.T) {
 	t.Parallel()
 
 	const (
-		wantCornerSize       = 80
-		wantApexInset        = 20
-		wantTriangleHeight   = 60
-		wantTriangleHalfBase = 40
-		wantCircleDivisor    = 3
+		wantBaseCornerSize       = 80
+		wantBaseApexInset        = 20
+		wantBaseTriangleHeight   = 60
+		wantBaseTriangleHalfBase = 40
+		wantCircleDivisor        = 3
+		wantReferenceShortEdge   = 720
 	)
 
 	for _, testCase := range []struct {
@@ -205,11 +216,12 @@ func TestConstants(t *testing.T) {
 		got  int
 		want int
 	}{
-		{name: "cornerSize", got: cornerSize, want: wantCornerSize},
-		{name: "apexInset", got: apexInset, want: wantApexInset},
-		{name: "triangleHeight", got: triangleHeight, want: wantTriangleHeight},
-		{name: "triangleHalfBase", got: triangleHalfBase, want: wantTriangleHalfBase},
+		{name: "baseCornerSize", got: baseCornerSize, want: wantBaseCornerSize},
+		{name: "baseApexInset", got: baseApexInset, want: wantBaseApexInset},
+		{name: "baseTriangleHeight", got: baseTriangleHeight, want: wantBaseTriangleHeight},
+		{name: "baseTriangleHalfBase", got: baseTriangleHalfBase, want: wantBaseTriangleHalfBase},
 		{name: "circleDivisor", got: circleDivisor, want: wantCircleDivisor},
+		{name: "referenceShortEdge", got: referenceShortEdge, want: wantReferenceShortEdge},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -229,4 +241,67 @@ func TestConstants(t *testing.T) {
 			t.Errorf("sweepPeriod = %v, want %v", sweepPeriod, wantSweepPeriod)
 		}
 	})
+}
+
+// TestMetricsFor pins the scaling formula: base sizes at or above the
+// reference short edge, and the same rounded, floored scale below it.
+func TestMetricsFor(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name            string
+		width           int
+		height          int
+		wantCorner      int
+		wantApexInset   int
+		wantTriHeight   int
+		wantTriHalfBase int
+	}{
+		{
+			name:  "panel landscape, exactly the reference short edge",
+			width: 1280, height: 720,
+			wantCorner: 80, wantApexInset: 20, wantTriHeight: 60, wantTriHalfBase: 40,
+		},
+		{
+			name:  "panel portrait, exactly the reference short edge",
+			width: 720, height: 1280,
+			wantCorner: 80, wantApexInset: 20, wantTriHeight: 60, wantTriHalfBase: 40,
+		},
+		{
+			name:  "300x250 scales down",
+			width: 300, height: 250,
+			wantCorner: 28, wantApexInset: 7, wantTriHeight: 21, wantTriHalfBase: 14,
+		},
+		{
+			name:  "250x100 scales down further",
+			width: 250, height: 100,
+			wantCorner: 11, wantApexInset: 3, wantTriHeight: 8, wantTriHalfBase: 6,
+		},
+		{
+			name:  "80x48, the blocks backend's smallest common canvas",
+			width: 80, height: 48,
+			wantCorner: 5, wantApexInset: 1, wantTriHeight: 4, wantTriHalfBase: 3,
+		},
+		{
+			name:  "4x4 hits every floor",
+			width: 4, height: 4,
+			wantCorner: 2, wantApexInset: 1, wantTriHeight: 3, wantTriHalfBase: 2,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := metricsFor(testCase.width, testCase.height)
+			want := metrics{
+				corner:           testCase.wantCorner,
+				apexInset:        testCase.wantApexInset,
+				triangleHeight:   testCase.wantTriHeight,
+				triangleHalfBase: testCase.wantTriHalfBase,
+			}
+
+			if got != want {
+				t.Errorf("metricsFor(%d, %d) = %+v, want %+v", testCase.width, testCase.height, got, want)
+			}
+		})
+	}
 }

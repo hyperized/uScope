@@ -32,11 +32,10 @@ pixel sizes. `blocks` gets one pixel per half cell, so an 80x24 window is an
 80x48 canvas, which is coarse enough to count the pixels. It is the fallback
 that always works.
 
-That coarseness shows up in the test scene, whose shapes are sized in pixels
-for the panel: at 80 pixels a side, the four corner squares cover a small
-blocks canvas completely and hide everything else. Use `--backend kitty` to
-see the scene at the size it was drawn for. The scene needs to scale itself
-to its canvas, and does not yet.
+That coarseness used to show up in the test scene, whose shapes are sized in
+pixels for the panel. Below a 720 pixel short edge the scene now scales those
+sizes down to fit; at 1280x720 and above, on the panel and in `kitty` mode, it
+draws exactly as before.
 
 With `--backend auto`, which is the default, uScope tries in this order:
 
