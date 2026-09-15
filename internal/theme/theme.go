@@ -2,15 +2,20 @@
 //
 // It is data and nothing else, so a scene can be handed a palette instead of
 // reaching for named colours, and so the two themes DESIGN.md calls for can
-// be swapped at run time later without touching a scene.
+// be swapped at run time without touching a scene.
 //
-// Night is the only palette so far. It is the default because the uConsole is
-// a backlit handheld: a light field is a torch in the face at night and eats
-// battery all day. Paper, the light theme modelled on the Flightscanner
-// cards, comes with the radar slice.
+// Night is the default because the uConsole is a backlit handheld: a light
+// field is a torch in the face at night and eats battery all day. Paper is
+// modelled on the Flightscanner cards: light field, dark ink, a navy header
+// band. `l` cycles between them at run time and `--theme` picks the one to
+// start on.
 package theme
 
-import "image/color"
+import (
+	"errors"
+	"fmt"
+	"image/color"
+)
 
 // Palette is one complete set of drawing colours. A scene reads from it and
 // names no colours of its own, so a new theme is a new value here rather than
@@ -41,6 +46,13 @@ type Palette struct {
 	AltLow  color.RGBA
 	AltMid  color.RGBA
 	AltHigh color.RGBA
+
+	// Band is the header band's own background, and BandInk the text set on
+	// it. They are separate from Field and Ink because the paper theme's
+	// band is a solid navy strip rather than the page colour, and text on it
+	// needs its own contrast rather than the page's.
+	Band    color.RGBA
+	BandInk color.RGBA
 }
 
 // The Night palette as packed 0xRRGGBB values. They are named constants
@@ -55,6 +67,21 @@ const (
 	nightAltLow  = 0x4CAF6E
 	nightAltMid  = 0xE0A93B
 	nightAltHigh = 0xD05A4A
+)
+
+// The Paper palette, packed the same way. Modelled on an e-paper flight
+// display: dark ink on warm paper, a couple of accents, and a navy band
+// across the header rather than the page colour showing through.
+const (
+	paperField   = 0xF3F1EA
+	paperInk     = 0x1C2230
+	paperMuted   = 0x6E7681
+	paperAccent  = 0xC8700A
+	paperRule    = 0xC9C5BA
+	paperAltLow  = 0x2E8B4F
+	paperAltMid  = 0xB8770B
+	paperAltHigh = 0xB83A2E
+	paperBand    = 0x24304F
 )
 
 // Taking one channel out of a packed colour.
@@ -83,6 +110,33 @@ var Night = Palette{
 	AltLow:  rgb(nightAltLow),
 	AltMid:  rgb(nightAltMid),
 	AltHigh: rgb(nightAltHigh),
+
+	// Band and BandInk repeat Field and Ink: at night the header band sits
+	// flush with the field and its text reads exactly as it did before the
+	// band existed.
+	Band:    rgb(nightField),
+	BandInk: rgb(nightInk),
+}
+
+// Paper is the light theme DESIGN.md calls for: dark ink on warm paper with
+// a navy header band, modelled on an e-paper flight display.
+//
+//nolint:gochecknoglobals // a palette is data, and color.RGBA cannot be const.
+var Paper = Palette{
+	Field:   rgb(paperField),
+	Ink:     rgb(paperInk),
+	Muted:   rgb(paperMuted),
+	Accent:  rgb(paperAccent),
+	Rule:    rgb(paperRule),
+	AltLow:  rgb(paperAltLow),
+	AltMid:  rgb(paperAltMid),
+	AltHigh: rgb(paperAltHigh),
+	Band:    rgb(paperBand),
+
+	// BandInk matches Field rather than getting a colour of its own: the
+	// band is a solid navy strip, and setting its text in the paper's own
+	// colour reads as a cut-out rather than as a second ink to keep track of.
+	BandInk: rgb(paperField),
 }
 
 // rgb turns a packed 0xRRGGBB value into an opaque colour. Writing the
@@ -94,4 +148,58 @@ func rgb(value uint32) color.RGBA {
 		B: uint8(value & byteMask),               //nolint:gosec // the mask leaves one byte.
 		A: opaque,
 	}
+}
+
+// Kind names one of the two themes. It is what --theme parses into and what
+// Config carries as the theme to start on.
+type Kind string
+
+// The two spellings --theme accepts. Named KindNight and KindPaper rather
+// than Night and Paper so they do not collide with the Palette variables
+// above, which are what a Kind resolves to.
+const (
+	KindNight Kind = "night"
+	KindPaper Kind = "paper"
+)
+
+// ErrUnknown is returned for a --theme value that is neither spelling.
+var ErrUnknown = errors.New("theme: unknown theme")
+
+// Parse turns a --theme value into a Kind.
+//
+// The match is case sensitive on purpose. --theme is an allow list, not free
+// text: "Night" is rejected the same way "nite" is, rather than accepted as
+// a friendly variant of a value that already has an exact spelling.
+func Parse(text string) (Kind, error) {
+	switch Kind(text) {
+	case KindNight:
+		return KindNight, nil
+	case KindPaper:
+		return KindPaper, nil
+	default:
+		return KindNight, fmt.Errorf("%w: %q", ErrUnknown, text)
+	}
+}
+
+// Palette resolves a Kind to its colours. Anything that is not KindPaper
+// reads as night, which is what makes the zero value of Kind, the empty
+// string, a usable default rather than a value that has to be special-cased
+// wherever a Kind is read.
+func (k Kind) Palette() Palette {
+	if k == KindPaper {
+		return Paper
+	}
+
+	return Night
+}
+
+// Next cycles to the other theme. As with Palette, anything that is not
+// KindPaper is treated as night and moves to paper, so the zero value cycles
+// the same way KindNight does.
+func (k Kind) Next() Kind {
+	if k == KindPaper {
+		return KindNight
+	}
+
+	return KindPaper
 }

@@ -929,3 +929,27 @@ func TestFrameWithoutPlanesButWithAStatsLine(t *testing.T) {
 		t.Error("the stats line drew nothing with an empty sky, want it to say zero aircraft")
 	}
 }
+
+// TestSetPaletteChangesColours checks the runtime half of the palette
+// contract: SetPalette on an already-built scene has to change what the next
+// Draw paints, which is what the l key relies on to cycle the theme without
+// rebuilding the scene set.
+func TestSetPaletteChangesColours(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Draw(canv, 0)
+
+	if got := canv.Image().RGBAAt(0, 0); got != theme.Night.Field {
+		t.Fatalf("field pixel before SetPalette = %v, want %v", got, theme.Night.Field)
+	}
+
+	scene.SetPalette(theme.Paper)
+	scene.Draw(canv, 0)
+
+	if got := canv.Image().RGBAAt(0, 0); got != theme.Paper.Field {
+		t.Errorf("field pixel after SetPalette(Paper) = %v, want %v", got, theme.Paper.Field)
+	}
+}

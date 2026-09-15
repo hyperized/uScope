@@ -18,6 +18,7 @@ import (
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/term"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fonts"
@@ -203,6 +204,8 @@ func TestClassify(t *testing.T) {
 		{name: "uppercase Q quits", key: input.Key{Kind: input.Rune, Rune: 'Q'}, want: cmdQuit},
 		{name: "lowercase s switches scene", key: input.Key{Kind: input.Rune, Rune: 's'}, want: cmdNextScene},
 		{name: "uppercase S switches scene", key: input.Key{Kind: input.Rune, Rune: 'S'}, want: cmdNextScene},
+		{name: "lowercase l cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'l'}, want: cmdNextTheme},
+		{name: "uppercase L cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'L'}, want: cmdNextTheme},
 		{name: "another rune is unbound", key: input.Key{Kind: input.Rune, Rune: 'x'}, want: cmdNone},
 		{name: "esc quits", key: input.Key{Kind: input.Esc}, want: cmdQuit},
 		{name: "ctrl-c quits", key: input.Key{Kind: input.CtrlC}, want: cmdQuit},
@@ -919,6 +922,49 @@ func TestSessionScene(t *testing.T) {
 
 	if got := ses.scene(); got != Drawer(first) {
 		t.Errorf("after two nextScene() calls, scene() = %v, want the first scene again", got)
+	}
+}
+
+// themedMarker is a Drawer that also implements Themed, recording every
+// palette it is handed. It stands in for the radar and specimen scenes,
+// which is what lets cycleTheme's fan-out be tested without loading a font.
+type themedMarker struct {
+	palettes []theme.Palette
+}
+
+func (*themedMarker) Draw(*canvas.Canvas, time.Duration) {}
+
+func (m *themedMarker) SetPalette(pal theme.Palette) { m.palettes = append(m.palettes, pal) }
+
+// TestSessionCycleTheme checks the l key's fan-out directly: every scene that
+// implements Themed gets the new palette, a plain Drawer is left alone, and
+// two cycles land back where they started.
+func TestSessionCycleTheme(t *testing.T) {
+	t.Parallel()
+
+	themed := &themedMarker{}
+	plain := &markerDrawer{name: "plain"}
+
+	ses := &session{scenes: []Drawer{themed, plain}, themeKind: theme.KindNight}
+
+	ses.cycleTheme()
+
+	if ses.themeKind != theme.KindPaper {
+		t.Errorf("themeKind after one cycle = %v, want %v", ses.themeKind, theme.KindPaper)
+	}
+
+	if len(themed.palettes) != 1 || themed.palettes[0] != theme.Paper {
+		t.Errorf("SetPalette calls = %v, want exactly one call with theme.Paper", themed.palettes)
+	}
+
+	ses.cycleTheme()
+
+	if ses.themeKind != theme.KindNight {
+		t.Errorf("themeKind after two cycles = %v, want %v", ses.themeKind, theme.KindNight)
+	}
+
+	if len(themed.palettes) != 2 || themed.palettes[1] != theme.Night {
+		t.Errorf("SetPalette calls = %v, want a second call with theme.Night", themed.palettes)
 	}
 }
 

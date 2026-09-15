@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
 )
@@ -27,6 +28,7 @@ const (
 	defaultSize    = "1280x720"
 	defaultBackend = "auto"
 	defaultScene   = "radar"
+	defaultTheme   = "night"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -85,6 +87,7 @@ var (
 	errFrames     = errors.New(appName + ": --frames out of range")
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
 	errScene      = errors.New(appName + ": --scene must be radar, pattern or specimen")
+	errTheme      = errors.New(appName + ": --theme must be night or paper")
 	errLatitude   = errors.New(appName + ": --lat out of range")
 	errLongitude  = errors.New(appName + ": --lon out of range")
 	errLatLonPair = errors.New(appName + ": --lat and --lon must be given together")
@@ -106,6 +109,7 @@ type config struct {
 	size        image.Point
 	backend     backend.Kind
 	scene       app.SceneKind
+	theme       theme.Kind
 
 	// Where the aircraft come from, and where the receiver is if the operator
 	// said. hasLocation is separate from the two coordinates because latitude
@@ -127,6 +131,7 @@ type rawFlags struct {
 	size        string
 	backend     string
 	scene       string
+	theme       string
 	beast       string
 	replay      string
 	latitude    string
@@ -175,6 +180,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"where to draw: auto, fb, kitty, blocks or png")
 	set.StringVar(&raw.scene, "scene", defaultScene,
 		"what to draw: radar, pattern or specimen")
+	set.StringVar(&raw.theme, "theme", defaultTheme,
+		"colour theme: night or paper")
 	set.BoolVar(&raw.demo, "demo", false,
 		"fly an invented fleet instead of decoding one, for a machine with no receiver")
 	set.StringVar(&raw.beast, "beast", "",
@@ -225,6 +232,11 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, err
 	}
 
+	themeKind, err := parseTheme(raw.theme)
+	if err != nil {
+		return config{}, err
+	}
+
 	place, err := raw.location()
 	if err != nil {
 		return config{}, err
@@ -246,6 +258,7 @@ func (raw rawFlags) validated() (config, error) {
 		size:        size,
 		backend:     kind,
 		scene:       scene,
+		theme:       themeKind,
 		source:      chosen,
 		beast:       raw.beast,
 		replay:      raw.replay,
@@ -368,6 +381,16 @@ func parseScene(text string) (app.SceneKind, error) {
 	kind, err := app.ParseScene(text)
 	if err != nil {
 		return app.Radar, fmt.Errorf("%w: %w", errScene, err)
+	}
+
+	return kind, nil
+}
+
+// parseTheme reads --theme against internal/theme's allow list.
+func parseTheme(text string) (theme.Kind, error) {
+	kind, err := theme.Parse(text)
+	if err != nil {
+		return theme.KindNight, fmt.Errorf("%w: %w", errTheme, err)
 	}
 
 	return kind, nil

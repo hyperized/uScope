@@ -86,10 +86,7 @@ const (
 )
 
 // The stats line.
-const (
-	statsAircraft  = " AIRCRAFT / FRAMES "
-	statsSeparator = " / "
-)
+const statsAircraft = " AIRCRAFT / "
 
 // legendEntry is one altitude band and the colour that means it.
 type legendEntry struct {
@@ -422,8 +419,12 @@ func (s *Scene) legendEntries() [figureCount]legendEntry {
 }
 
 // drawStats writes the one line that says whether anything is working: how
-// many aircraft are being tracked, how many frames have come in, and where
-// from.
+// many aircraft are being tracked and where from.
+//
+// The frame count used to sit in this line too, but it changes every tick and
+// was more distracting than informative next to numbers that only change when
+// something in the sky does. It is still in source.Frame.Stats for whatever
+// wants it; it just does not go on screen any more.
 func (s *Scene) drawStats(col *layout, frame source.Frame) {
 	face := s.faces.Small
 
@@ -436,8 +437,6 @@ func (s *Scene) drawStats(col *layout, frame source.Frame) {
 
 	pen := drawBytes(col.dst, face, col.left, top, s.count(len(frame.Planes)), s.pal.Ink)
 	pen = text.Draw(col.dst, face, pen, top, statsAircraft, s.pal.Muted)
-	pen = drawBytes(col.dst, face, pen, top, s.counter(frame.Stats.TotalFrames), s.pal.Ink)
-	pen = text.Draw(col.dst, face, pen, top, statsSeparator, s.pal.Muted)
 	text.Draw(col.dst, face, pen, top, clip(frame.Source.Label, maxSourceLabel), s.pal.Muted)
 
 	col.bottom -= height + blockGap

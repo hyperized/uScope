@@ -422,7 +422,7 @@ func TestDrawHeader(t *testing.T) {
 			t.Errorf("y = %d, want %d", lay.y, total)
 		}
 
-		assertPixel(t, canv, 0, band, theme.Night.Muted, "hairline under the header")
+		assertPixel(t, canv, 0, band, theme.Night.Rule, "hairline under the header")
 	})
 }
 

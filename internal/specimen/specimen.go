@@ -147,6 +147,7 @@ var flightRows = [...][columns]string{
 //nolint:gochecknoglobals // scene content, read-only after init.
 var keyCaps = [...]keyCap{
 	{key: "Q", label: "QUIT"},
+	{key: "L", label: "THEME"},
 	{key: "S", label: "SCENE"},
 }
 
@@ -181,11 +182,16 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
-// WithPalette replaces the colours. Only theme.Night exists so far, so this
-// is here for the tests and for the paper theme when it lands.
+// WithPalette replaces the colours at construction.
 func WithPalette(pal theme.Palette) Option {
 	return func(scene *Scene) { scene.pal = pal }
 }
+
+// SetPalette replaces the colours on a scene that is already built. This is
+// what the l key uses to cycle the theme at run time: internal/app calls it
+// on every scene that implements it, not only the one on screen, so
+// switching scenes later still shows the theme that was chosen.
+func (s *Scene) SetPalette(pal theme.Palette) { s.pal = pal }
 
 // New builds the scene around the four faces it will set type in.
 //

@@ -18,6 +18,7 @@ import (
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/term"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/rotate"
@@ -1618,6 +1619,77 @@ func sendTick(t *testing.T, ticker *fakeTicker) {
 	case ticker.ch <- time.Now():
 	case <-time.After(testTimeout):
 		t.Fatal("timed out delivering a tick to the run loop")
+	}
+}
+
+// themedNamedDrawer is a namedDrawer that also implements app.Themed,
+// reporting every palette it is handed on its own channel. It stands in for
+// the radar and specimen scenes, which is what lets the l key be tested
+// without loading a font.
+type themedNamedDrawer struct {
+	name     string
+	calls    chan string
+	palettes chan theme.Palette
+}
+
+func newThemedNamedDrawer(name string, calls chan string, palettes chan theme.Palette) *themedNamedDrawer {
+	return &themedNamedDrawer{name: name, calls: calls, palettes: palettes}
+}
+
+func (d *themedNamedDrawer) Draw(*canvas.Canvas, time.Duration) {
+	d.calls <- d.name
+}
+
+func (d *themedNamedDrawer) SetPalette(pal theme.Palette) {
+	d.palettes <- pal
+}
+
+// TestRunLiveSwitchesTheme mirrors TestRunLiveSwitchesScene, but for the l
+// key rather than s. Unlike a scene switch, a palette change is reported
+// synchronously by SetPalette itself, so this does not need
+// drewSecondScene's tick-until-you-see-it loop: building the scene set
+// applies the starting theme once up front (so the first palette every scene
+// reports is Night), and the l keypress is the second and last report from
+// each, with no tick required to observe either.
+func TestRunLiveSwitchesTheme(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	calls := make(chan string, 4)
+	palettes := make(chan theme.Palette, 4)
+	blitter := newFakeBlitter(16, 16, 16, 32, "fake")
+	ticker := newFakeTicker()
+
+	done := runAsync(ctx, liveConfig(30), io.Discard,
+		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
+		app.WithScenes(
+			newThemedNamedDrawer("first", calls, palettes),
+			newThemedNamedDrawer("second", calls, palettes),
+		),
+		app.WithConsoleSwitch((&switchSpy{}).switchMode),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(&onceReader{data: []byte("l")}),
+		app.WithTicker(ticker.new),
+	)
+
+	for range 2 {
+		if got := recvOrTimeout(t, palettes, testTimeout, "the starting palette"); got != theme.Night {
+			t.Errorf("starting palette = %v, want %v", got, theme.Night)
+		}
+	}
+
+	for range 2 {
+		if got := recvOrTimeout(t, palettes, testTimeout, "the palette after l"); got != theme.Paper {
+			t.Errorf("palette after l = %v, want %v", got, theme.Paper)
+		}
+	}
+
+	cancel()
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return"); err != nil {
+		t.Errorf("Run: %v, want nil", err)
 	}
 }
 

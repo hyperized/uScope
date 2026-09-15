@@ -32,6 +32,7 @@ import (
 
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/term"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fbdev"
@@ -93,6 +94,28 @@ func offerKey(scene Drawer, key input.Key) bool {
 	return ok && binder.Handle(key)
 }
 
+// Themed is the optional other half of a scene's colour contract. A scene
+// that carries a theme.Palette implements it, and the l key cycles the
+// theme by calling SetPalette on every scene that does, not only the one on
+// screen, so switching scenes later still shows the theme that was chosen.
+//
+// It is declared here, where it is consumed, for the same reason KeyHandler
+// is: a scene does not have to import internal/app to satisfy it.
+type Themed interface {
+	SetPalette(pal theme.Palette)
+}
+
+// applyPalette hands the palette to every scene that implements Themed. A
+// scene without one, such as the orientation pattern, is left exactly as it
+// was built.
+func applyPalette(scenes []Drawer, pal theme.Palette) {
+	for _, scene := range scenes {
+		if themed, ok := scene.(Themed); ok {
+			themed.SetPalette(pal)
+		}
+	}
+}
+
 // Config is the parsed intent of the command line.
 type Config struct {
 	FBPath      string
@@ -105,6 +128,10 @@ type Config struct {
 	Size        image.Point
 	Backend     backend.Kind
 	Scene       SceneKind
+
+	// Theme is the colour theme to start on. The zero value reads as
+	// theme.KindNight, which is the default on a backlit handheld.
+	Theme theme.Kind
 }
 
 // session is one backend plus the canvas that fits it, and the label that
@@ -118,6 +145,10 @@ type session struct {
 	// screen, because s cycles between them while the loop runs.
 	scenes []Drawer
 	active int
+
+	// themeKind is the colour theme currently applied, which is what the l
+	// key cycles. It starts at whatever Config.Theme asked for.
+	themeKind theme.Kind
 
 	// console is true only for the framebuffer. It is the framebuffer that
 	// needs the VT switched into graphics mode; doing that to a terminal
@@ -136,6 +167,8 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 	if err != nil {
 		return err
 	}
+
+	applyPalette(scenes, cfg.Theme.Palette())
 
 	active := int(cfg.Scene)
 	if active >= len(scenes) {
@@ -157,6 +190,14 @@ func (s *session) scene() Drawer { return s.scenes[s.active] }
 // nextScene steps to the following scene, wrapping at the end. This is what
 // the s key is bound to.
 func (s *session) nextScene() { s.active = (s.active + 1) % len(s.scenes) }
+
+// cycleTheme steps to the next colour theme and applies it to every scene
+// that takes one, not only the one on screen, so switching scenes later
+// still shows the theme that was picked. This is what the l key is bound to.
+func (s *session) cycleTheme() {
+	s.themeKind = s.themeKind.Next()
+	applyPalette(s.scenes, s.themeKind.Palette())
+}
 
 // sayf writes a line to the console.
 //
@@ -208,6 +249,7 @@ const (
 	cmdNone command = iota
 	cmdQuit
 	cmdNextScene
+	cmdNextTheme
 )
 
 // classify maps a key onto a command.
@@ -233,9 +275,31 @@ func runeCommand(value rune) command {
 		return cmdQuit
 	case 's', 'S':
 		return cmdNextScene
+	case 'l', 'L':
+		return cmdNextTheme
 	default:
 		return cmdNone
 	}
+}
+
+// dispatch applies a classified command to the session and reports whether
+// the loop should stop. It exists as its own function, rather than a run of
+// ifs inline in loop, to keep loop's own branching within the cognitive
+// complexity limit.
+func dispatch(ses *session, action command) bool {
+	if action == cmdQuit {
+		return true
+	}
+
+	if action == cmdNextScene {
+		ses.nextScene()
+	}
+
+	if action == cmdNextTheme {
+		ses.cycleTheme()
+	}
+
+	return false
 }
 
 // renderPNG draws one frame to a file. No device is opened, so this is the
@@ -287,6 +351,7 @@ func (r *runner) renderBackend(ctx context.Context, cfg Config, scenes []Drawer,
 	defer func() { _ = ses.back.Close() }()
 
 	ses.scenes, ses.active = scenes, active
+	ses.themeKind = cfg.Theme
 
 	width, height := ses.back.Size()
 
@@ -495,13 +560,8 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan
 				continue
 			}
 
-			action := classify(key)
-			if action == cmdQuit {
+			if dispatch(ses, classify(key)) {
 				return nil
-			}
-
-			if action == cmdNextScene {
-				ses.nextScene()
 			}
 		case now := <-tick:
 			if err := ses.frame(ses.scene(), now.Sub(start)); err != nil {

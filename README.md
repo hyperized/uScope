@@ -78,7 +78,7 @@ compass points under it, and three figures along the bottom: distance in
 nautical miles, altitude in feet, speed in knots. Under the card is one
 compact row per aircraft, nearest first, and the row for the selected one
 carries the accent bar. Under that, the altitude legend and a line saying how
-many aircraft are being tracked, how many frames have come in, and where from.
+many aircraft are being tracked and where from.
 
 Units are nautical miles, feet and knots throughout, because that is what
 aviation uses and converting would only make the numbers harder to check
@@ -149,6 +149,14 @@ than drawn over its neighbour, so the same scene renders at 1280x720 on the
 panel and on a canvas of a few dozen pixels. An 80x24 terminal of half blocks
 is a canvas 80 by 48, and all that fits there is the key bar. Give it a
 320x200 window and the header band and the two compact rows come back.
+
+## Themes
+
+uScope has two colour themes. Night is the default: a near-black field, light
+ink, and it costs the least on a backlit handheld in the dark. Paper is
+modelled on an e-paper flight display: a light field, dark ink, and a navy
+header band. `l` cycles between them at run time, on whichever scene is on
+screen, and `--theme night` or `--theme paper` picks the one to start on.
 
 ## Fonts
 
@@ -307,6 +315,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 |---|---|
 | `q`, `Q` | quit |
 | `s`, `S` | step to the next scene |
+| `l`, `L` | cycle the colour theme |
 | `n`, `N`, Down | select the next aircraft |
 | `p`, `P`, Up | select the previous one |
 | `+`, `=` | widen the range by one step, and turn auto off |
@@ -334,6 +343,7 @@ the selected one goes out of range the selection falls to the nearest.
 |---|---|---|
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
 | `--scene` | `radar` | `radar`, `pattern` or `specimen` |
+| `--theme` | `night` | `night` or `paper` colour theme |
 | `--demo` | off | fly twelve invented aircraft instead of decoding any |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
 | `--replay-iq` | | replay a captured IQ file through the demodulator |
@@ -451,10 +461,11 @@ the difference between a reproducible build and one that changes under you.
 
 ## What comes next
 
-Two questions [DESIGN.md](DESIGN.md) left open are still open. Trails fade by
+One question [DESIGN.md](DESIGN.md) left open is still open. Trails fade by
 age, which was the thing to try first and looks right, but nobody has seen it
-next to a version that fades by altitude. And the paper theme has not been
-built, so whether it is worth keeping is still a guess.
+next to a version that fades by altitude. The paper theme is built now
+(`--theme paper`, `l` to switch at run time); whether it is worth keeping
+next to night is still a guess nobody has weighed in on.
 
 Nobody has looked at the radar on the panel yet. That is `make radar`.
 

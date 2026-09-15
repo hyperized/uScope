@@ -21,6 +21,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/fbdev"
 	"github.com/hyperized/uScope/pkg/rotate"
@@ -53,6 +54,7 @@ const (
 	flagFrames  = "--frames"
 	flagPNG     = "--png"
 	flagScene   = "--scene"
+	flagTheme   = "--theme"
 	flagDemo    = "--demo"
 	flagBeast   = "--beast"
 	flagReplay  = "--replay-iq"
@@ -63,14 +65,17 @@ const (
 	// spellings, named because they turn up in several tables.
 	patternValue  = "pattern"
 	specimenValue = "specimen"
-	demoValue     = "demo"
-	demoLabel     = "DEMO"
-	captureFile   = "capture.iq"
-	kittyValue    = "kitty"
-	blocksValue   = "blocks"
-	pngValue      = "png"
-	caseDefault   = "default"
-	caseMaxEdge   = "maximum edge"
+
+	// paperValue is the one non-default --theme spelling.
+	paperValue  = "paper"
+	demoValue   = "demo"
+	demoLabel   = "DEMO"
+	captureFile = "capture.iq"
+	kittyValue  = "kitty"
+	blocksValue = "blocks"
+	pngValue    = "png"
+	caseDefault = "default"
+	caseMaxEdge = "maximum edge"
 )
 
 // errUnrelated stands in for "some error that has nothing to do with the
@@ -96,6 +101,7 @@ func defaultConfig() config {
 		autoRotate: true,
 		fps:        defaultFPS,
 		size:       image.Pt(widthLandscape, heightLandscape),
+		theme:      theme.KindNight,
 	}
 }
 
@@ -713,6 +719,7 @@ func TestBind(t *testing.T) {
 		{name: "size", flagName: "size", wantDef: defaultSize},
 		{name: "backend", flagName: "backend", wantDef: defaultBackend},
 		{name: "frames", flagName: "frames", wantDef: strconv.Itoa(minFrames)},
+		{name: "theme", flagName: "theme", wantDef: defaultTheme},
 	}
 
 	for _, testCase := range tests {
@@ -963,6 +970,82 @@ func TestSceneReachesConfig(t *testing.T) {
 
 	if cfg.scene != app.Specimen {
 		t.Errorf("config.scene = %v, want %v", cfg.scene, app.Specimen)
+	}
+}
+
+func TestParseFlagsTheme(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want theme.Kind
+	}{
+		{name: caseDefault, args: nil, want: theme.KindNight},
+		{name: "night explicit", args: []string{flagTheme, defaultTheme}, want: theme.KindNight},
+		{name: paperValue, args: []string{flagTheme, paperValue}, want: theme.KindPaper},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.theme = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsThemeRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown theme", args: []string{flagTheme, "sepia"}},
+		{name: "empty theme", args: []string{flagTheme, ""}},
+		{
+			// --theme is an allow list, not free text: the exact spelling is
+			// what is accepted, not a case-insensitive match of it.
+			name: "wrong case", args: []string{flagTheme, "Night"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errTheme) {
+				t.Fatalf("parseFlags(%v) error = %v, want errTheme", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, theme.ErrUnknown) {
+				t.Errorf("parseFlags(%v) error = %v, want theme.ErrUnknown wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestThemeReachesConfig pins that --theme actually arrives in the
+// app.Config main hands to app.Run, which is the one line of wiring no other
+// test in this file covers.
+func TestThemeReachesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagTheme, paperValue})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if cfg.theme != theme.KindPaper {
+		t.Errorf("config.theme = %v, want %v", cfg.theme, theme.KindPaper)
 	}
 }
 

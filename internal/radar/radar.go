@@ -139,11 +139,16 @@ type Scene struct {
 // Option adjusts a Scene at construction.
 type Option func(*Scene)
 
-// WithPalette replaces the colours. Only theme.Night exists so far, so this
-// is here for the tests and for the paper theme when it lands.
+// WithPalette replaces the colours at construction.
 func WithPalette(pal theme.Palette) Option {
 	return func(s *Scene) { s.pal = pal }
 }
+
+// SetPalette replaces the colours on a scene that is already built. This is
+// what the l key uses to cycle the theme at run time: internal/app calls it
+// on every scene that implements it, not only the one on screen, so
+// switching scenes later still shows the theme that was chosen.
+func (s *Scene) SetPalette(pal theme.Palette) { s.pal = pal }
 
 // WithClock replaces the fallback clock. It is only consulted when the source
 // hands back a frame with no timestamp on it, which a real source never does.

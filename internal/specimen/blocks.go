@@ -53,9 +53,11 @@ func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string) int {
 // drawHeader draws the band across the top: the wordmark on the left, the
 // clock on the right, a hairline under both.
 //
-// The wordmark is muted and the clock is ink because that is the rule the
-// whole scene follows: chrome is muted, data is ink, and the clock is the one
-// number in the header that changes.
+// The band is filled with pal.Band and both texts are set in pal.BandInk
+// rather than the scene's usual muted/ink split, because paper's band is a
+// navy strip and needs its own contrast rather than the page's. Night's Band
+// and BandInk repeat Field and Ink, so there the band is invisible and the
+// text reads exactly as it did before the band existed.
 func (s *Scene) drawHeader(lay *layout) {
 	titleHeight := lineHeight(s.faces.BodyBold)
 	clockHeight := lineHeight(s.faces.Large)
@@ -71,15 +73,17 @@ func (s *Scene) drawHeader(lay *layout) {
 		return
 	}
 
+	lay.dst.FillRect(image.Rect(lay.left, lay.y, lay.right, lay.y+band), s.pal.Band)
+
 	baseline := lay.y + band - headerPadY
 	clock := s.now().Format(clockFormat)
 
-	text.Draw(lay.dst, s.faces.BodyBold, lay.left, baseline-titleHeight, appTitle, s.pal.Muted,
+	text.Draw(lay.dst, s.faces.BodyBold, lay.left, baseline-titleHeight, appTitle, s.pal.BandInk,
 		text.WithSpacing(headerTracking))
-	text.DrawRight(lay.dst, s.faces.Large, lay.right, baseline-clockHeight, clock, s.pal.Ink)
+	text.DrawRight(lay.dst, s.faces.Large, lay.right, baseline-clockHeight, clock, s.pal.BandInk)
 
 	rule := lay.y + band
-	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Muted)
+	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Rule)
 
 	lay.advance(total)
 }

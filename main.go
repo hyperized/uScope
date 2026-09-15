@@ -100,6 +100,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Size:        cfg.size,
 		Backend:     cfg.backend,
 		Scene:       cfg.scene,
+		Theme:       cfg.theme,
 	}
 
 	// Warnings go to stderr because a terminal backend is busy writing

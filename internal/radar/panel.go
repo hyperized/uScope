@@ -54,6 +54,7 @@ var keyCaps = [...]keyCap{
 	{key: "+/-", label: "RANGE"},
 	{key: "A", label: "AUTO"},
 	{key: "T", label: "TRAILS"},
+	{key: "L", label: "THEME"},
 	{key: "S", label: "SCENE"},
 }
 
@@ -109,8 +110,11 @@ func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string) int {
 // the left with the receiver position under them, the clock on the right, a
 // hairline under all of it.
 //
-// Chrome is muted and data is ink, which is the rule the whole scene follows.
-// The clock and the coordinates are the only things in the band that change.
+// The band is filled with pal.Band and everything on it is set in pal.BandInk
+// rather than the scene's usual muted/ink split, because paper's band is a
+// navy strip and needs its own contrast rather than the page's. Night's Band
+// and BandInk repeat Field and Ink, so there the band is invisible and the
+// text reads exactly as it did before the band existed.
 func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	markHeight := lineHeight(s.faces.BodyBold)
 	smallHeight := lineHeight(s.faces.Small)
@@ -127,16 +131,18 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 		return
 	}
 
+	lay.dst.FillRect(image.Rect(lay.left, lay.top, lay.right, lay.top+band), s.pal.Band)
+
 	top := lay.top + headerPadY
 
 	s.drawWordmark(lay, top, frame)
 	s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
 
 	clock := frame.Now.AppendFormat(s.clock[:0], clockFormat)
-	drawBytesRight(lay.dst, s.faces.Large, lay.right, lay.top+(band-clockHeight)/2, clock, s.pal.Ink)
+	drawBytesRight(lay.dst, s.faces.Large, lay.right, lay.top+(band-clockHeight)/2, clock, s.pal.BandInk)
 
 	rule := lay.top + band
-	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Muted)
+	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Rule)
 
 	lay.top += total
 }
@@ -146,14 +152,15 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 // The dot is filled when the source is connected and hollow when it is not,
 // which is one glance rather than a word to read. It is the low-altitude
 // green rather than the accent, because the accent marks the selected
-// aircraft and nothing else.
+// aircraft and nothing else, and it is left in its own colour rather than
+// moved onto the band's BandInk/Muted split: it is a status light, not text.
 func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame) {
 	// Both faces are known to be present: drawHeader drops the whole band
 	// unless all three of its faces loaded, so there is nothing to check here.
 	face := s.faces.Small
 	markHeight := lineHeight(s.faces.BodyBold)
 
-	pen := text.Draw(lay.dst, s.faces.BodyBold, lay.left, top, appTitle, s.pal.Muted,
+	pen := text.Draw(lay.dst, s.faces.BodyBold, lay.left, top, appTitle, s.pal.BandInk,
 		text.WithSpacing(headerTracking))
 
 	pen += sourceGap
@@ -167,7 +174,7 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame) {
 
 	pen += 2*dotRadius + dotGap
 	text.Draw(lay.dst, face, pen, top+(markHeight-face.Height())/2,
-		clip(frame.Source.Label, maxSourceLabel), s.pal.Muted, text.WithSpacing(labelTracking))
+		clip(frame.Source.Label, maxSourceLabel), s.pal.BandInk, text.WithSpacing(labelTracking))
 }
 
 // drawReceiverLine says where the scope is centred and how much that is
@@ -175,7 +182,9 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame) {
 //
 // The three forms are deliberately different lengths and shapes so they
 // cannot be confused at a glance: a fix reads as two coordinates, an estimate
-// as a radius, and nothing at all as two words.
+// as a radius, and nothing at all as two words. Everything here is set in
+// BandInk: it sits inside the header band, where the scene's usual
+// muted/ink split gives way to the band's own contrast.
 //
 // The face is known to be present for the same reason drawWordmark's is:
 // drawHeader drops the band rather than half of it.
@@ -184,15 +193,15 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 
 	switch receiver.Label {
 	case source.LabelEstimate:
-		pen := text.Draw(lay.dst, face, lay.left, top, estimatePrefix, s.pal.Muted)
-		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.ConfidenceNm), s.pal.Muted)
-		text.Draw(lay.dst, face, pen, top, rangeUnit, s.pal.Muted)
+		pen := text.Draw(lay.dst, face, lay.left, top, estimatePrefix, s.pal.BandInk)
+		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.ConfidenceNm), s.pal.BandInk)
+		text.Draw(lay.dst, face, pen, top, rangeUnit, s.pal.BandInk)
 	case source.LabelNone:
-		text.Draw(lay.dst, face, lay.left, top, noFixText, s.pal.Muted)
+		text.Draw(lay.dst, face, lay.left, top, noFixText, s.pal.BandInk)
 	default:
-		pen := drawBytes(lay.dst, face, lay.left, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.Ink)
-		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.Muted)
-		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.Ink)
+		pen := drawBytes(lay.dst, face, lay.left, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.BandInk)
+		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.BandInk)
+		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.BandInk)
 	}
 }
 
