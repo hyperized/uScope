@@ -150,6 +150,17 @@ func rgb(value uint32) color.RGBA {
 	}
 }
 
+// Light reports whether this palette draws on a light field.
+//
+// A scene needs it when it has to adapt a colour that did not come out of the
+// palette. An airline's brand colour is the case that forced it: the same navy
+// has to be lifted off night's near-black field and pushed down onto paper's,
+// and the palette is the only thing the scene is handed that says which of the
+// two it is drawing on. Anything that is not Paper reads as dark, which is the
+// rule Kind.Palette and Kind.Next already follow, so a palette assembled by
+// hand in a test behaves like night rather than like neither.
+func (p Palette) Light() bool { return p == Paper }
+
 // Kind names one of the two themes. It is what --theme parses into and what
 // Config carries as the theme to start on.
 type Kind string

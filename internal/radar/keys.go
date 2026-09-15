@@ -48,10 +48,14 @@ func (s *Scene) handleRune(value rune) bool {
 		s.stepRange(1)
 	case '-', '_':
 		s.stepRange(-1)
-	case 'a', 'A':
+	case 'r', 'R':
 		s.autoRange = !s.autoRange
 	case 't', 'T':
 		s.trails = !s.trails
+	case 'a', 'A':
+		s.airports = !s.airports
+	case 'c', 'C':
+		s.colour = s.colour.Next()
 	default:
 		return false
 	}

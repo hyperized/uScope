@@ -41,6 +41,12 @@ const (
 	// and starts looking like the operator's actual brand colour.
 	darkFloorLuminance = 0.18
 
+	// lightCeilingLuminance is the mirror of darkFloorLuminance for the paper
+	// theme. The paper field sits at a relative luminance of about 0.88, so a
+	// colour has to come down well below that before it reads as a shape on the
+	// page rather than as a pale wash. 0.45 is where that happens on this panel.
+	lightCeilingLuminance = 0.45
+
 	// bisectionIterations is fixed rather than convergence-checked so OnDark
 	// produces the exact same bytes on every platform it runs on.
 	bisectionIterations = 24
@@ -204,6 +210,36 @@ func (a Airline) OnDark() color.RGBA {
 	}
 
 	red, green, blue := hslToRGB(hue, saturation, high)
+
+	return color.RGBA{R: red, G: green, B: blue, A: maxChannel}
+}
+
+// OnLight returns the colour the radar should draw on the paper theme's light
+// field: the same hue and saturation, with the lightness lowered just enough
+// that the colour comes down to lightCeilingLuminance. A colour already at or
+// under the ceiling comes back unchanged. Alpha is always 255.
+func (a Airline) OnLight() color.RGBA {
+	if relativeLuminance(a.Color) <= lightCeilingLuminance {
+		return color.RGBA{R: a.Color.R, G: a.Color.G, B: a.Color.B, A: maxChannel}
+	}
+
+	hue, saturation, lightness := rgbToHSL(a.Color)
+	low, high := 0.0, lightness
+
+	for range bisectionIterations {
+		mid := (low + high) / 2
+
+		red, green, blue := hslToRGB(hue, saturation, mid)
+		if relativeLuminance(color.RGBA{R: red, G: green, B: blue, A: maxChannel}) > lightCeilingLuminance {
+			high = mid
+
+			continue
+		}
+
+		low = mid
+	}
+
+	red, green, blue := hslToRGB(hue, saturation, low)
 
 	return color.RGBA{R: red, G: green, B: blue, A: maxChannel}
 }

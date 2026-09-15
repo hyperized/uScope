@@ -552,6 +552,108 @@ func TestDrawTwiceIsIdempotent(t *testing.T) {
 	}
 }
 
+// Offsets for the two synthetic zones TestDrawWithTwoClocks builds the same
+// instant in. The values themselves do not matter, only that they differ, so
+// the local half of the header reads a different wall clock in each.
+const (
+	zoneAOffsetSeconds = 2 * 60 * 60  // UTC+2
+	zoneBOffsetSeconds = -5 * 60 * 60 // UTC-5
+)
+
+// TestDrawTwoClocksHeaderStillRenders checks that the header band still
+// paints something now that it holds two clocks instead of one.
+func TestDrawTwoClocksHeaderStillRenders(t *testing.T) {
+	t.Parallel()
+
+	faces := newFaces(t)
+	fixed := time.Date(fixedYear, time.January, 1, earlyHour, earlyMinute, 0, 0, time.UTC)
+
+	canv, err := canvas.New(canvasWidth, canvasHeight)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	specimen.New(faces, specimen.WithClock(func() time.Time { return fixed })).Draw(canv, 0)
+
+	img := canv.Image()
+	if !bandHasNonField(img, headerBandTop, headerBandBottom, img.RGBAAt(0, 0)) {
+		t.Error("header band has no drawn pixels with both clocks in place")
+	}
+}
+
+// TestDrawTwoClocksFixedInstantIsDeterministic checks that a scene built with
+// a fixed WithClock instant draws the same frame every time, which is what
+// lets the other two-clock tests trust a single Draw call as representative.
+func TestDrawTwoClocksFixedInstantIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	faces := newFaces(t)
+	fixed := time.Date(fixedYear, time.January, 1, earlyHour, earlyMinute, 0, 0, time.UTC)
+
+	canv, err := canvas.New(canvasWidth, canvasHeight)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	scene := specimen.New(faces, specimen.WithClock(func() time.Time { return fixed }))
+
+	scene.Draw(canv, 0)
+	first := append([]byte(nil), canv.Image().Pix...)
+
+	scene.Draw(canv, 0)
+
+	if !bytes.Equal(first, canv.Image().Pix) {
+		t.Error("the same fixed instant drew two different frames, want the header clocks to be deterministic")
+	}
+}
+
+// TestDrawTwoClocksDifferentZonesDrawDifferentFrames checks the two-clock
+// split itself: the same instant, read in two different zones, has to draw a
+// different frame. It can only be the local clock that moved, because the
+// UTC clock always formats the zone-independent .UTC() view of the instant,
+// which is identical in both cases; that is asserted on the fixture below
+// rather than assumed.
+func TestDrawTwoClocksDifferentZonesDrawDifferentFrames(t *testing.T) {
+	t.Parallel()
+
+	faces := newFaces(t)
+	fixed := time.Date(fixedYear, time.January, 1, earlyHour, earlyMinute, 0, 0, time.UTC)
+
+	zoneA := time.FixedZone("A", zoneAOffsetSeconds)
+	zoneB := time.FixedZone("B", zoneBOffsetSeconds)
+
+	instantA := fixed.In(zoneA)
+	instantB := fixed.In(zoneB)
+
+	// Fixture check: what follows only means anything if these two really are
+	// the same instant in history, merely expressed in different zones.
+	if !instantA.Equal(instantB) {
+		t.Fatal("fixture error: instantA and instantB are not the same instant")
+	}
+
+	if !instantA.UTC().Equal(instantB.UTC()) {
+		t.Fatal("fixture error: instantA.UTC() and instantB.UTC() differ")
+	}
+
+	canvasA, err := canvas.New(canvasWidth, canvasHeight)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	specimen.New(faces, specimen.WithClock(func() time.Time { return instantA })).Draw(canvasA, 0)
+
+	canvasB, err := canvas.New(canvasWidth, canvasHeight)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	specimen.New(faces, specimen.WithClock(func() time.Time { return instantB })).Draw(canvasB, 0)
+
+	if bytes.Equal(canvasA.Image().Pix, canvasB.Image().Pix) {
+		t.Error("the same instant in two zones drew identical frames, want the local clock's text to differ")
+	}
+}
+
 func TestDrawElapsedIsIgnored(t *testing.T) {
 	t.Parallel()
 

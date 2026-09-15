@@ -257,11 +257,14 @@ func (d *Demo) Frame() Frame {
 	d.ticks++
 
 	return Frame{
-		Planes:   d.snapshot(now),
-		Receiver: Receiver{Latitude: d.lat, Longitude: d.lon, HasFix: true, Label: LabelManual},
-		Source:   adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
-		Stats:    d.stats(),
-		Now:      now,
+		Planes: d.snapshot(now),
+		Receiver: Receiver{
+			Latitude: d.lat, Longitude: d.lon, HasFix: true,
+			Label: LabelManual, Mode: FixManual,
+		},
+		Source: adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
+		Stats:  d.stats(),
+		Now:    now,
 	}
 }
 

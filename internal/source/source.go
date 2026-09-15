@@ -43,6 +43,42 @@ const (
 	LabelNone = "none"
 )
 
+// FixMode says how the receiver's position was arrived at.
+//
+// It is separate from Label because the label is what the header writes and
+// this is what the scope colours the home marker with. A string is fine to
+// print and a poor thing to switch on.
+type FixMode uint8
+
+// The fix modes, in the order they get better.
+const (
+	// FixNone means nothing is known and nothing can be plotted.
+	FixNone FixMode = iota
+
+	// FixManual is a position the operator typed in with --lat and --lon. It
+	// is as good as the operator's map and uScope cannot check it.
+	FixManual
+
+	// FixEstimated is the self-locate fallback, worked out by intersecting the
+	// radio horizons of aircraft the receiver can hear. Good enough to centre
+	// a scope on, and tens of nautical miles wide.
+	FixEstimated
+
+	// FixGPSNoFix is a GPS that is connected and has not locked yet.
+	//
+	// Nothing produces it today. uScope has no GPS, so every position that
+	// reaches it either has a fix or is not from a GPS at all. It is mapped
+	// and coloured so that wiring gpsd in later is a change in one function
+	// rather than a change in the scene as well.
+	FixGPSNoFix
+
+	// FixGPS2D is a fix without altitude.
+	FixGPS2D
+
+	// FixGPS3D is a full fix.
+	FixGPS3D
+)
+
 // Receiver is where the scope is centred and how much that is worth.
 //
 // ConfidenceNm is the self-locate radius in nautical miles and is zero for
@@ -54,6 +90,10 @@ type Receiver struct {
 	ConfidenceNm float64
 	HasFix       bool
 	Label        string
+
+	// Mode is Label's machine-readable half, which is what the scope colours
+	// the home marker by.
+	Mode FixMode
 }
 
 // Frame is everything the radar needs to draw one frame.
@@ -88,7 +128,8 @@ type Source interface {
 // never given anywhere to look.
 type Empty struct{}
 
-// Frame hands back nothing at all.
+// Frame hands back nothing at all. The zero FixMode is FixNone, which is the
+// honest answer for a source that was never given anywhere to look.
 func (Empty) Frame() Frame { return Frame{Receiver: Receiver{Label: LabelNone}} }
 
 // Close has nothing to release.

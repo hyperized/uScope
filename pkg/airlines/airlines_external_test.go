@@ -2,6 +2,7 @@ package airlines_test
 
 import (
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/hyperized/uScope/pkg/airlines"
@@ -258,6 +259,170 @@ func TestOnDarkIsIdempotent(t *testing.T) {
 	if diff := int(once.B) - int(twice.B); diff > onDarkTolerance || diff < -onDarkTolerance {
 		t.Errorf("OnDark twice: B %d vs %d, want within %d", once.B, twice.B, onDarkTolerance)
 	}
+}
+
+// onLightTolerance is the sibling of onDarkTolerance for the OnLight tests
+// below: how many units per channel rounding is allowed, both against a
+// hand-computed target and between two applications of OnLight in the
+// idempotency check.
+const onLightTolerance = 1
+
+// wantLightCeiling mirrors the package's own lightCeilingLuminance, so the
+// tests below can check OnLight's promise without reaching into the
+// unexported constant.
+const wantLightCeiling = 0.45
+
+func TestOnLightWhiteComesDown(t *testing.T) {
+	t.Parallel()
+
+	white := airlines.Airline{Color: color.RGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}}
+
+	got := white.OnLight()
+	if got.R != got.G || got.G != got.B {
+		t.Fatalf("OnLight(white) = %v, want equal R, G, B", got)
+	}
+
+	if luminance := wcagRelativeLuminance(got); luminance > wantLightCeiling {
+		t.Errorf("OnLight(white) luminance = %v, want at or under %v", luminance, wantLightCeiling)
+	}
+}
+
+func TestOnLightBlackIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	black := airlines.Airline{Color: color.RGBA{A: 0xFF}}
+
+	got := black.OnLight()
+	if got != black.Color {
+		t.Errorf("OnLight(black) = %v, want %v unchanged", got, black.Color)
+	}
+}
+
+func TestOnLightBelowCeilingIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	navy := airlines.Airline{Color: color.RGBA{R: 0x05, G: 0x16, B: 0x4D, A: 0xFF}}
+
+	got := navy.OnLight()
+	if got != navy.Color {
+		t.Errorf("OnLight(navy) = %v, want %v unchanged", got, navy.Color)
+	}
+}
+
+// Vueling's yellow, unlike easyJet's orange, actually clears
+// lightCeilingLuminance (0.61 against a 0.45 ceiling), which is what this
+// case needs: a bright, saturated colour the panel would otherwise wash out
+// against the paper field.
+func TestOnLightVuelingStaysYellow(t *testing.T) {
+	t.Parallel()
+
+	vuelingYellow := airlines.Airline{Color: color.RGBA{R: 0xFF, G: 0xCC, B: 0x00, A: 0xFF}}
+
+	got := vuelingYellow.OnLight()
+	if got == vuelingYellow.Color {
+		t.Fatal("OnLight(Vueling yellow) returned the input unchanged, want it lowered")
+	}
+
+	if got.R < got.G || got.R < got.B {
+		t.Errorf("OnLight(Vueling yellow) = %v, want R to remain the largest channel", got)
+	}
+
+	if got.B > got.R || got.B > got.G {
+		t.Errorf("OnLight(Vueling yellow) = %v, want B to remain the smallest channel", got)
+	}
+}
+
+func TestOnLightIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	vuelingYellow := airlines.Airline{Color: color.RGBA{R: 0xFF, G: 0xCC, B: 0x00, A: 0xFF}}
+
+	once := vuelingYellow.OnLight()
+	twice := airlines.Airline{Color: once}.OnLight()
+
+	for _, channel := range []struct {
+		name        string
+		once, twice uint8
+	}{
+		{name: "R", once: once.R, twice: twice.R},
+		{name: "G", once: once.G, twice: twice.G},
+		{name: "B", once: once.B, twice: twice.B},
+	} {
+		diff := int(channel.once) - int(channel.twice)
+		if diff > onLightTolerance || diff < -onLightTolerance {
+			t.Errorf("OnLight twice: %s %d vs %d, want within %d",
+				channel.name, channel.once, channel.twice, onLightTolerance)
+		}
+	}
+}
+
+// The constants below mirror the sRGB gamma correction and luminance weights
+// airlines.go's own linearize and relativeLuminance use. They are redeclared
+// here rather than shared, because wcagRelativeLuminance is deliberately a
+// second implementation: TestOnLightSweep checks the promise OnLight makes,
+// not the code that makes it.
+const (
+	wcagGammaThreshold = 0.04045
+	wcagLinearDivisor  = 12.92
+	wcagGammaOffset    = 0.055
+	wcagGammaDivisor   = 1.055
+	wcagGammaExponent  = 2.4
+
+	wcagRedWeight   = 0.2126
+	wcagGreenWeight = 0.7152
+	wcagBlueWeight  = 0.0722
+
+	wcagByteMax = 255.0
+)
+
+// wcagRelativeLuminance computes WCAG relative luminance independently of the
+// package's own relativeLuminance. See the constant block above for why it
+// duplicates the formula instead of importing it.
+func wcagRelativeLuminance(col color.RGBA) float64 {
+	red := wcagLinearize(float64(col.R) / wcagByteMax)
+	green := wcagLinearize(float64(col.G) / wcagByteMax)
+	blue := wcagLinearize(float64(col.B) / wcagByteMax)
+
+	return wcagRedWeight*red + wcagGreenWeight*green + wcagBlueWeight*blue
+}
+
+// wcagLinearize converts one sRGB channel, in the 0-1 range, to linear light.
+func wcagLinearize(channel float64) float64 {
+	if channel <= wcagGammaThreshold {
+		return channel / wcagLinearDivisor
+	}
+
+	return math.Pow((channel+wcagGammaOffset)/wcagGammaDivisor, wcagGammaExponent)
+}
+
+// TestOnLightSweep runs OnLight over every airline in the database and checks
+// the two promises its doc comment makes: the result never measures above the
+// ceiling, and alpha stays opaque. It also logs how many rows OnLight
+// actually lowered, since that number is the only way to tell how much of the
+// catalog sits above the paper theme's ceiling.
+func TestOnLightSweep(t *testing.T) {
+	t.Parallel()
+
+	all := airlines.All()
+	changed := 0
+
+	for _, airline := range all {
+		got := airline.OnLight()
+
+		if got.A != 0xFF {
+			t.Errorf("%s.OnLight().A = %#x, want 0xff", airline.ICAO, got.A)
+		}
+
+		if luminance := wcagRelativeLuminance(got); luminance > wantLightCeiling {
+			t.Errorf("%s.OnLight() luminance = %v, want at or under %v", airline.ICAO, luminance, wantLightCeiling)
+		}
+
+		if got != airline.Color {
+			changed++
+		}
+	}
+
+	t.Logf("OnLight changed %d of %d airlines", changed, len(all))
 }
 
 // TestLookupAllocs must not be parallel: AllocsPerRun needs the runtime's

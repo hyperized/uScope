@@ -63,17 +63,6 @@ const (
 	maxSquawk   = 4
 )
 
-// The compact rows. Their columns are sized in characters rather than
-// measured from the values in them, for the same reason the card's figures
-// are: a measured column jumps about as the numbers change, and a table that
-// moves is harder to read than one that wastes a few pixels.
-const (
-	rowIndexChars    = 2
-	rowCallsignChars = maxCallsign
-	rowAltitudeChars = 6
-	rowDistanceChars = 6
-)
-
 // The legend along the bottom of the column.
 const (
 	swatchSide = 10
@@ -96,10 +85,15 @@ type legendEntry struct {
 
 // drawColumn fills the right-hand column.
 //
-// The legend and the stats take their room off the bottom before anything
-// else runs, the card takes its room off the top, and the compact rows get
-// whatever is left. That ordering is what lets the rows grow on a tall canvas
-// and disappear on a short one without pushing the legend off the screen.
+// Everything with a fixed height takes its room first: the stats line, the
+// legend and the details block off the bottom, the card off the top. The
+// compact rows get what is left, which is what fills the column at any height
+// rather than leaving the hole the first version of this layout had under the
+// list.
+//
+// The order the blocks are called in is the order they claim space, not the
+// order they appear on screen. Reading down the frame it is card, rows,
+// details, legend, stats.
 func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	if lay.column.Empty() {
 		return
@@ -115,8 +109,9 @@ func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	}
 
 	s.drawStats(&col, frame)
-	s.drawLegend(&col)
+	s.drawLegend(&col, frame)
 	s.drawCard(&col, frame)
+	s.drawDetails(&col, frame)
 	s.drawRows(&col, frame)
 }
 
@@ -211,7 +206,7 @@ func (s *Scene) drawLabelNumber(dst *canvas.Canvas, x, y, position int) int {
 func (s *Scene) drawCardIdentity(dst *canvas.Canvas, box image.Rectangle, plane airplane.Snapshot) {
 	large, body := s.faces.Large, s.faces.Body
 
-	text.Draw(dst, large, box.Min.X, box.Min.Y, clip(callsignOf(plane), maxCallsign), s.pal.Ink,
+	text.Draw(dst, large, box.Min.X, box.Min.Y, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane),
 		text.WithScale(cardTitleScale))
 
 	s.drawCardTrack(dst, box.Min.X, box.Min.Y+lineHeight(large)*cardTitleScale, plane.Heading)
@@ -268,19 +263,35 @@ func (s *Scene) drawCardFigures(
 
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 
-	s.drawFigure(dst, box.Min.X, box.Min.Y, unitTop, s.distance(away), unitNm)
-	s.drawFigure(dst, box.Min.X+column, box.Min.Y, unitTop, s.thousands(plane.Altitude), unitFT)
-	s.drawFigure(dst, box.Min.X+2*column, box.Min.Y, unitTop, s.whole(plane.Velocity), unitKT)
+	s.drawFigure(dst, box.Min.X, box.Min.Y, unitTop,
+		figure{value: s.distance(away), unit: unitNm, ink: s.pal.Ink})
+	s.drawFigure(dst, box.Min.X+column, box.Min.Y, unitTop,
+		figure{value: s.thousands(plane.Altitude), unit: unitFT, ink: s.bandColour(plane.Altitude)})
+	s.drawFigure(dst, box.Min.X+2*column, box.Min.Y, unitTop,
+		figure{value: s.whole(plane.Velocity), unit: unitKT, ink: s.pal.Ink})
+}
+
+// figure is one of the three numbers along the bottom of the card.
+//
+// The three parts travel together because they belong to one cell, and because
+// the altitude figure takes its own ink: passing a sixth loose argument to
+// drawFigure would have made its signature the longest in the package for no
+// gain in clarity.
+type figure struct {
+	value []byte
+	unit  string
+	ink   color.RGBA
 }
 
 // drawFigure draws one number with its unit.
 //
 // Each figure is formatted immediately before it is drawn because they all
 // share the scene's one scratch buffer; formatting all three first would
-// leave three slices of the same bytes.
-func (s *Scene) drawFigure(dst *canvas.Canvas, left, top, unitTop int, value []byte, unit string) {
-	pen := drawBytes(dst, s.faces.Large, left, top, value, s.pal.Ink)
-	text.Draw(dst, s.faces.Small, pen+unitGap, unitTop, unit, s.pal.Muted)
+// leave three slices of the same bytes. The unit stays muted whatever the
+// number is set in: the number is the reading and the unit is the label.
+func (s *Scene) drawFigure(dst *canvas.Canvas, left, top, unitTop int, fig figure) {
+	pen := drawBytes(dst, s.faces.Large, left, top, fig.value, fig.ink)
+	text.Draw(dst, s.faces.Small, pen+unitGap, unitTop, fig.unit, s.pal.Muted)
 }
 
 // distance writes a range in nautical miles, or a dash when the aircraft has
@@ -297,93 +308,14 @@ func (s *Scene) distance(valueNm float64) []byte {
 	return s.fixed(valueNm, distanceDecimals)
 }
 
-// drawRows draws the compact one-line rows under the card, one per aircraft,
-// as many as fit.
-func (s *Scene) drawRows(col *layout, frame source.Frame) {
-	face := s.faces.Body
-
-	line := lineHeight(face)
-	if line == 0 || len(frame.Planes) == 0 {
-		return
-	}
-
-	step := line + rowLead
-
-	fit := (col.bottom - col.top) / step
-	if fit <= 0 {
-		return
-	}
-
-	s.trackWindow(fit, len(frame.Planes))
-
-	top := col.top
-
-	for offset := range fit {
-		index := s.rowStart + offset
-		if index >= len(frame.Planes) {
-			break
-		}
-
-		s.drawRow(col, face, top, index, frame.Planes[index], frame.Receiver)
-		top += step
-	}
-}
-
-// trackWindow scrolls the row list so the selected aircraft is always one of
-// the rows on screen. Without it, selecting past the bottom of the list would
-// move a selection nobody could see.
-func (s *Scene) trackWindow(fit, count int) {
-	if s.selIndex < 0 {
-		s.rowStart = 0
-
-		return
-	}
-
-	if s.selIndex < s.rowStart {
-		s.rowStart = s.selIndex
-	}
-
-	if s.selIndex >= s.rowStart+fit {
-		s.rowStart = s.selIndex - fit + 1
-	}
-
-	s.rowStart = min(max(s.rowStart, 0), max(count-fit, 0))
-}
-
-// drawRow draws one compact row: number, callsign, altitude, distance.
+// drawLegend explains what the colours on the scope mean, which is the one
+// thing there that cannot be worked out by looking at it.
 //
-// The selected row carries the accent bar and is set in ink; the rest are
-// muted, so the eye lands on the selection first when scanning down.
-func (s *Scene) drawRow(
-	col *layout, face *psf.Font, top, index int, plane airplane.Snapshot, receiver source.Receiver,
-) {
-	ink := s.pal.Muted
-
-	if index == s.selIndex {
-		col.dst.FillRect(image.Rect(col.left, top, col.left+accentWidth, top+face.Height()), s.pal.Accent)
-
-		ink = s.pal.Ink
-	}
-
-	glyph := glyphWidth(face)
-	pen := col.left + accentWidth + cardPadX
-
-	drawBytes(col.dst, face, pen, top, s.index(index+1), s.pal.Muted)
-	pen += rowIndexChars*glyph + columnGap
-
-	text.Draw(col.dst, face, pen, top, clip(callsignOf(plane), maxCallsign), ink)
-	pen += rowCallsignChars*glyph + columnGap
-
-	drawBytesRight(col.dst, face, pen+rowAltitudeChars*glyph, top, s.thousands(plane.Altitude), s.pal.Muted)
-	pen += rowAltitudeChars*glyph + columnGap
-
-	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
-	drawBytesRight(col.dst, face, pen+rowDistanceChars*glyph, top, s.distance(away), s.pal.Muted)
-}
-
-// drawLegend explains the three altitude colours, which is the only thing on
-// the scope that cannot be worked out by looking at it.
-func (s *Scene) drawLegend(col *layout) {
+// What it explains depends on the colour mode, so the two versions are two
+// functions rather than one with a branch in the middle of it: the altitude
+// legend is a fixed list of three and the airline legend is counted off the
+// frame.
+func (s *Scene) drawLegend(col *layout, frame source.Frame) {
 	face := s.faces.Small
 
 	height := lineHeight(face)
@@ -392,21 +324,111 @@ func (s *Scene) drawLegend(col *layout) {
 	}
 
 	top := col.bottom - height
+
+	if s.colour == ColourAirline {
+		s.drawAirlineLegend(col, face, top, frame)
+	} else {
+		s.drawBandLegend(col, face, top)
+	}
+
+	col.bottom -= height + blockGap
+}
+
+// drawBandLegend names the three altitude bands.
+//
+// An entry that will not fit whole is dropped rather than half drawn. The test
+// measures the label as well as the swatch, because a swatch that fits with a
+// label that does not is the case a narrow column actually produces, and the
+// label is the part that would have run into the margin.
+func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 	pen := col.left
 
 	for _, entry := range s.legendEntries() {
-		box := image.Rect(pen, top, pen+swatchSide, top+swatchSide)
-		if box.Max.X > col.right {
+		width, _ := text.Measure(face, entry.label, text.WithSpacing(labelTracking))
+		if pen+swatchSide+swatchGap+width > col.right {
 			break
 		}
 
+		box := image.Rect(pen, top, pen+swatchSide, top+swatchSide)
 		col.dst.FillRect(box, entry.col)
+
 		pen = text.Draw(col.dst, face, box.Max.X+swatchGap, top, entry.label, s.pal.Muted,
 			text.WithSpacing(labelTracking))
 		pen += legendGap
 	}
+}
 
-	col.bottom -= height + blockGap
+// drawAirlineLegend names the operators with the most aircraft on the scope,
+// then OTHER when anything on the field has no colour of its own.
+//
+// Every entry gets an equal slice of the column and its name is cut to what is
+// left of that slice. A legend measured from the names instead would put the
+// swatches in a different place on every frame, since the names change as
+// aircraft come and go.
+func (s *Scene) drawAirlineLegend(col *layout, face *psf.Font, top int, frame source.Frame) {
+	s.counts.reset()
+
+	for _, plane := range frame.Planes {
+		s.counts.add(plane.Callsign)
+	}
+
+	s.counts.rank()
+
+	slots := s.counts.shown
+	if s.counts.other {
+		slots++
+	}
+
+	if slots == 0 {
+		return
+	}
+
+	width := (col.right - col.left) / slots
+
+	for index := range s.counts.shown {
+		s.drawOperatorEntry(col.dst, face, image.Pt(col.left+index*width, top), width, s.counts.seen[index])
+	}
+
+	if s.counts.other {
+		s.drawOtherEntry(col.dst, face, image.Pt(col.left+s.counts.shown*width, top))
+	}
+}
+
+// drawOperatorEntry sets one airline's swatch, designator and name.
+func (s *Scene) drawOperatorEntry(
+	dst *canvas.Canvas, face *psf.Font, origin image.Point, width int, entry operatorCount,
+) {
+	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
+	dst.FillRect(box, s.operatorColour(entry.airline))
+
+	pen := text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, entry.airline.ICAO, s.pal.Ink,
+		text.WithSpacing(labelTracking))
+	pen += swatchGap
+
+	room := origin.X + width - legendGap - pen
+	text.Draw(dst, face, pen, origin.Y, clip(entry.airline.Name, fitRunes(face, room, labelTracking)), s.pal.Muted,
+		text.WithSpacing(labelTracking))
+}
+
+// drawOtherEntry closes the airline legend, standing for every aircraft the
+// database has no colour for.
+func (s *Scene) drawOtherEntry(dst *canvas.Canvas, face *psf.Font, origin image.Point) {
+	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
+	dst.FillRect(box, s.pal.Muted)
+
+	text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, legendOther, s.pal.Muted, text.WithSpacing(labelTracking))
+}
+
+// fitRunes is how many glyphs of face fit in width pixels at this tracking.
+// The last glyph carries no gap after it, which is why the tracking is added
+// back before the divide.
+func fitRunes(face *psf.Font, width, tracking int) int {
+	step := glyphWidth(face) + tracking
+	if step <= 0 {
+		return 0
+	}
+
+	return max((width+tracking)/step, 0)
 }
 
 // legendEntries pairs each band with its colour, in the order the bands go up.

@@ -2,6 +2,7 @@ package radar
 
 import (
 	"image"
+	"image/color"
 	"math"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
@@ -187,14 +188,17 @@ func (s *Scene) drawScope(lay *layout, frame source.Frame) {
 
 	s.drawRings(lay, geom, scopeNm)
 	s.drawCardinals(lay, geom)
-	s.drawHome(lay, geom)
+	s.drawHome(lay, geom, frame.Receiver.Mode)
 
 	proj, plottable := newProjector(geom, frame.Receiver, scopeNm)
 	if !plottable {
 		return
 	}
 
-	s.drawAirports(lay, proj)
+	if s.airports {
+		s.drawAirports(lay, proj)
+	}
+
 	s.drawAircraft(lay, proj, frame)
 }
 
@@ -256,10 +260,50 @@ func (s *Scene) drawCardinals(lay *layout, geom scopeGeometry) {
 	text.DrawRight(lay.dst, face, geom.centerX-edge, geom.centerY-height/2, "W", s.pal.Muted)
 }
 
-// drawHome marks the receiver's own position.
-func (s *Scene) drawHome(lay *layout, geom scopeGeometry) {
-	lay.dst.Circle(geom.centerX, geom.centerY, homeRadius, s.pal.Muted)
+// drawHome marks the receiver's own position, with the ring coloured by where
+// that position came from.
+//
+// The ring carries the fix state and the centre dot stays ink, so the marker
+// is in the same place and the same size whatever is known: it is one glance
+// for "am I where I think I am", not a second thing to find on the field. The
+// header's mode word takes the same colour, so the two read as one signal
+// rather than as two facts to reconcile.
+func (s *Scene) drawHome(lay *layout, geom scopeGeometry, mode source.FixMode) {
+	lay.dst.Circle(geom.centerX, geom.centerY, homeRadius, s.fixColour(mode, s.pal.Ink))
 	lay.dst.FillCircle(geom.centerX, geom.centerY, 1, s.pal.Ink)
+}
+
+// fixColour says how much the receiver's position is worth.
+//
+// Muted for nothing known, the reading colour for a position the operator
+// typed in, the accent for an estimate with a radius on it, and the altitude
+// ramp for a GPS: red while it is searching, amber for a fix without altitude,
+// green for a full one. The altitude bands are reused rather than given three
+// colours of their own, because they are already the palette's "getting
+// better" ramp and a second set would be three more colours to keep in step
+// across two themes.
+//
+// The reading colour is passed in rather than taken from the palette, because
+// the header band has its own. The palette's Ink is a dark navy and paper's
+// band is a dark navy, so an Ink word on that band would be a word nobody can
+// read.
+func (s *Scene) fixColour(mode source.FixMode, ink color.RGBA) color.RGBA {
+	switch mode {
+	case source.FixManual:
+		return ink
+	case source.FixEstimated:
+		return s.pal.Accent
+	case source.FixGPSNoFix:
+		return s.pal.AltHigh
+	case source.FixGPS2D:
+		return s.pal.AltMid
+	case source.FixGPS3D:
+		return s.pal.AltLow
+	case source.FixNone:
+		fallthrough
+	default:
+		return s.pal.Muted
+	}
 }
 
 // drawAirports overlays the airports that fall inside the current range.
@@ -326,7 +370,7 @@ func (s *Scene) drawTrail(dst *canvas.Canvas, proj projector, plane airplane.Sna
 		return
 	}
 
-	col := s.bandColour(plane.Altitude)
+	col := s.aircraftColour(plane)
 	span := float64(len(history) - 1)
 
 	prevX, prevY, prevInside := proj.at(history[0].Latitude, history[0].Longitude)
@@ -351,7 +395,7 @@ func (s *Scene) drawTrail(dst *canvas.Canvas, proj projector, plane airplane.Sna
 // aircraft without one is a bare circle, because a silhouette would be
 // claiming to know which way it is pointing.
 func (s *Scene) drawContact(dst *canvas.Canvas, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
-	col := s.bandColour(plane.Altitude)
+	col := s.aircraftColour(plane)
 
 	if plane.Heading == 0 {
 		dst.Circle(x, y, noHeadingRadius, col)

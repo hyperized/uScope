@@ -16,6 +16,7 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
+	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/internal/theme"
@@ -202,8 +203,13 @@ func TestClassify(t *testing.T) {
 	}{
 		{name: "lowercase q quits", key: input.Key{Kind: input.Rune, Rune: 'q'}, want: cmdQuit},
 		{name: "uppercase Q quits", key: input.Key{Kind: input.Rune, Rune: 'Q'}, want: cmdQuit},
-		{name: "lowercase s switches scene", key: input.Key{Kind: input.Rune, Rune: 's'}, want: cmdNextScene},
-		{name: "uppercase S switches scene", key: input.Key{Kind: input.Rune, Rune: 'S'}, want: cmdNextScene},
+		{name: "lowercase v switches scene", key: input.Key{Kind: input.Rune, Rune: 'v'}, want: cmdNextScene},
+		{name: "uppercase V switches scene", key: input.Key{Kind: input.Rune, Rune: 'V'}, want: cmdNextScene},
+		{
+			// s used to switch scenes; the key moved to v, and s must not
+			// still be bound to anything left over from that.
+			name: "s is no longer bound", key: input.Key{Kind: input.Rune, Rune: 's'}, want: cmdNone,
+		},
 		{name: "lowercase l cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'l'}, want: cmdNextTheme},
 		{name: "uppercase L cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'L'}, want: cmdNextTheme},
 		{name: "another rune is unbound", key: input.Key{Kind: input.Rune, Rune: 'x'}, want: cmdNone},
@@ -244,6 +250,7 @@ const (
 	fieldLoadScenes    = "loadScenes"
 	fieldSource        = "source"
 	fieldScopeRange    = "scopeRange"
+	fieldBattery       = "battery"
 )
 
 // overrideRangeNm is a display range no default Scope starts at, so a test can
@@ -334,6 +341,15 @@ func (optionOverrideDrawer) Draw(*canvas.Canvas, time.Duration) {}
 // fakeSceneLoader stands in for the production scene builder.
 func fakeSceneLoader() ([]Drawer, error) { return []Drawer{optionOverrideDrawer{}}, nil }
 
+// fakeBatteryReader stands in for a *battery.Status, so WithBattery's nil
+// guard and its assignment can both be tested without a real poller behind
+// either.
+type fakeBatteryReader struct{}
+
+func (fakeBatteryReader) GetPercentage() int8 { return 0 }
+
+func (fakeBatteryReader) IsCharging() bool { return false }
+
 // assertOptionReplacesOnly checks that applying an Option changed exactly
 // the field named target and left every other seam at its production
 // default.
@@ -359,6 +375,7 @@ func assertOptionReplacesOnly(t *testing.T, run *runner, target string) {
 		{fieldLoadScenes, funcPtr(run.loadScenes) == funcPtr(run.defaultScenes)},
 		{fieldSource, run.source == source.Source(source.Empty{})},
 		{fieldScopeRange, run.scopeRange.GetCurrent() != overrideRangeNm},
+		{fieldBattery, run.battery == nil},
 	} {
 		wantDefault := field.name != target
 		if field.isDefault != wantDefault {
@@ -395,6 +412,7 @@ func TestOptionsReplaceOnlyNamedField(t *testing.T) {
 			option: WithScopeRange(scope.New(scope.WithCurrent(overrideRangeNm))),
 			target: fieldScopeRange,
 		},
+		{name: "WithBattery", option: WithBattery(fakeBatteryReader{}), target: fieldBattery},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -862,7 +880,7 @@ func TestBuildScenesFontFailure(t *testing.T) {
 			loaders := [...]fontLoader{fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large}
 			loaders[index] = failingFontLoader
 
-			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3], nil, nil)
+			scenes, err := buildScenes(loaders[0], loaders[1], loaders[2], loaders[3], nil, nil, nil)
 			if !errors.Is(err, errStub) {
 				t.Fatalf("buildScenes with a failing %s loader = %v, want the loader's error", name, err)
 			}
@@ -881,7 +899,7 @@ func TestBuildScenesFontFailure(t *testing.T) {
 func TestBuildScenesSucceeds(t *testing.T) {
 	t.Parallel()
 
-	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, source.Empty{}, scope.New())
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, source.Empty{}, scope.New(), nil)
 	if err != nil {
 		t.Fatalf("buildScenes: %v", err)
 	}
@@ -968,6 +986,37 @@ func TestSessionCycleTheme(t *testing.T) {
 	}
 }
 
+// configuredMarker is a Drawer that also implements Configured, recording
+// every settings block it is handed. It stands in for the radar scene, the
+// only one with settings of its own, which is what lets applySettings' fan-
+// out be tested without loading a font.
+type configuredMarker struct {
+	settings []radar.Settings
+}
+
+func (*configuredMarker) Draw(*canvas.Canvas, time.Duration) {}
+
+func (m *configuredMarker) Apply(set radar.Settings) { m.settings = append(m.settings, set) }
+
+// TestApplySettings checks applySettings' fan-out directly, the same
+// property TestSessionCycleTheme pins for applyPalette: every scene that
+// implements Configured gets the settings block it was called with, and a
+// plain Drawer, such as the orientation pattern, is left alone.
+func TestApplySettings(t *testing.T) {
+	t.Parallel()
+
+	configured := &configuredMarker{}
+	plain := &markerDrawer{name: "plain"}
+
+	want := radar.Settings{Colour: radar.ColourAirline, Airports: radar.ToggleOff}
+
+	applySettings([]Drawer{configured, plain}, want)
+
+	if len(configured.settings) != 1 || configured.settings[0] != want {
+		t.Errorf("Apply calls = %v, want exactly one call with %v", configured.settings, want)
+	}
+}
+
 // TestNilOptionsKeepTheirDefaults covers the guards on the two options that
 // take something a caller could reasonably pass as nil. An option handed a
 // value it cannot use leaves the default alone rather than half-configuring
@@ -990,6 +1039,14 @@ func TestNilOptionsKeepTheirDefaults(t *testing.T) {
 			t.Error("scopeRange = nil, want the default")
 		}
 	})
+
+	t.Run("WithBattery(nil)", func(t *testing.T) {
+		t.Parallel()
+
+		if got := newRunner(WithBattery(nil)).battery; got != nil {
+			t.Errorf("battery = %#v, want nil (a machine with no battery, not a caller mistake)", got)
+		}
+	})
 }
 
 // TestBuildScenesFillsInWhatItWasNotGiven covers the two stand-ins. A caller
@@ -998,7 +1055,7 @@ func TestNilOptionsKeepTheirDefaults(t *testing.T) {
 func TestBuildScenesFillsInWhatItWasNotGiven(t *testing.T) {
 	t.Parallel()
 
-	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, nil, nil)
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildScenes with no source and no range: %v", err)
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/input"
+	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
@@ -1537,7 +1538,7 @@ func TestRunSceneLoaderError(t *testing.T) {
 }
 
 // sceneSwitchBudget bounds how long a test will keep ticking while it waits
-// for the s keypress to be picked up. It is half of testTimeout so the run
+// for the v keypress to be picked up. It is half of testTimeout so the run
 // context, which is bounded by the whole of it, cannot expire first and turn
 // a slow keypress into a timed-out tick.
 const sceneSwitchBudget = testTimeout / 2
@@ -1560,12 +1561,12 @@ func TestRunLiveSwitchesScene(t *testing.T) {
 		app.WithScenes(newNamedDrawer("first", calls), newNamedDrawer("second", calls)),
 		app.WithConsoleSwitch((&switchSpy{}).switchMode),
 		app.WithRawMode((&switchSpy{}).switchMode),
-		app.WithInput(&onceReader{data: []byte("s")}),
+		app.WithInput(&onceReader{data: []byte("v")}),
 		app.WithTicker(ticker.new),
 	)
 
 	if !drewSecondScene(t, ticker, blitter, calls) {
-		t.Error("the second scene never drew after s, want the loop to switch to it")
+		t.Error("the second scene never drew after v, want the loop to switch to it")
 	}
 
 	cancelRun()
@@ -1578,7 +1579,7 @@ func TestRunLiveSwitchesScene(t *testing.T) {
 // drewSecondScene ticks the loop until the second scene paints a frame, or
 // until the budget runs out.
 //
-// Ticking in a loop rather than once is the whole point. The s keypress
+// Ticking in a loop rather than once is the whole point. The v keypress
 // arrives on the reader's own goroutine, and nothing in the test can say when
 // that goroutine is scheduled or, once the key is queued, whether the loop's
 // select takes the key or a waiting tick first. A fixed number of tries is
@@ -1693,6 +1694,60 @@ func TestRunLiveSwitchesTheme(t *testing.T) {
 	}
 }
 
+// configuredNamedDrawer is a namedDrawer that also implements app.Configured,
+// reporting every settings block it is handed on its own channel. It stands
+// in for the radar scene, the only one with settings of its own, the same
+// way themedNamedDrawer stands in for a scene with a theme.
+type configuredNamedDrawer struct {
+	name     string
+	calls    chan string
+	settings chan radar.Settings
+}
+
+func newConfiguredNamedDrawer(name string, calls chan string, settings chan radar.Settings) *configuredNamedDrawer {
+	return &configuredNamedDrawer{name: name, calls: calls, settings: settings}
+}
+
+func (d *configuredNamedDrawer) Draw(*canvas.Canvas, time.Duration) {
+	d.calls <- d.name
+}
+
+func (d *configuredNamedDrawer) Apply(set radar.Settings) {
+	d.settings <- set
+}
+
+// TestRunAppliesTheConfiguredSettings checks that Config.Radar reaches a
+// scene that implements Configured, the same wiring TestRunLiveSwitchesTheme
+// pins for Config.Theme and Themed. Unlike the theme, nothing in this package
+// cycles these settings at run time, so PNG mode is enough to observe the one
+// application Run makes at startup.
+func TestRunAppliesTheConfiguredSettings(t *testing.T) {
+	t.Parallel()
+
+	calls := make(chan string, 1)
+	settings := make(chan radar.Settings, 1)
+
+	want := radar.Settings{Colour: radar.ColourAirline, Airports: radar.ToggleOff}
+
+	cfg := app.Config{
+		PNG:   filepath.Join(t.TempDir(), "out.png"),
+		Size:  image.Pt(16, 16),
+		Radar: want,
+	}
+
+	err := app.Run(t.Context(), cfg, io.Discard,
+		app.WithScenes(newConfiguredNamedDrawer("radar", calls, settings)))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := recvOrTimeout(t, settings, testTimeout, "the configured settings"); got != want {
+		t.Errorf("Apply received %v, want %v", got, want)
+	}
+
+	recvOrTimeout(t, calls, testTimeout, "a Draw call")
+}
+
 // --- live mode: a scene with keys of its own -------------------------------
 
 // keyDrawer is a scene that binds a key. It stands in for the radar, which is
@@ -1729,8 +1784,9 @@ func (d *keyDrawer) Handle(key input.Key) bool {
 }
 
 // TestRunLiveSceneTakesItsOwnKeys covers the scene getting first refusal. A
-// scene that claims s must stop the loop switching away from it, which is the
-// whole point of letting a scene bind keys at all.
+// scene that claims v must stop the loop switching away from it, which is
+// the whole point of letting a scene bind keys at all; v is what the loop
+// itself would otherwise take the key to mean.
 func TestRunLiveSceneTakesItsOwnKeys(t *testing.T) {
 	t.Parallel()
 
@@ -1744,15 +1800,15 @@ func TestRunLiveSceneTakesItsOwnKeys(t *testing.T) {
 
 	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScenes(newKeyDrawer("first", 's', calls, handled), newNamedDrawer("second", calls)),
+		app.WithScenes(newKeyDrawer("first", 'v', calls, handled), newNamedDrawer("second", calls)),
 		app.WithConsoleSwitch((&switchSpy{}).switchMode),
 		app.WithRawMode((&switchSpy{}).switchMode),
-		app.WithInput(&onceReader{data: []byte{'s'}}),
+		app.WithInput(&onceReader{data: []byte{'v'}}),
 		app.WithTicker(ticker.new),
 	)
 
-	if got := recvOrTimeout(t, handled, testTimeout, "the scene to take s"); got != 's' {
-		t.Errorf("scene handled %q, want %q", got, 's')
+	if got := recvOrTimeout(t, handled, testTimeout, "the scene to take v"); got != 'v' {
+		t.Errorf("scene handled %q, want %q", got, 'v')
 	}
 
 	ticker.ch <- time.Now()

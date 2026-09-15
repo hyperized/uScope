@@ -355,3 +355,40 @@ func TestKindNext(t *testing.T) {
 		}
 	})
 }
+
+// TestPaletteLight checks that Light answers true for exactly one value,
+// theme.Paper, and false for everything else, including a palette that only
+// differs from Paper in a single channel. That last case is deliberate, not
+// an edge case Light happens to miss: a scene calls Light to decide whether a
+// colour it was not handed by the palette needs to be lifted off a light
+// field or a dark one, and the only two answers that question ever gets in
+// the running program are theme.Night and theme.Paper. A palette that is
+// merely close to Paper is not one of those two, so reading it as dark is
+// the same "anything that is not Paper reads as night" rule Kind.Palette and
+// Kind.Next already apply, and it is what keeps a test-built palette from
+// silently drawing as if it were the light theme.
+func TestPaletteLight(t *testing.T) {
+	t.Parallel()
+
+	almostPaper := theme.Paper
+	almostPaper.Rule = color.RGBA{}
+
+	for _, testCase := range []struct {
+		name string
+		pal  theme.Palette
+		want bool
+	}{
+		{name: "Paper is light", pal: theme.Paper, want: true},
+		{name: "Night is not light", pal: theme.Night, want: false},
+		{name: "the zero value is not light", pal: theme.Palette{}, want: false},
+		{name: "a palette differing from Paper in one channel is not light", pal: almostPaper, want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.pal.Light(); got != testCase.want {
+				t.Errorf("%s: Light() = %v, want %v", testCase.name, got, testCase.want)
+			}
+		})
+	}
+}

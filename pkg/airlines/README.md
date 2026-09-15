@@ -18,6 +18,13 @@ Dark colours are not dropped. `Airline.OnDark` raises anything below a relative
 luminance of 0.18 until it clears that floor, which is what keeps Lufthansa's
 `05164D` from disappearing into the near-black field.
 
+The paper theme runs into the opposite problem: its field is light, sitting at
+a relative luminance of about 0.88, so it's the bright colours that risk
+washing out instead of the dark ones. `Airline.OnLight` lowers anything above
+a relative luminance of 0.45 until it comes down to that ceiling, which is
+what keeps easyJet's `FF6600` legible instead of reading as a pale smear on the
+page.
+
 ## Where the data came from
 
 Designators and airline names come from the OpenFlights airline database,

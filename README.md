@@ -16,7 +16,8 @@ The radar is in it now. Aircraft come in over the uConsole's own radio, from a
 BEAST feed on another machine, from a captured IQ file played back, or from a
 fleet of twelve invented ones so the thing can be worked on at a desk with no
 receiver anywhere near it. They are drawn as silhouettes turned to their
-heading and coloured by altitude, each with the trail it flew in on.
+heading, each with the trail it flew in on, coloured either by altitude or by
+the operator whose callsign they are flying under.
 
 ## The three backends
 
@@ -59,12 +60,33 @@ startup is a worse trade than falling back to blocks.
 
 `--scene radar` is the default. The left half is the scope: a square field
 with three dashed range rings, the cardinal letters, a marker where the
-receiver is, and the airports that fall inside the current range as small
-hollow squares. Aircraft are 15 pixel silhouettes rotated to their heading.
-The colour is the altitude band: green below 10,000 feet, amber below 25,000,
-red above. An aircraft whose altitude nobody has decoded yet is grey. One
-whose heading nobody has decoded is drawn as a bare circle, because a
-silhouette would be claiming to know which way it is facing.
+receiver is, and the airfields that fall inside the current range as small
+hollow squares with their ICAO codes beside them. `a` turns those off when the
+field is busy enough that they are in the way, and `--airports off` starts
+without them.
+
+The home marker's ring says where the receiver's own position came from, so
+the fix state is one glance rather than a line to read:
+
+| Ring | Means |
+|---|---|
+| muted grey | nothing known, so nothing can be plotted |
+| ink | a position given with `--lat` and `--lon` |
+| accent | a self-locate estimate, with its radius in the header |
+| red | a GPS that is connected and has not locked yet |
+| amber | a GPS fix without altitude |
+| green | a full GPS fix |
+
+The centre dot stays ink whatever the ring is doing, so the marker is the same
+size and in the same place at any fix state. The header's mode word takes the
+same colour as the ring, so the two are one signal read twice rather than two
+facts to reconcile. Only the first three happen today: uScope has no GPS, and
+the three GPS colours are mapped so that wiring gpsd in later is a change in
+one function rather than a change in the scene as well.
+
+Aircraft are 15 pixel silhouettes rotated to their heading. An aircraft whose
+heading nobody has decoded is drawn as a bare circle, because a silhouette
+would be claiming to know which way it is facing.
 
 Behind each aircraft is its trail, drawn as an anti-aliased polyline from the
 oldest fix it still holds to the newest, brightening towards the head. The
@@ -72,17 +94,85 @@ trails are the reason this project exists. A character cell cannot draw one,
 and a scope full of them says in one glance what a scope full of dots cannot:
 who is turning and who came from where.
 
-The right column is the card. The selected aircraft's callsign is set at 64
-pixels with its ICAO hex and squawk beside it, its track in degrees and
-compass points under it, and three figures along the bottom: distance in
-nautical miles, altitude in feet, speed in knots. Under the card is one
-compact row per aircraft, nearest first, and the row for the selected one
-carries the accent bar. Under that, the altitude legend and a line saying how
-many aircraft are being tracked and where from.
+The right column runs card, rows, details, legend, stats, top to bottom.
+
+The card is the selected aircraft. Its callsign is set at 64 pixels with the
+ICAO hex and squawk beside it, its track in degrees and compass points under
+that, and three figures along the bottom: distance in nautical miles, altitude
+in feet, speed in knots.
+
+Under it is the row table, nearest aircraft first, with a small header line
+naming its columns: number, callsign, ICAO hex, altitude, speed, distance and
+bearing from the receiver. The selected row carries the accent bar. Altitude
+gets a small triangle beside it when the aircraft is climbing or descending,
+and both the figure and the triangle are set in that aircraft's altitude band
+whichever colour mode is on. That is the one column where a number and a
+colour say the same thing, so the band survives airline mode instead of being
+the price of turning it on: the list still answers "how high" while the scope
+answers "who". The card's altitude figure is set the same way.
+
+Every column is sized from the widest value it could hold rather than from the
+values on screen, so a table full of moving numbers stays still. The rows take
+whatever height is left between the card and the block under them, between
+three and sixteen of them, and a longer list ends on a muted `+N MORE` that
+counts everything not on screen.
+
+The details block holds the five things about the selected aircraft the card
+has no room for: vertical rate with the same climb or descent triangle,
+bearing from the receiver, position to two decimals, how long ago it was heard,
+and the squawk. `SEEN` reports in coarse buckets rather than in seconds,
+because a figure counting up is movement the eye keeps going back to. A squawk
+with the emergency flag set says `EMERGENCY` after it in the accent colour,
+which is the one place on the scope the accent means something other than the
+selection. With nothing in the sky the block reads `NO TRAFFIC` and keeps its
+room, so the column does not change shape when the last aircraft leaves range.
+
+Under that, the legend and a line saying how many aircraft are being tracked
+and where from.
 
 Units are nautical miles, feet and knots throughout, because that is what
 aviation uses and converting would only make the numbers harder to check
 against anything else.
+
+### Colour modes
+
+`--colour` picks what an aircraft's colour means, and `c` cycles it while the
+radar is up.
+
+`altitude` is the default: green below 10,000 feet, amber below 25,000, red
+above, and grey for an aircraft whose altitude nobody has decoded yet. That is
+the one thing a top-down scope cannot show by position, which is why it is
+what the colours carry until asked otherwise.
+
+`airline` paints each aircraft in its operator's own colour instead, taken from
+the 409 designators in [pkg/airlines](pkg/airlines/README.md). The silhouette,
+the trail, the callsign on the card and the callsign in its row all match, so
+one glance ties the dot to the row. An aircraft with no callsign, or one whose
+three-letter prefix is not in the database, is drawn muted. The legend then
+names the four operators with the most aircraft on the field, and adds `OTHER`
+when anything on it has no colour.
+
+Brand colours are picked for print, so they are adapted to the field before
+they are drawn: anything too dark to read against night's near-black field is
+lifted, and anything too light for paper is brought down. The scope decides
+which way round from the palette it is drawing with.
+
+### The header
+
+The wordmark and the ingest source on the left, with a filled dot when the
+source is connected and a hollow one when it is not. The receiver's position
+under them, or `EST ±22 NM` when it was worked out from the aircraft, or
+`NO FIX`.
+
+On the right, two clocks and the battery. Local time keeps the 32 pixel face;
+UTC sits beside it in the 16 pixel one with a `Z` after it, because aviation
+runs on UTC and a handheld in the field wants both without a key press. The
+battery is drawn as a glyph filled in proportion to the charge, amber under
+twenty percent and red under ten, with a lightning mark instead of a level when
+it is on power. A machine with no battery shows nothing there at all: an empty
+glyph would read as a flat one. On a Mac it reads the laptop battery through
+the same package that reads `/sys/class/power_supply` on the uConsole, so
+`--demo` on a desk shows a real figure.
 
 ### Where the aircraft come from
 
@@ -102,6 +192,12 @@ With nothing given at all the answer depends on the machine. On Linux that is
 the radio, which is the point of the uConsole. On a Mac there is no receiver to
 open, so uScope flies the demo fleet and says so once on stderr rather than
 refusing to start.
+
+`--battery` is the same override uAirwaves has. Without it the battery reader
+finds the first power supply of type Battery on its own, which is what happens
+on the uConsole. The flag exists for a machine with more than one, or for
+pointing at a fixture. The macOS reader takes its figures from `pmset` and
+ignores the flag.
 
 `--lat` and `--lon` pin the receiver's own position. Both or neither: a
 latitude with no longitude is half an answer. Without them uScope works its
@@ -126,7 +222,7 @@ pressing the key meant.
 
 ## The other two scenes
 
-`--scene` picks what gets drawn. In live mode `s` steps through all three
+`--scene` picks what gets drawn. In live mode `v` steps through all three
 without restarting.
 
 `pattern` is the orientation check from slice 1: four coloured corner
@@ -263,7 +359,7 @@ make run
 ```
 
 That is `go run .`, and auto detection lands on the kitty backend. Press `q`
-to quit, `s` to switch scenes. To start on the type specimen instead:
+to quit, `v` to switch views. To start on the type specimen instead:
 
 ```sh
 make run-specimen
@@ -314,14 +410,16 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | Key | Does |
 |---|---|
 | `q`, `Q` | quit |
-| `s`, `S` | step to the next scene |
-| `l`, `L` | cycle the colour theme |
+| `v`, `V` | step to the next view |
 | `n`, `N`, Down | select the next aircraft |
 | `p`, `P`, Up | select the previous one |
 | `+`, `=` | widen the range by one step, and turn auto off |
 | `-`, `_` | narrow it by one step, and turn auto off |
-| `a`, `A` | auto range on or off |
+| `r`, `R` | auto range on or off |
 | `t`, `T` | trails on or off |
+| `a`, `A` | airfield markers on or off |
+| `c`, `C` | cycle the colour mode: altitude or airline |
+| `l`, `L` | cycle the colour theme |
 | `Esc` | quit |
 | `Ctrl-C` | quit |
 
@@ -329,8 +427,13 @@ Both cases are bound because caps lock is easy to hit by accident on the
 uConsole's keyboard, and the unshifted twins of `+` and `-` are bound for the
 same reason.
 
+The letters name what they do rather than where the thing lives: `r` for range,
+`a` for airports, `t` for trails, `c` for colour, `l` for look, `v` for view.
+`m` is bound to nothing, and is being kept for a shore overlay rather than
+handed to something else in the meantime.
+
 The radar scene gets first refusal on every key and passes on the ones it does
-not want, which is what keeps `q` and `s` working while it is on screen. The
+not want, which is what keeps `q` and `v` working while it is on screen. The
 other two scenes bind nothing.
 
 Selection is by ICAO rather than by position in the list, so an aircraft
@@ -344,6 +447,9 @@ the selected one goes out of range the selection falls to the nearest.
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
 | `--scene` | `radar` | `radar`, `pattern` or `specimen` |
 | `--theme` | `night` | `night` or `paper` colour theme |
+| `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
+| `--airports` | `on` | draw the airfield markers: `on` or `off` |
+| `--battery` | | power-supply uevent file to read the battery from, Linux only |
 | `--demo` | off | fly twelve invented aircraft instead of decoding any |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
 | `--replay-iq` | | replay a captured IQ file through the demodulator |
@@ -375,6 +481,7 @@ make build          # for the machine you're on
 make build-aarch64  # for the uConsole
 make run            # go run .
 make run-demo       # go run . --demo
+make run-airline    # go run . --demo --colour airline
 make run-beast      # go run . --beast $(BEAST)
 make run-blocks     # go run . --backend blocks --demo
 make run-pattern    # go run . --scene pattern
@@ -439,14 +546,21 @@ tags.
 
 The one thing uScope does not do itself is decode. `internal/source` wraps
 [uAirwaves](https://github.com/hyperized/uAirwaves), which already drives the
-RTL-SDR, demodulates Mode S, resolves CPR positions, tracks aircraft, and
-works out where the receiver is from what it can hear. Rewriting that to own
+RTL-SDR, demodulates Mode S, resolves CPR positions, tracks aircraft, works out
+where the receiver is from what it can hear, and reads the battery. Rewriting that to own
 it would have taken longer than the rest of the slice and would have been
 wrong in different ways.
 
-Seven packages are imported: `pkg/adsb`, `pkg/airplane`, `pkg/airplanes`,
-`pkg/airports`, `pkg/location`, `pkg/scope` and `pkg/selflocate`. All of them
-are data and decoding.
+Eight packages are imported: `pkg/adsb`, `pkg/airplane`, `pkg/airplanes`,
+`pkg/airports`, `pkg/battery`, `pkg/location`, `pkg/scope` and
+`pkg/selflocate`. All of them are data, decoding or one poll loop.
+
+`pkg/battery` is the one that is not about aeroplanes. It polls
+`/sys/class/power_supply` on Linux and `pmset` on macOS behind one interface,
+which is a platform problem already solved once next door and not worth solving
+again here. The radar only sees two methods off it, declared in
+`internal/radar` where they are consumed, so a test hands over a struct of its
+own instead of a poller.
 
 `pkg/radar` is not imported and will not be. That is uAirwaves' own scope,
 written against tview and tcell in character cells, which is the thing uScope
@@ -463,11 +577,19 @@ the difference between a reproducible build and one that changes under you.
 
 One question [DESIGN.md](DESIGN.md) left open is still open. Trails fade by
 age, which was the thing to try first and looks right, but nobody has seen it
-next to a version that fades by altitude. The paper theme is built now
-(`--theme paper`, `l` to switch at run time); whether it is worth keeping
-next to night is still a guess nobody has weighed in on.
+next to a version that fades by altitude.
 
-Nobody has looked at the radar on the panel yet. That is `make radar`.
+Two more went with it. The paper theme is built (`--theme paper`, `l` at run
+time) and airline colouring is built (`--colour airline`, `c` at run time), and
+neither has been judged against its alternative by anyone who was holding the
+device at the time.
+
+Nobody has looked at the radar on the panel yet. That is `make radar`. The
+battery indicator has been checked two ways, neither of them on the device: on
+the Mac it reads the laptop through `pmset`, and the Linux reader was pointed
+at a hand-written uevent file in an arm64 container with `--battery`. What has
+not been tried is autodiscovery under `/sys/class/power_supply` on the
+uConsole itself.
 
 ## Licence
 

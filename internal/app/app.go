@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/hyperized/uScope/internal/input"
+	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
@@ -116,6 +117,29 @@ func applyPalette(scenes []Drawer, pal theme.Palette) {
 	}
 }
 
+// Configured is the optional half of a scene's settings contract, the sibling
+// of Themed. Only the radar has settings, and they reach it here rather than
+// through the scene loader, because that loader is a seam with no config in
+// scope and widening it would cost every test that replaces it.
+//
+// It carries the whole block rather than one setter per flag. The radar keeps
+// gaining settings, and an interface per flag would end up as a shelf of
+// one-method interfaces that all mean "the command line said so".
+type Configured interface {
+	Apply(set radar.Settings)
+}
+
+// applySettings hands the settings to every scene that takes them. A scene
+// without any, such as the orientation pattern, is left exactly as it was
+// built.
+func applySettings(scenes []Drawer, set radar.Settings) {
+	for _, scene := range scenes {
+		if configured, ok := scene.(Configured); ok {
+			configured.Apply(set)
+		}
+	}
+}
+
 // Config is the parsed intent of the command line.
 type Config struct {
 	FBPath      string
@@ -132,6 +156,10 @@ type Config struct {
 	// Theme is the colour theme to start on. The zero value reads as
 	// theme.KindNight, which is the default on a backlit handheld.
 	Theme theme.Kind
+
+	// Radar is what the flags picked for the radar scene. Every field's zero
+	// value is that setting's default, for the same reason Theme's is.
+	Radar radar.Settings
 }
 
 // session is one backend plus the canvas that fits it, and the label that
@@ -169,6 +197,7 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 	}
 
 	applyPalette(scenes, cfg.Theme.Palette())
+	applySettings(scenes, cfg.Radar)
 
 	active := int(cfg.Scene)
 	if active >= len(scenes) {
@@ -246,6 +275,10 @@ type command uint8
 const (
 	// cmdNone is every key nothing is bound to at this level. The arrows and
 	// the radar's own keys are taken by the scene before the loop sees them.
+	//
+	// m is deliberately not bound anywhere yet. It is reserved for the shore
+	// overlay, and binding it to something else in the meantime would be a
+	// key to unlearn later.
 	cmdNone command = iota
 	cmdQuit
 	cmdNextScene
@@ -269,11 +302,15 @@ func classify(key input.Key) command {
 // runeCommand maps a printable key onto a command. Both cases are bound so
 // the keys keep working with caps lock on, which is easy to hit by accident
 // on the uConsole's small keyboard.
+//
+// v rather than s cycles the views. The radar wanted the single letters that
+// name what they do, and s was the odd one out: it stood for scene, which is
+// what this program calls a thing the operator calls a view.
 func runeCommand(value rune) command {
 	switch value {
 	case 'q', 'Q':
 		return cmdQuit
-	case 's', 'S':
+	case 'v', 'V':
 		return cmdNextScene
 	case 'l', 'L':
 		return cmdNextTheme

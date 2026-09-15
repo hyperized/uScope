@@ -169,23 +169,53 @@ func (s *Scene) thousands(value float64) []byte {
 	return out
 }
 
-// coordinate writes one half of a position as a magnitude and a hemisphere
-// letter, which is how a chart writes it and how it stays readable without a
-// minus sign to spot.
+// coordinate writes one half of the receiver's position as a magnitude and a
+// hemisphere letter, which is how a chart writes it and how it stays readable
+// without a minus sign to spot.
 func (s *Scene) coordinate(value float64, positive, negative byte) []byte {
-	hemisphere := positive
-	if value < 0 {
-		hemisphere = negative
-	}
-
-	out := strconv.AppendFloat(s.coords[:0], math.Abs(value), 'f', coordinateDecimals, floatBits)
-
-	return append(out, ' ', hemisphere)
+	return s.hemisphere(value, positive, negative, coordinateDecimals)
 }
 
-// coordinateDecimals is four places, which is about ten metres. More would be
-// a claim the receiver's own position cannot back up.
-const coordinateDecimals = 4
+// place writes one half of an aircraft's position, to fewer decimals than the
+// receiver's own gets.
+func (s *Scene) place(value float64, positive, negative byte) []byte {
+	return s.hemisphere(value, positive, negative, placeDecimals)
+}
+
+// hemisphere is the shared half of the two above.
+func (s *Scene) hemisphere(value float64, positive, negative byte, decimals int) []byte {
+	sign := positive
+	if value < 0 {
+		sign = negative
+	}
+
+	out := strconv.AppendFloat(s.coords[:0], math.Abs(value), 'f', decimals, floatBits)
+
+	return append(out, ' ', sign)
+}
+
+const (
+	// coordinateDecimals is four places, which is about ten metres. More would
+	// be a claim the receiver's own position cannot back up.
+	coordinateDecimals = 4
+
+	// placeDecimals is two, which is about a nautical mile. An aircraft's
+	// position on a scope is worth that much and no more: it is a fix a few
+	// seconds old, plotted on a projection that rounds to the pixel.
+	placeDecimals = 2
+)
+
+// bearing writes a bearing as its three digits, a separator and its compass
+// point.
+//
+// It is one field rather than two because the compact rows right-align it as a
+// unit, and two right-aligned pieces would need two column edges to align
+// against for no gain.
+func (s *Scene) bearing(value float64) []byte {
+	out := append(s.degrees(value), ' ', '/', ' ')
+
+	return append(out, compass(value)...)
+}
 
 // drawBytes draws a formatted number and returns the x just past it.
 //

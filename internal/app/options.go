@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/scope"
+	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/pkg/backend"
@@ -42,6 +43,11 @@ type runner struct {
 	// here rather than inside the scene so a future second view could share
 	// one range control.
 	scopeRange *scope.Scope
+
+	// battery is what the radar's header indicator reads. It is nil by
+	// default, which is a machine with no battery rather than a failure, and
+	// main fills it in when the platform has one.
+	battery radar.BatteryReader
 }
 
 // newRunner builds the production wiring and then applies the overrides.
@@ -163,6 +169,17 @@ func WithSource(src source.Source) Option {
 	return func(r *runner) {
 		if src != nil {
 			r.source = src
+		}
+	}
+}
+
+// WithBattery supplies what the header's battery indicator reads. main owns
+// the poller behind it and starts it before the loop; the scene only reads the
+// two numbers off it.
+func WithBattery(reader radar.BatteryReader) Option {
+	return func(r *runner) {
+		if reader != nil {
+			r.battery = reader
 		}
 	}
 }

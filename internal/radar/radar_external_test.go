@@ -10,6 +10,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
@@ -117,6 +118,7 @@ func benchFrame() source.Frame {
 			Longitude: receiverLon,
 			HasFix:    true,
 			Label:     source.LabelManual,
+			Mode:      source.FixManual,
 		},
 		Source: adsb.SourceInfo{Label: "DEMO", Connected: true},
 		Stats:  adsb.Stats{TotalFrames: 4096},
@@ -141,29 +143,60 @@ func benchScene(tb testing.TB) (*radar.Scene, *canvas.Canvas) {
 
 // TestDrawAllocations is the promise the whole of format.go exists to keep:
 // once the first frame has grown the ICAO index, drawing costs nothing on the
-// heap.
+// heap, in either colour mode. Airline mode is the one that calls
+// airlines.Lookup and adapts a brand colour to the palette on every aircraft,
+// so it is not a given that it stays free the way altitude mode is.
 //
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
-	scene, canv := benchScene(t)
+	for _, testCase := range []struct {
+		name string
+		mode radar.ColourMode
+	}{
+		{name: "altitude mode", mode: radar.ColourAltitude},
+		{name: "airline mode", mode: radar.ColourAirline},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			scene, canv := benchScene(t)
+			scene.Apply(radar.Settings{Colour: testCase.mode})
 
-	// Draw once outside the measurement so the one-time growth of the ICAO
-	// slice is not counted as a per-frame allocation.
-	scene.Draw(canv, 0)
+			// Draw once outside the measurement so the one-time growth of the
+			// ICAO index is not counted as a per-frame allocation.
+			scene.Draw(canv, 0)
 
-	if got := testing.AllocsPerRun(50, func() { scene.Draw(canv, 0) }); got != 0 {
-		t.Errorf("Draw allocated %.1f times per frame, want 0", got)
+			if got := testing.AllocsPerRun(50, func() { scene.Draw(canv, 0) }); got != 0 {
+				t.Errorf("Draw allocated %.1f times per frame in %s, want 0", got, testCase.name)
+			}
+		})
 	}
 }
 
-// BenchmarkDraw measures one whole frame at the panel's resolution.
+// BenchmarkDraw measures one whole frame at the panel's resolution, in every
+// combination of colour mode and palette: airline mode and the paper palette
+// both do more work per aircraft than the defaults, and the four numbers
+// together are what the benchmark is for.
 func BenchmarkDraw(b *testing.B) {
-	scene, canv := benchScene(b)
+	for _, testCase := range []struct {
+		name string
+		mode radar.ColourMode
+		pal  theme.Palette
+	}{
+		{name: "altitude/night", mode: radar.ColourAltitude, pal: theme.Night},
+		{name: "altitude/paper", mode: radar.ColourAltitude, pal: theme.Paper},
+		{name: "airline/night", mode: radar.ColourAirline, pal: theme.Night},
+		{name: "airline/paper", mode: radar.ColourAirline, pal: theme.Paper},
+	} {
+		b.Run(testCase.name, func(b *testing.B) {
+			scene, canv := benchScene(b)
+			scene.Apply(radar.Settings{Colour: testCase.mode})
+			scene.SetPalette(testCase.pal)
 
-	b.ReportAllocs()
-	b.ResetTimer()
+			b.ReportAllocs()
+			b.ResetTimer()
 
-	for b.Loop() {
-		scene.Draw(canv, 0)
+			for b.Loop() {
+				scene.Draw(canv, 0)
+			}
+		})
 	}
 }

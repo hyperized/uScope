@@ -330,7 +330,10 @@ func (l *Live) receiver() Receiver {
 	if l.manual {
 		latitude, longitude := l.loc.GetCoordinates()
 
-		return Receiver{Latitude: latitude, Longitude: longitude, HasFix: true, Label: LabelManual}
+		return Receiver{
+			Latitude: latitude, Longitude: longitude, HasFix: true,
+			Label: LabelManual, Mode: FixManual,
+		}
 	}
 
 	l.applyEstimate()
@@ -339,17 +342,40 @@ func (l *Live) receiver() Receiver {
 
 	switch {
 	case l.loc.HasFix():
-		return Receiver{Latitude: latitude, Longitude: longitude, HasFix: true, Label: LabelGPS}
+		return Receiver{
+			Latitude: latitude, Longitude: longitude, HasFix: true,
+			Label: LabelGPS, Mode: fixMode(l.loc.Mode()),
+		}
 	case l.loc.Source() == location.SourceInferred:
 		return Receiver{
 			Latitude:     latitude,
 			Longitude:    longitude,
 			ConfidenceNm: l.loc.ConfidenceRadiusNm(),
 			Label:        LabelEstimate,
+			Mode:         FixEstimated,
 		}
 	default:
-		return Receiver{Label: LabelNone}
+		return Receiver{Label: LabelNone, Mode: FixNone}
 	}
+}
+
+// gpsMode2D is uAirwaves' description of a fix without altitude. Its other
+// spelling is "3D fix", which is not named here because everything that is not
+// this one lands on the same branch.
+const gpsMode2D = "2D fix"
+
+// fixMode reads uAirwaves' fix description.
+//
+// It is only ever called for a location that reports a fix, so anything that
+// is not the 2D spelling counts as a full one. A receiver that has a fix and
+// cannot describe it still has a fix, and calling that no-fix would have the
+// home marker say something worse than the truth.
+func fixMode(mode string) FixMode {
+	if mode == gpsMode2D {
+		return FixGPS2D
+	}
+
+	return FixGPS3D
 }
 
 // applyEstimate folds the self-locator's answer into the shared location once

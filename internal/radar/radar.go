@@ -2,8 +2,12 @@
 //
 // It is the scene DESIGN.md is the contract for: a header band, a square
 // scope on the left with range rings and one thin trail per aircraft, a right
-// column holding the selected-flight card, the compact rows, the legend and
-// the stats, and a key bar along the bottom.
+// column holding the selected-flight card, the compact rows, a details block,
+// the legend and the stats, and a key bar along the bottom.
+//
+// Aircraft are coloured by altitude band or by operator, which is what the c
+// key and --colour pick between. Airline colours come from pkg/airlines and
+// are adapted to whichever field the palette draws on.
 //
 // The aircraft arrive through internal/source, which is the only thing that
 // knows whether they came off a radio or were invented. Everything here works
@@ -99,6 +103,25 @@ type Faces struct {
 	Large    *psf.Font
 }
 
+// BatteryReader is the part of a battery the header draws.
+//
+// It is two methods rather than uAirwaves' whole *battery.Status because that
+// is all the scene reads, and because a test then hands over a struct of its
+// own instead of a live poller. It is declared here, where it is consumed, for
+// the same reason app.KeyHandler is declared in internal/app.
+//
+// An implementation is read on the draw path, so it has to be safe to call
+// from the drawing goroutine while whatever fills it runs on another.
+// uAirwaves' Status takes a mutex and satisfies that.
+type BatteryReader interface {
+	// GetPercentage is the charge left, 0 to 100, or negative when nothing has
+	// been read yet.
+	GetPercentage() int8
+
+	// IsCharging reports whether the machine is on external power.
+	IsCharging() bool
+}
+
 // Scene is the radar.
 type Scene struct {
 	faces      Faces
@@ -111,6 +134,29 @@ type Scene struct {
 	// trails and autoRange are what the t and a keys toggle.
 	trails    bool
 	autoRange bool
+
+	// colour is what an aircraft's colour means, which the c key cycles.
+	colour ColourMode
+
+	// airports is whether the airfield markers are drawn, which the f key
+	// toggles.
+	airports bool
+
+	// light is whether the palette draws on a light field. It is kept beside
+	// the palette rather than worked out per aircraft because an airline's
+	// colour is adapted once per draw call and the answer cannot change
+	// between two of them.
+	light bool
+
+	// counts is the legend's per-frame operator tally in airline mode. It is a
+	// field rather than a local so the table it holds outlives the frame that
+	// filled it and the draw path never allocates one.
+	counts tally
+
+	// battery is what the header's indicator reads, or nil on a machine with
+	// no battery to read. Nil is the normal state on a desktop, so it is a
+	// state rather than a failure and nothing is drawn for it.
+	battery BatteryReader
 
 	// The selection is keyed by ICAO so it survives the list being re-sorted
 	// when an aircraft overtakes another. selIndex and icaos are what the
@@ -141,14 +187,27 @@ type Option func(*Scene)
 
 // WithPalette replaces the colours at construction.
 func WithPalette(pal theme.Palette) Option {
-	return func(s *Scene) { s.pal = pal }
+	return func(s *Scene) { s.SetPalette(pal) }
 }
 
 // SetPalette replaces the colours on a scene that is already built. This is
 // what the l key uses to cycle the theme at run time: internal/app calls it
 // on every scene that implements it, not only the one on screen, so
 // switching scenes later still shows the theme that was chosen.
-func (s *Scene) SetPalette(pal theme.Palette) { s.pal = pal }
+//
+// It takes the light-field flag off the palette rather than being told
+// separately. One setter means the two can never disagree, and a palette that
+// is not theme.Paper reads as dark, which is the rule theme.Kind already
+// applies everywhere else.
+func (s *Scene) SetPalette(pal theme.Palette) {
+	s.pal = pal
+	s.light = pal.Light()
+}
+
+// WithColour picks what an aircraft's colour means at construction.
+func WithColour(mode ColourMode) Option {
+	return func(s *Scene) { s.colour = mode }
+}
 
 // WithClock replaces the fallback clock. It is only consulted when the source
 // hands back a frame with no timestamp on it, which a real source never does.
@@ -159,6 +218,14 @@ func WithClock(now func() time.Time) Option {
 			s.now = now
 		}
 	}
+}
+
+// WithBattery wires the header's battery indicator to a reader.
+//
+// Without it the header has no indicator at all, which is the right answer on
+// a machine with no battery: an empty glyph would say the battery is flat.
+func WithBattery(reader BatteryReader) Option {
+	return func(s *Scene) { s.battery = reader }
 }
 
 // WithSprite replaces the aircraft silhouette. A nil bitmap leaves the
@@ -175,8 +242,9 @@ func WithSprite(icon *sprite.Bitmap) Option {
 //
 // Those three are parameters rather than options because a radar without them
 // has nothing to draw; the options are the things that have a useful default.
-// Trails and auto range both start on, which is the state the scope is most
-// useful in when nobody has touched a key yet.
+// Trails, auto range and the airfield markers all start on and the colour mode
+// starts on altitude, which is the state the scope is most useful in when
+// nobody has touched a key yet.
 func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option) *Scene {
 	scene := &Scene{
 		faces:      faces,
@@ -187,6 +255,8 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		now:        time.Now,
 		trails:     true,
 		autoRange:  true,
+		airports:   true,
+		colour:     ColourAltitude,
 		selIndex:   -1,
 	}
 

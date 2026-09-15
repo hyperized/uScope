@@ -19,7 +19,9 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
+	"github.com/hyperized/uAirwaves/pkg/battery"
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
@@ -45,37 +47,50 @@ const (
 
 	// Repeated literals, named once so goconst has nothing to complain
 	// about and a typo in one table cannot silently diverge from another.
-	altFB       = "/dev/fb1"
-	outPNG      = "out.png"
-	flagRotate  = "--rotate"
-	flagSize    = "--size"
-	flagFPS     = "--fps"
-	flagBackend = "--backend"
-	flagFrames  = "--frames"
-	flagPNG     = "--png"
-	flagScene   = "--scene"
-	flagTheme   = "--theme"
-	flagDemo    = "--demo"
-	flagBeast   = "--beast"
-	flagReplay  = "--replay-iq"
-	flagLat     = "--lat"
-	flagLon     = "--lon"
+	altFB        = "/dev/fb1"
+	outPNG       = "out.png"
+	flagRotate   = "--rotate"
+	flagSize     = "--size"
+	flagFPS      = "--fps"
+	flagBackend  = "--backend"
+	flagFrames   = "--frames"
+	flagPNG      = "--png"
+	flagScene    = "--scene"
+	flagTheme    = "--theme"
+	flagDemo     = "--demo"
+	flagBeast    = "--beast"
+	flagReplay   = "--replay-iq"
+	flagLat      = "--lat"
+	flagLon      = "--lon"
+	flagColour   = "--colour"
+	flagBattery  = "--battery"
+	flagAirports = "--airports"
 
 	// patternValue and specimenValue are the two non-default --scene
 	// spellings, named because they turn up in several tables.
 	patternValue  = "pattern"
 	specimenValue = "specimen"
 
-	// paperValue is the one non-default --theme spelling.
-	paperValue  = "paper"
-	demoValue   = "demo"
-	demoLabel   = "DEMO"
-	captureFile = "capture.iq"
-	kittyValue  = "kitty"
-	blocksValue = "blocks"
-	pngValue    = "png"
-	caseDefault = "default"
-	caseMaxEdge = "maximum edge"
+	// paperValue is the one non-default --theme spelling, airlineValue the
+	// one non-default --colour spelling, offValue the one non-default
+	// --airports spelling.
+	paperValue    = "paper"
+	airlineValue  = "airline"
+	offValue      = "off"
+	demoValue     = "demo"
+	demoLabel     = "DEMO"
+	captureFile   = "capture.iq"
+	kittyValue    = "kitty"
+	blocksValue   = "blocks"
+	pngValue      = "png"
+	caseDefault   = "default"
+	caseMaxEdge   = "maximum edge"
+	caseWrongCase = "wrong case"
+
+	// batteryPathWithSpace is a --battery value that is not whitespace-only
+	// despite containing some: only an all-whitespace value is refused, so a
+	// real-looking path with a space inside it has to be accepted unchanged.
+	batteryPathWithSpace = "/sys/class/power supply/BAT0/uevent"
 )
 
 // errUnrelated stands in for "some error that has nothing to do with the
@@ -102,6 +117,8 @@ func defaultConfig() config {
 		fps:        defaultFPS,
 		size:       image.Pt(widthLandscape, heightLandscape),
 		theme:      theme.KindNight,
+		colour:     radar.ColourAltitude,
+		airports:   radar.ToggleOn,
 	}
 }
 
@@ -1013,7 +1030,7 @@ func TestParseFlagsThemeRejections(t *testing.T) {
 		{
 			// --theme is an allow list, not free text: the exact spelling is
 			// what is accepted, not a case-insensitive match of it.
-			name: "wrong case", args: []string{flagTheme, "Night"},
+			name: caseWrongCase, args: []string{flagTheme, "Night"},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1046,6 +1063,182 @@ func TestThemeReachesConfig(t *testing.T) {
 
 	if cfg.theme != theme.KindPaper {
 		t.Errorf("config.theme = %v, want %v", cfg.theme, theme.KindPaper)
+	}
+}
+
+func TestParseFlagsColour(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want radar.ColourMode
+	}{
+		{name: caseDefault, args: nil, want: radar.ColourAltitude},
+		{name: "altitude explicit", args: []string{flagColour, defaultColour}, want: radar.ColourAltitude},
+		{name: airlineValue, args: []string{flagColour, airlineValue}, want: radar.ColourAirline},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.colour = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsColourRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "empty colour", args: []string{flagColour, ""}},
+		{
+			// --colour is an allow list, not free text: the exact spelling is
+			// what is accepted, not a case-insensitive match of it.
+			name: caseWrongCase, args: []string{flagColour, "Airline"},
+		},
+		{name: "unknown colour", args: []string{flagColour, "rainbow"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errColour) {
+				t.Fatalf("parseFlags(%v) error = %v, want errColour", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, radar.ErrColour) {
+				t.Errorf("parseFlags(%v) error = %v, want radar.ErrColour wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+func TestParseFlagsBattery(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: caseDefault, args: nil, want: ""},
+		{
+			// Only an all-whitespace value is refused; a real-looking path
+			// with a space inside it lands in config.battery unchanged.
+			name: "a path with spaces is accepted",
+			args: []string{flagBattery, batteryPathWithSpace},
+			want: batteryPathWithSpace,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.battery = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsBatteryRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "spaces only", args: []string{flagBattery, "   "}},
+		{name: "a single tab", args: []string{flagBattery, "\t"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errBattery) {
+				t.Errorf("parseFlags(%v) error = %v, want errBattery", testCase.args, err)
+			}
+		})
+	}
+}
+
+func TestParseFlagsAirports(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want radar.Toggle
+	}{
+		{name: caseDefault, args: nil, want: radar.ToggleOn},
+		{name: "on explicit", args: []string{flagAirports, defaultOn}, want: radar.ToggleOn},
+		{name: offValue, args: []string{flagAirports, offValue}, want: radar.ToggleOff},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.airports = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsAirportsRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "empty", args: []string{flagAirports, ""}},
+		{
+			// --airports is an allow list, not free text, and not
+			// strconv.ParseBool: only the two exact spellings are accepted.
+			name: caseWrongCase, args: []string{flagAirports, "On"},
+		},
+		{name: "a bool spelling is not one of the two words", args: []string{flagAirports, "true"}},
+		{name: "another bool spelling", args: []string{flagAirports, "1"}},
+		{name: "yes is not one of the two words either", args: []string{flagAirports, "yes"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errAirports) {
+				t.Fatalf("parseFlags(%v) error = %v, want errAirports", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, radar.ErrToggle) {
+				t.Errorf("parseFlags(%v) error = %v, want radar.ErrToggle wrapped in it", testCase.args, err)
+			}
+		})
 	}
 }
 
@@ -1361,5 +1554,287 @@ func TestRunReportsASourceItCannotBuild(t *testing.T) { //nolint:paralleltest //
 
 	if !strings.Contains(stderr.String(), errUnrelated.Error()) {
 		t.Errorf("run() stderr = %q, want it to name the failure", stderr.String())
+	}
+}
+
+// --- battery --------------------------------------------------------------
+
+// testPercentage stands in for a battery reading a fake watcher hands back.
+// The exact figure carries no meaning beyond being a value awaitCharge and
+// startBattery both treat as "arrived", so it is reused across every test
+// that needs one.
+const testPercentage = 84
+
+// TestAwaitChargeReturnsAsSoonAsAReadingArrives holds awaitCharge to its
+// fastest promise: a status that already carries a reading needs no waiting
+// at all, not even a closed done channel to fall back on.
+func TestAwaitChargeReturnsAsSoonAsAReadingArrives(t *testing.T) {
+	t.Parallel()
+
+	status := battery.NewStatus(battery.WithPercentage(testPercentage))
+	done := make(chan struct{}) // deliberately never closed
+
+	awaitCharge(status, done)
+}
+
+// TestAwaitChargeReturnsWhenTheDoneChannelCloses covers the watcher-gave-up
+// exit on its own: with no reading ever arriving, a closed done channel has
+// to end the wait well before the settle deadline would.
+func TestAwaitChargeReturnsWhenTheDoneChannelCloses(t *testing.T) {
+	t.Parallel()
+
+	status := battery.NewStatus(battery.WithPercentage(unknownCharge))
+	done := make(chan struct{})
+	close(done)
+
+	start := time.Now()
+
+	awaitCharge(status, done)
+
+	if elapsed := time.Since(start); elapsed >= batterySettle {
+		t.Errorf("awaitCharge took %v, want it to return on the closed done channel, well under batterySettle (%v)",
+			elapsed, batterySettle)
+	}
+}
+
+// TestAwaitChargeKeepsPollingUntilAReadingArrives holds the loop-and-retry
+// branch to its promise: with neither the done channel nor the settle
+// deadline ready, a poll tick must not end the wait, only bring awaitCharge
+// back around to check the percentage again.
+func TestAwaitChargeKeepsPollingUntilAReadingArrives(t *testing.T) {
+	t.Parallel()
+
+	status := battery.NewStatus(battery.WithPercentage(unknownCharge))
+	done := make(chan struct{}) // never closed: only the delayed reading may end this
+
+	go func() {
+		time.Sleep(3 * batteryPoll)
+		status.Update(battery.WithPercentage(testPercentage))
+	}()
+
+	awaitCharge(status, done)
+
+	if got := status.GetPercentage(); got < 0 {
+		t.Errorf("status percentage = %d, want a reading to have arrived", got)
+	}
+}
+
+// TestAwaitChargeReturnsWhenTheSettleWindowRunsOut is not parallel: it
+// rewrites the package-level batterySettle seam, and parallel tests only
+// resume once every sequential test has finished, so this is the one window
+// in which rewriting it races with nobody.
+func TestAwaitChargeReturnsWhenTheSettleWindowRunsOut(t *testing.T) { //nolint:paralleltest // rewrites batterySettle
+	original := batterySettle
+	batterySettle = time.Millisecond
+
+	t.Cleanup(func() { batterySettle = original })
+
+	status := battery.NewStatus(battery.WithPercentage(unknownCharge))
+	done := make(chan struct{}) // left open: only the deadline may end this call
+
+	start := time.Now()
+
+	awaitCharge(status, done)
+
+	if elapsed := time.Since(start); elapsed >= original {
+		t.Errorf("awaitCharge took %v, want it to return once the shortened settle window ran out, well under "+
+			"the unmodified batterySettle of %v", elapsed, original)
+	}
+}
+
+// TestStartBatteryReturnsAsSoonAsAReadingArrives drives startBattery through
+// the watchBattery seam with a fake that reports a reading immediately and
+// then blocks, the way the real watcher keeps polling after its first read.
+// startBattery must not wait for it to finish.
+//
+// Not parallel: it rewrites the package-level watchBattery seam.
+func TestStartBatteryReturnsAsSoonAsAReadingArrives(t *testing.T) { //nolint:paralleltest // rewrites watchBattery
+	original := watchBattery
+
+	t.Cleanup(func() { watchBattery = original })
+
+	watchBattery = func(ctx context.Context, status *battery.Status, _ string) error {
+		status.Update(battery.WithPercentage(testPercentage))
+		<-ctx.Done()
+
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var stderr bytes.Buffer
+
+	start := time.Now()
+	status, wait := startBattery(ctx, config{}, &stderr)
+	elapsed := time.Since(start)
+
+	cancel()
+	wait()
+
+	if elapsed >= batterySettle {
+		t.Errorf("startBattery took %v, want it to return as soon as the reading arrived, well under "+
+			"batterySettle (%v)", elapsed, batterySettle)
+	}
+
+	if got := status.GetPercentage(); got != testPercentage {
+		t.Errorf("status percentage = %d, want %d", got, testPercentage)
+	}
+
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing: the watcher never failed", stderr.String())
+	}
+}
+
+// TestStartBatteryReportsAFailingWatcher covers both ways a watcher can end
+// without ever producing a reading: giving up because the platform has none
+// to read, and failing for some other reason. Both reach stderr through the
+// same line, so both are checked the same way.
+//
+// Not parallel: it rewrites the package-level watchBattery seam.
+func TestStartBatteryReportsAFailingWatcher(t *testing.T) { //nolint:paralleltest // rewrites watchBattery
+	original := watchBattery
+
+	t.Cleanup(func() { watchBattery = original })
+
+	for _, testCase := range []struct { //nolint:paralleltest // deliberately serial: rewrites watchBattery
+		name string
+		err  error
+	}{
+		{name: "the platform has no battery to watch", err: battery.ErrUnsupported},
+		{name: "some other failure", err: errUnrelated},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			watchBattery = func(context.Context, *battery.Status, string) error { return testCase.err }
+
+			ctx, cancel := context.WithCancel(context.Background())
+
+			var stderr bytes.Buffer
+
+			start := time.Now()
+			status, wait := startBattery(ctx, config{}, &stderr)
+			elapsed := time.Since(start)
+
+			cancel()
+			wait()
+
+			if elapsed >= batterySettle {
+				t.Errorf("startBattery took %v, want it to return once the watcher gave up, well under "+
+					"batterySettle (%v)", elapsed, batterySettle)
+			}
+
+			if got := status.GetPercentage(); got != unknownCharge {
+				t.Errorf("status percentage = %d, want %d (the watcher never reported one)", got, unknownCharge)
+			}
+
+			if !strings.Contains(stderr.String(), testCase.err.Error()) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), testCase.err.Error())
+			}
+		})
+	}
+}
+
+// shortWait bounds the "wait must not already be done" check in
+// TestStartBatteryWaitsForTheContextWhenNothingArrives. It only has to be
+// short next to a human, not next to the shortened batterySettle the test
+// sets, so a plain time.Millisecond multiple is as good as any other choice.
+const shortWaitMillis = 50
+
+// TestStartBatteryWaitsForTheContextWhenNothingArrives covers the deadline
+// path end to end: with the settle window shortened and a watcher that never
+// produces a reading, startBattery still returns quickly, but the wait
+// function it hands back only completes once the caller's own context is
+// cancelled, because the watcher goroutine is still out there polling.
+//
+// Not parallel: it rewrites the package-level watchBattery and batterySettle
+// seams.
+func TestStartBatteryWaitsForTheContextWhenNothingArrives(t *testing.T) { //nolint:paralleltest // rewrites seams
+	originalWatch := watchBattery
+	originalSettle := batterySettle
+	batterySettle = time.Millisecond
+
+	t.Cleanup(func() {
+		watchBattery = originalWatch
+		batterySettle = originalSettle
+	})
+
+	watchBattery = func(ctx context.Context, _ *battery.Status, _ string) error {
+		<-ctx.Done()
+
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stderr bytes.Buffer
+
+	start := time.Now()
+	status, wait := startBattery(ctx, config{}, &stderr)
+	elapsed := time.Since(start)
+
+	if elapsed >= originalSettle {
+		t.Errorf("startBattery took %v, want it to return once the shortened settle window ran out", elapsed)
+	}
+
+	if got := status.GetPercentage(); got != unknownCharge {
+		t.Errorf("status percentage = %d, want %d (nothing ever arrived)", got, unknownCharge)
+	}
+
+	waitDone := make(chan struct{})
+
+	go func() {
+		wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		t.Fatal("wait() returned before the context was cancelled")
+	case <-time.After(shortWaitMillis * time.Millisecond):
+	}
+
+	cancel()
+
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("wait() did not return after the context was cancelled")
+	}
+}
+
+// TestPollBattery drives the production watcher directly against a context
+// that is already cancelled, so it returns immediately rather than shelling
+// out to pmset or waiting on a real interval, empty override path and an
+// explicit one alike.
+//
+// On this platform an already-cancelled context makes the first pmset read
+// fail, which is a transient error rather than battery.ErrUnsupported, so
+// Watch's own loop falls through to its select - and there ctx.Done() is
+// already ready, so it returns nil before ever ticking again. pollBattery
+// therefore reports no error at all here rather than a wrapped one; that is
+// checked rather than assumed, since a reader with a different failure mode
+// could behave differently.
+func TestPollBattery(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		path string
+	}{
+		{name: "no override path", path: ""},
+		{name: "an override path", path: "/nonexistent/uevent"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			status := battery.NewStatus(battery.WithPercentage(unknownCharge))
+
+			if err := pollBattery(ctx, status, testCase.path); err != nil {
+				t.Errorf("pollBattery(%q) = %v, want nil on this platform", testCase.path, err)
+			}
+		})
 	}
 }

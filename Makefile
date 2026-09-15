@@ -18,9 +18,9 @@ GOARCH_DEV ?= arm64
 #   BEAST = 192.168.1.10:30005
 BEAST ?=
 
-.PHONY: all build build-aarch64 build-macos run run-demo run-beast run-blocks \
-        run-pattern run-specimen test test-coverage lint fmt ship pattern \
-        specimen radar test-device clean
+.PHONY: all build build-aarch64 build-macos run run-demo run-airline run-beast \
+        run-blocks run-pattern run-specimen test test-coverage lint fmt ship \
+        pattern specimen radar test-device clean
 
 all: build
 
@@ -47,6 +47,13 @@ run:
 run-demo:
 	go run . --demo
 
+# The demo fleet painted by operator rather than by altitude. The invented
+# fleet carries ten real callsign prefixes, one aircraft with no callsign and
+# one whose prefix is not in the database, so the legend and the muted
+# fallback both have something to show. c switches back while it runs.
+run-airline:
+	go run . --demo --colour airline
+
 # Draw a real feed from a remote demodulator. Nothing here needs a radio: the
 # frames are already decoded on the other end.
 run-beast:
@@ -58,14 +65,14 @@ run-beast:
 run-blocks:
 	go run . --backend blocks --demo
 
-# The orientation pattern, live. s steps on to the specimen and round to the
+# The orientation pattern, live. v steps on to the specimen and round to the
 # radar; q quits.
 run-pattern:
 	go run . --scene pattern
 
 # The type specimen, live. In Ghostty this lands on the kitty backend and the
 # fonts render at their real pixel sizes, which is the only way to judge them
-# without a uConsole on the desk. s switches back to the pattern, q quits.
+# without a uConsole on the desk. v switches back to the pattern, q quits.
 run-specimen:
 	go run . --scene specimen
 

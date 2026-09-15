@@ -90,7 +90,7 @@ type fontLoader func() (*psf.Font, error)
 
 // defaultScenes is the production scene set.
 func (r *runner) defaultScenes() ([]Drawer, error) {
-	return buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, r.source, r.scopeRange)
+	return buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large, r.source, r.scopeRange, r.battery)
 }
 
 // buildScenes loads the fonts and builds all three scenes, in SceneKind order.
@@ -107,6 +107,7 @@ func (r *runner) defaultScenes() ([]Drawer, error) {
 // nothing has been wired to it.
 func buildScenes(
 	small, body, bodyBold, large fontLoader, src source.Source, scopeRange *scope.Scope,
+	battery radar.BatteryReader,
 ) ([]Drawer, error) {
 	if src == nil {
 		src = source.Empty{}
@@ -122,7 +123,7 @@ func buildScenes(
 	}
 
 	return []Drawer{
-		radar.New(radar.Faces(faces), src, scopeRange),
+		radar.New(radar.Faces(faces), src, scopeRange, radar.WithBattery(battery)),
 		pattern.New(),
 		specimen.New(specimen.Faces(faces)),
 	}, nil

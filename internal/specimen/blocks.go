@@ -5,6 +5,7 @@ import (
 	"image/color"
 
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
@@ -50,8 +51,8 @@ func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string) int {
 	return box.Max.X
 }
 
-// drawHeader draws the band across the top: the wordmark on the left, the
-// clock on the right, a hairline under both.
+// drawHeader draws the band across the top: the wordmark on the left, the two
+// clocks on the right, a hairline under both.
 //
 // The band is filled with pal.Band and both texts are set in pal.BandInk
 // rather than the scene's usual muted/ink split, because paper's band is a
@@ -76,16 +77,49 @@ func (s *Scene) drawHeader(lay *layout) {
 	lay.dst.FillRect(image.Rect(lay.left, lay.y, lay.right, lay.y+band), s.pal.Band)
 
 	baseline := lay.y + band - headerPadY
-	clock := s.now().Format(clockFormat)
 
 	text.Draw(lay.dst, s.faces.BodyBold, lay.left, baseline-titleHeight, appTitle, s.pal.BandInk,
 		text.WithSpacing(headerTracking))
-	text.DrawRight(lay.dst, s.faces.Large, lay.right, baseline-clockHeight, clock, s.pal.BandInk)
+	s.drawClocks(lay, lay.y+band/2)
 
 	rule := lay.y + band
 	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Rule)
 
 	lay.advance(total)
+}
+
+// drawClocks sets the local clock large on the right of the band, with UTC
+// beside it in the body face.
+//
+// UTC comes off the same injected clock rather than off time.Now, so a scene
+// rendered with a fixed clock in a test produces the same two strings every
+// run.
+func (s *Scene) drawClocks(lay *layout, middle int) {
+	now := s.now()
+
+	pen := s.drawClock(lay, lay.right, middle, labelLocal, s.faces.Large, now.Format(clockFormat))
+	s.drawClock(lay, pen-clockGap, middle, labelUTC, s.faces.Body, now.UTC().Format(clockFormat)+utcSuffix)
+}
+
+// drawClock sets one labelled clock ending at rightX and returns the x its
+// label starts at.
+//
+// The pair is measured and then drawn left to right rather than drawn right to
+// left, so the label and the clock keep their own colours without the two
+// drifting apart as the minutes change width.
+func (s *Scene) drawClock(
+	lay *layout, rightX, middle int, label string, face *psf.Font, value string,
+) int {
+	small := s.faces.Small
+
+	labelWidth, labelHeight := text.Measure(small, label, text.WithSpacing(labelTracking))
+	valueWidth, valueHeight := text.Measure(face, value)
+	left := rightX - labelWidth - clockLabelGap - valueWidth
+
+	text.Draw(lay.dst, small, left, middle-labelHeight/2, label, s.pal.BandInk, text.WithSpacing(labelTracking))
+	text.Draw(lay.dst, face, left+labelWidth+clockLabelGap, middle-valueHeight/2, value, s.pal.BandInk)
+
+	return left
 }
 
 // drawCard draws the selected-flight card: the numbered label, the callsign

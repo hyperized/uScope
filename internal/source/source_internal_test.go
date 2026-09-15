@@ -477,6 +477,122 @@ func TestLiveReceiverGPSFix(t *testing.T) {
 		t.Errorf("Receiver coordinates = (%v, %v), want (%v, %v)",
 			receiver.Latitude, receiver.Longitude, gpsLatitude, gpsLongitude)
 	}
+
+	if receiver.Mode != FixGPS3D {
+		t.Errorf("Receiver.Mode = %d, want FixGPS3D (%d)", receiver.Mode, FixGPS3D)
+	}
+}
+
+// TestLiveReceiverFixMode pins the mode every branch of receiver reports.
+//
+// The mode is what the scope colours the home marker by, so a branch that
+// reported the wrong one would paint a guess in the colour of a fix. Each case
+// drives the same *location.Location a GPS-aware caller would.
+func TestLiveReceiverFixMode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		someLatitude  = 51.5
+		someLongitude = -0.1
+		twoDFix       = 2
+		threeDFix     = 3
+		noFix         = 0
+	)
+
+	for _, testCase := range []struct {
+		name  string
+		setUp func(*testing.T) *Live
+		want  FixMode
+	}{
+		{
+			name: "nothing known at all",
+			setUp: func(t *testing.T) *Live {
+				t.Helper()
+
+				return newTestLive(t)
+			},
+			want: FixNone,
+		},
+		{
+			name: "a position the operator typed in",
+			setUp: func(t *testing.T) *Live {
+				t.Helper()
+
+				return newTestLive(t, WithManualLocation(someLatitude, someLongitude))
+			},
+			want: FixManual,
+		},
+		{
+			name: "a two dimensional GPS fix",
+			setUp: func(t *testing.T) *Live {
+				t.Helper()
+
+				live := newTestLive(t)
+				live.loc.Update(
+					location.WithLatitude(someLatitude),
+					location.WithLongitude(someLongitude),
+					location.WithMode(twoDFix),
+				)
+
+				return live
+			},
+			want: FixGPS2D,
+		},
+		{
+			name: "a three dimensional GPS fix",
+			setUp: func(t *testing.T) *Live {
+				t.Helper()
+
+				live := newTestLive(t)
+				live.loc.Update(
+					location.WithLatitude(someLatitude),
+					location.WithLongitude(someLongitude),
+					location.WithMode(threeDFix),
+				)
+
+				return live
+			},
+			want: FixGPS3D,
+		},
+		{
+			name: "a self-locate estimate",
+			setUp: func(t *testing.T) *Live {
+				t.Helper()
+
+				live := newTestLive(t)
+				live.loc.Update(
+					location.WithLatitude(someLatitude),
+					location.WithLongitude(someLongitude),
+					location.WithMode(noFix),
+					location.WithSource(location.SourceInferred),
+				)
+
+				return live
+			},
+			want: FixEstimated,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.setUp(t).receiver().Mode; got != testCase.want {
+				t.Errorf("Receiver.Mode = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+// newTestLive builds a Live for the cases above, failing the test rather than
+// making every one of them handle a constructor error that cannot happen.
+func newTestLive(t *testing.T, opts ...LiveOption) *Live {
+	t.Helper()
+
+	live, err := NewLive(opts...)
+	if err != nil {
+		t.Fatalf("NewLive: %v", err)
+	}
+
+	return live
 }
 
 // TestLiveWithEstimateIntervalOption covers both branches directly: a

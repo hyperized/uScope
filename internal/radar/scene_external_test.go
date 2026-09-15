@@ -79,6 +79,7 @@ func sceneFrame(planes ...airplane.Snapshot) source.Frame {
 			Longitude: receiverLon,
 			HasFix:    true,
 			Label:     source.LabelManual,
+			Mode:      source.FixManual,
 		},
 		Source: adsb.SourceInfo{Label: "DEMO", Connected: true},
 		Stats:  adsb.Stats{TotalFrames: 512},
@@ -117,6 +118,24 @@ func painted(canv *canvas.Canvas, box image.Rectangle) int {
 	for y := area.Min.Y; y < area.Max.Y; y++ {
 		for x := area.Min.X; x < area.Max.X; x++ {
 			if canv.Image().RGBAAt(x, y) != theme.Night.Field {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+// countColour counts the pixels in box that are exactly col, which is how a
+// few of the tests below confirm a specific ink was used without pinning a
+// whole picture.
+func countColour(canv *canvas.Canvas, box image.Rectangle, col color.RGBA) int {
+	area := box.Intersect(canv.Bounds())
+	count := 0
+
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		for x := area.Min.X; x < area.Max.X; x++ {
+			if canv.Image().RGBAAt(x, y) == col {
 				count++
 			}
 		}
@@ -454,19 +473,26 @@ func TestHandleTakesItsOwnKeys(t *testing.T) {
 		{name: "equals widens", key: input.Key{Kind: input.Rune, Rune: '='}, want: true},
 		{name: "minus narrows", key: input.Key{Kind: input.Rune, Rune: '-'}, want: true},
 		{name: "underscore narrows", key: input.Key{Kind: input.Rune, Rune: '_'}, want: true},
-		{name: "a toggles auto", key: input.Key{Kind: input.Rune, Rune: 'a'}, want: true},
-		{name: "A toggles auto", key: input.Key{Kind: input.Rune, Rune: 'A'}, want: true},
+		{name: "r toggles auto", key: input.Key{Kind: input.Rune, Rune: 'r'}, want: true},
+		{name: "R toggles auto", key: input.Key{Kind: input.Rune, Rune: 'R'}, want: true},
 		{name: "t toggles trails", key: input.Key{Kind: input.Rune, Rune: 't'}, want: true},
 		{name: "T toggles trails", key: input.Key{Kind: input.Rune, Rune: 'T'}, want: true},
+		{name: "a toggles airports", key: input.Key{Kind: input.Rune, Rune: 'a'}, want: true},
+		{name: "A toggles airports", key: input.Key{Kind: input.Rune, Rune: 'A'}, want: true},
+		{name: "c cycles the colour mode", key: input.Key{Kind: input.Rune, Rune: 'c'}, want: true},
+		{name: "C cycles the colour mode", key: input.Key{Kind: input.Rune, Rune: 'C'}, want: true},
 		{name: "down selects the next", key: input.Key{Kind: input.Down}, want: true},
 		{name: "up selects the previous", key: input.Key{Kind: input.Up}, want: true},
 
 		// The false cases are the ones that matter. Anything the scene takes
-		// here is a key the run loop never sees, and q is how you get out.
+		// here is a key the run loop never sees, and q is how you get out. m is
+		// reserved for a later block and s moved to v, so both fall through now.
 		{name: "q falls through", key: input.Key{Kind: input.Rune, Rune: 'q'}},
 		{name: "Q falls through", key: input.Key{Kind: input.Rune, Rune: 'Q'}},
 		{name: "s falls through", key: input.Key{Kind: input.Rune, Rune: 's'}},
 		{name: "S falls through", key: input.Key{Kind: input.Rune, Rune: 'S'}},
+		{name: "v falls through", key: input.Key{Kind: input.Rune, Rune: 'v'}},
+		{name: "m falls through", key: input.Key{Kind: input.Rune, Rune: 'm'}},
 		{name: "esc falls through", key: input.Key{Kind: input.Esc}},
 		{name: "ctrl-c falls through", key: input.Key{Kind: input.CtrlC}},
 		{name: "left falls through", key: input.Key{Kind: input.Left}},
@@ -645,13 +671,12 @@ func TestSelectionOnAnEmptyList(t *testing.T) {
 // TestRowWindowFollowsTheSelection covers the scrolling. With more aircraft
 // than rows fit, selecting past the bottom has to bring the window with it, or
 // the operator would be moving a selection nobody can see.
-func TestRowWindowFollowsTheSelection(t *testing.T) {
-	t.Parallel()
-
-	const crowd = 40
-
-	planes := make([]airplane.Snapshot, 0, crowd)
-	for index := range crowd {
+// rowFleet builds count aircraft that fan out around the receiver at
+// increasing bearing and distance, distinct enough in ICAO and callsign to
+// fill or overflow the compact row list.
+func rowFleet(count int) []airplane.Snapshot {
+	planes := make([]airplane.Snapshot, 0, count)
+	for index := range count {
 		planes = append(planes, scenePlane(
 			string(rune('A'+index%26))+"00000"+string(rune('0'+index%10)),
 			"FL"+string(rune('0'+index%10)),
@@ -659,8 +684,16 @@ func TestRowWindowFollowsTheSelection(t *testing.T) {
 		))
 	}
 
+	return planes
+}
+
+func TestRowWindowFollowsTheSelection(t *testing.T) {
+	t.Parallel()
+
+	const crowd = 40
+
 	// A short canvas so far fewer than forty rows fit.
-	scene, canv, _ := sceneOn(t, panelWidth, 400, sceneFrame(planes...))
+	scene, canv, _ := sceneOn(t, panelWidth, 400, sceneFrame(rowFleet(crowd)...))
 	scene.Draw(canv, 0)
 
 	top, err := canvas.New(panelWidth, 400)
@@ -787,14 +820,14 @@ func TestAutoToggleStopsTheRangeMoving(t *testing.T) {
 
 	scene, canv, ranges := sceneOn(t, panelWidth, panelHeight, frame)
 
-	press(scene, 'a')
+	press(scene, 'r')
 	scene.Draw(canv, 0)
 
 	if got := ranges.GetCurrent(); got != sceneRangeNm {
 		t.Errorf("range = %g with auto off, want it left at %g", got, float64(sceneRangeNm))
 	}
 
-	press(scene, 'A')
+	press(scene, 'R')
 	scene.Draw(canv, 0)
 
 	if got := ranges.GetCurrent(); got != 40 {
@@ -951,5 +984,671 @@ func TestSetPaletteChangesColours(t *testing.T) {
 
 	if got := canv.Image().RGBAAt(0, 0); got != theme.Paper.Field {
 		t.Errorf("field pixel after SetPalette(Paper) = %v, want %v", got, theme.Paper.Field)
+	}
+}
+
+// TestColourKeyCyclesMode checks that c and C are taken by Handle and cycle
+// the colour mode, proved by the picture changing rather than by reading the
+// mode back.
+func TestColourKeyCyclesMode(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		key  rune
+	}{
+		{name: "lowercase c cycles the mode", key: 'c'},
+		{name: "uppercase C cycles the mode", key: 'C'},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+			scene.Draw(canv, 0)
+
+			before, err := canvas.New(panelWidth, panelHeight)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			scene.Draw(before, 0)
+
+			if !press(scene, testCase.key) {
+				t.Fatalf("Handle(%q) = false, want the scene to take it", testCase.key)
+			}
+
+			scene.Draw(canv, 0)
+
+			if identical(canv, before) {
+				t.Errorf("colour key %q did not change the picture", testCase.key)
+			}
+		})
+	}
+}
+
+// TestColourSettingsChangeWhatIsDrawn checks the two ways airline mode can
+// reach a scene (WithColour at construction, Apply on one already built) and
+// the rule that an empty Settings reads as altitude mode.
+func TestColourSettingsChangeWhatIsDrawn(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	t.Run("WithColour(ColourAirline) draws differently than the default", func(t *testing.T) {
+		t.Parallel()
+
+		altitude, altitudeCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		altitude.Draw(altitudeCanvas, 0)
+
+		airline, airlineCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+		airline.Draw(airlineCanvas, 0)
+
+		if identical(altitudeCanvas, airlineCanvas) {
+			t.Error("WithColour(ColourAirline) drew the same picture as the default altitude mode")
+		}
+	})
+
+	t.Run("Apply changes what the next Draw paints", func(t *testing.T) {
+		t.Parallel()
+
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		scene.Draw(canv, 0)
+
+		before, err := canvas.New(panelWidth, panelHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scene.Draw(before, 0)
+
+		scene.Apply(radar.Settings{Colour: radar.ColourAirline})
+		scene.Draw(canv, 0)
+
+		if identical(canv, before) {
+			t.Error("Apply(Settings{Colour: ColourAirline}) did not change the picture")
+		}
+	})
+
+	t.Run("an empty Settings draws the same as ColourAltitude", func(t *testing.T) {
+		t.Parallel()
+
+		zero, zeroCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		zero.Apply(radar.Settings{})
+		zero.Draw(zeroCanvas, 0)
+
+		altitude, altitudeCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame,
+			radar.WithColour(radar.ColourAltitude))
+		altitude.Draw(altitudeCanvas, 0)
+
+		if !identical(zeroCanvas, altitudeCanvas) {
+			t.Error("Apply(Settings{}) drew differently from ColourAltitude")
+		}
+	})
+}
+
+// TestAirportsToggle checks that a and A are taken by Handle, and that turning
+// the airfield markers off actually removes them from the scope rather than
+// merely accepting the key.
+func TestAirportsToggle(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Draw(canv, 0)
+
+	withAirports := painted(canv, scopeBox)
+
+	if !press(scene, 'a') {
+		t.Fatal("Handle('a') = false, want the scene to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	withoutAirports := painted(canv, scopeBox)
+	if withoutAirports >= withAirports {
+		t.Errorf("scope pixels with airports off = %d, with them on = %d, want fewer", withoutAirports, withAirports)
+	}
+
+	press(scene, 'A')
+	scene.Draw(canv, 0)
+
+	if painted(canv, scopeBox) != withAirports {
+		t.Error("turning airports back on did not restore the picture")
+	}
+}
+
+// homeRingPixel is a point on the home marker's ring at the panel's
+// resolution, worked out the way scopeBox is: the scope's own centre plus its
+// ring radius, landing just past the centre dot rather than on it.
+//
+//nolint:gochecknoglobals // a point is data, and image.Point cannot be const.
+var homeRingPixel = image.Pt(316, 373)
+
+// TestHomeMarkerRingColour checks that the ring around the receiver's own
+// position takes the colour that says how much that position is worth, for
+// every fix mode there is.
+func TestHomeMarkerRingColour(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		mode source.FixMode
+		want color.RGBA
+	}{
+		{name: "no fix reads as muted", mode: source.FixNone, want: theme.Night.Muted},
+		{name: "a manual position takes the ink", mode: source.FixManual, want: theme.Night.Ink},
+		{name: "an estimate takes the accent", mode: source.FixEstimated, want: theme.Night.Accent},
+		{name: "a GPS still searching is critical", mode: source.FixGPSNoFix, want: theme.Night.AltHigh},
+		{name: "a 2D GPS fix is the mid band", mode: source.FixGPS2D, want: theme.Night.AltMid},
+		{name: "a full 3D GPS fix is the low band", mode: source.FixGPS3D, want: theme.Night.AltLow},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+			frame.Receiver.Mode = testCase.mode
+
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+			scene.Draw(canv, 0)
+
+			if got := canv.Image().RGBAAt(homeRingPixel.X, homeRingPixel.Y); got != testCase.want {
+				t.Errorf("ring pixel = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// cardBox is the selected-flight card's own area at the panel's resolution,
+// used wherever a test needs to know a colour landed on the card rather than
+// merely somewhere on the column.
+var cardBox = image.Rect(620, 80, 1264, 260) //nolint:gochecknoglobals // a rectangle is data.
+
+// TestAirlineModeColoursOperatorsAndMutesUnknowns checks that airline mode
+// paints a fleet of known operators differently from altitude mode, and that
+// an aircraft with no callsign or an unrecognised prefix falls back to the
+// palette's muted colour, the same answer altitude mode gives an aircraft with
+// no decoded altitude.
+func TestAirlineModeColoursOperatorsAndMutesUnknowns(t *testing.T) {
+	t.Parallel()
+
+	t.Run("known operators paint differently than altitude mode", func(t *testing.T) {
+		t.Parallel()
+
+		frame := sceneFrame(
+			scenePlane("484AC1", "KLM123", 45, 12, 2400, 41),
+			scenePlane("3C6745", "EZY456", 90, 20, 8000, 100),
+			scenePlane("4CA2D3", "DLH789", 135, 30, 15000, 190),
+		)
+
+		altitude, altitudeCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		altitude.Draw(altitudeCanvas, 0)
+
+		airline, airlineCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+		airline.Draw(airlineCanvas, 0)
+
+		if identicalIn(altitudeCanvas, airlineCanvas, scopeBox) {
+			t.Error("the scope painted the same picture in airline mode as in altitude mode")
+		}
+	})
+
+	t.Run("no callsign is drawn muted", func(t *testing.T) {
+		t.Parallel()
+
+		frame := sceneFrame(scenePlane("484AC1", "", 45, 12, 2400, 41))
+
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+		scene.Draw(canv, 0)
+
+		if countColour(canv, cardBox, theme.Night.Muted) == 0 {
+			t.Error("an aircraft with no callsign was not drawn in the muted colour")
+		}
+	})
+
+	t.Run("an unrecognised prefix is drawn muted", func(t *testing.T) {
+		t.Parallel()
+
+		// LFV is a real ICAO code that is deliberately not in the airlines
+		// database, which is what makes it the unknown-prefix case.
+		frame := sceneFrame(scenePlane("484AC1", "LFV21", 45, 12, 2400, 41))
+
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+		scene.Draw(canv, 0)
+
+		if countColour(canv, cardBox, theme.Night.Muted) == 0 {
+			t.Error("an aircraft with an unrecognised prefix was not drawn in the muted colour")
+		}
+	})
+}
+
+// fourOperatorFleet is four operators with strictly decreasing aircraft
+// counts (KLM 5, EZY 4, DLH 3, BAW 2), so the legend's ranking is unambiguous
+// and never depends on the order the frame lists them in.
+func fourOperatorFleet() []airplane.Snapshot {
+	return []airplane.Snapshot{
+		scenePlane("AAA001", "KLM1", 10, 5, 3000, 10),
+		scenePlane("AAA002", "KLM2", 10, 5, 3000, 10),
+		scenePlane("AAA003", "KLM3", 10, 5, 3000, 10),
+		scenePlane("AAA004", "KLM4", 10, 5, 3000, 10),
+		scenePlane("AAA005", "KLM5", 10, 5, 3000, 10),
+		scenePlane("BBB001", "EZY1", 20, 6, 3000, 10),
+		scenePlane("BBB002", "EZY2", 20, 6, 3000, 10),
+		scenePlane("BBB003", "EZY3", 20, 6, 3000, 10),
+		scenePlane("BBB004", "EZY4", 20, 6, 3000, 10),
+		scenePlane("CCC001", "DLH1", 30, 7, 3000, 10),
+		scenePlane("CCC002", "DLH2", 30, 7, 3000, 10),
+		scenePlane("CCC003", "DLH3", 30, 7, 3000, 10),
+		scenePlane("DDD001", "BAW1", 40, 8, 3000, 10),
+		scenePlane("DDD002", "BAW2", 40, 8, 3000, 10),
+	}
+}
+
+// legendStrip is the row the altitude and airline legends draw into at the
+// panel's resolution, worked out the way scopeBox is: the column, one line
+// above the stats line already claimed off its bottom.
+//
+//nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
+var legendStrip = image.Rect(625, 630, 1264, 642)
+
+// TestAirlineLegendNamesOnlyFourOperators checks that a fifth distinct
+// operator outside the top four never changes what the legend shows, which is
+// how these tests confirm "only four are named" without reading any text.
+func TestAirlineLegendNamesOnlyFourOperators(t *testing.T) {
+	t.Parallel()
+
+	top4 := fourOperatorFleet()
+
+	// A fifth operator with only one aircraft always ranks last behind the
+	// four above, so its presence or absence must never move the legend.
+	fifth := scenePlane("EEE001", "RYR1", 50, 9, 3000, 10)
+
+	withFive, withFiveCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(append(append([]airplane.Snapshot{}, top4...), fifth)...), radar.WithColour(radar.ColourAirline))
+	withFive.Draw(withFiveCanvas, 0)
+
+	withFour, withFourCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(top4...), radar.WithColour(radar.ColourAirline))
+	withFour.Draw(withFourCanvas, 0)
+
+	if !identicalIn(withFiveCanvas, withFourCanvas, legendStrip) {
+		t.Error("a fifth operator outside the top four changed the legend strip, want only four named")
+	}
+}
+
+// TestAirlineLegendShowsOther checks that an aircraft with no colour of its
+// own adds the OTHER entry: its swatch is a full, solid block, which a legend
+// with nothing uncoloured on screen never paints there.
+func TestAirlineLegendShowsOther(t *testing.T) {
+	t.Parallel()
+
+	top4 := fourOperatorFleet()
+	unknown := scenePlane("EEE001", "LFV21", 50, 9, 3000, 10)
+
+	// otherSwatchBox is where the fifth legend slot's swatch lands once OTHER
+	// is showing, worked out the same way the legend itself divides its width
+	// among however many slots are on screen.
+	otherSwatchBox := image.Rect(1133, 630, 1143, 640)
+
+	withOther, withOtherCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(append(append([]airplane.Snapshot{}, top4...), unknown)...), radar.WithColour(radar.ColourAirline))
+	withOther.Draw(withOtherCanvas, 0)
+
+	withoutOther, withoutOtherCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(top4...), radar.WithColour(radar.ColourAirline))
+	withoutOther.Draw(withoutOtherCanvas, 0)
+
+	const fullSwatch = 100 // the swatch is a solid 10x10 block when it is drawn.
+
+	if got := painted(withOtherCanvas, otherSwatchBox); got != fullSwatch {
+		t.Errorf("OTHER swatch painted pixels = %d, want the full %d-pixel block", got, fullSwatch)
+	}
+
+	if got := painted(withoutOtherCanvas, otherSwatchBox); got == fullSwatch {
+		t.Error("that box is fully painted with no unrecognised aircraft on screen, want no swatch there")
+	}
+}
+
+// detailsBlockBox is the details block's own area at the panel's resolution.
+var detailsBlockBox = image.Rect(620, 500, 1264, 615) //nolint:gochecknoglobals // a rectangle is data.
+
+// TestDetailsBlockShowsNoTrafficWhenEmpty checks that the block keeps its
+// room and says NO TRAFFIC with an empty sky, rather than collapsing away.
+func TestDetailsBlockShowsNoTrafficWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	withTraffic := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	empty := sceneFrame()
+
+	loaded, loadedCanvas, _ := sceneOn(t, panelWidth, panelHeight, withTraffic)
+	loaded.Draw(loadedCanvas, 0)
+
+	if painted(loadedCanvas, detailsBlockBox) == 0 {
+		t.Fatal("the details block drew nothing with an aircraft selected")
+	}
+
+	bare, bareCanvas, _ := sceneOn(t, panelWidth, panelHeight, empty)
+	bare.Draw(bareCanvas, 0)
+
+	if painted(bareCanvas, detailsBlockBox) == 0 {
+		t.Fatal("the details block drew nothing with an empty sky, want the NO TRAFFIC state")
+	}
+
+	if identicalIn(loadedCanvas, bareCanvas, detailsBlockBox) {
+		t.Error("the details block looks the same with and without traffic")
+	}
+}
+
+// TestDetailsVerticalRateTriangle checks that a climbing, a descending and a
+// level aircraft each leave a different picture in the details block.
+func TestDetailsVerticalRateTriangle(t *testing.T) {
+	t.Parallel()
+
+	const (
+		climbRate    = 2000.0
+		descentRate  = -2000.0
+		levelRateVal = 0.0
+	)
+
+	draw := func(tb testing.TB, rate float64) *canvas.Canvas {
+		tb.Helper()
+
+		plane := scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)
+		plane.VertRate = rate
+
+		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, sceneFrame(plane))
+		scene.Draw(canv, 0)
+
+		return canv
+	}
+
+	climbing := draw(t, climbRate)
+	descending := draw(t, descentRate)
+	level := draw(t, levelRateVal)
+
+	if identicalIn(climbing, descending, detailsBlockBox) {
+		t.Error("a climbing and a descending aircraft drew the same details block")
+	}
+
+	if identicalIn(climbing, level, detailsBlockBox) {
+		t.Error("a climbing and a level aircraft drew the same details block")
+	}
+
+	if identicalIn(descending, level, detailsBlockBox) {
+		t.Error("a descending and a level aircraft drew the same details block")
+	}
+}
+
+// rowListRightBand sits inside the tenth compact row's line, in the columns
+// only a real aircraft row fills (altitude, speed, distance, bearing). The
+// "+N MORE" line is short and left-aligned, so it never reaches this far
+// right: painted pixels here mean a real row, not the tail.
+var rowListRightBand = image.Rect(1100, 460, 1264, 480) //nolint:gochecknoglobals // a rectangle is data.
+
+// TestRowListMoreLine checks the window boundary the "+N MORE" line closes: a
+// fleet exactly the size of the window leaves a real row on the last line,
+// one aircraft more replaces it with the tail, and both a light and a busy
+// fleet still draw.
+func TestRowListMoreLine(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		count       int
+		wantRealRow bool
+	}{
+		{name: "fewer than the window: no tenth line at all", count: 9, wantRealRow: false},
+		{name: "exactly the window: the tenth line is a real row", count: 10, wantRealRow: true},
+		{name: "one more than the window: the tenth line is the more line", count: 11, wantRealRow: false},
+		{name: "a light fleet of twelve still draws", count: 12, wantRealRow: false},
+		{name: "a busy fleet of forty still draws", count: benchPlanes, wantRealRow: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := sceneFrame(rowFleet(testCase.count)...)
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+			scene.Draw(canv, 0)
+
+			if painted(canv, canv.Bounds()) == 0 {
+				t.Fatal("nothing was drawn at all")
+			}
+
+			if got := painted(canv, rowListRightBand) > 0; got != testCase.wantRealRow {
+				t.Errorf("tenth line is a real row = %v, want %v", got, testCase.wantRealRow)
+			}
+		})
+	}
+}
+
+// fakeBattery is a fixed BatteryReader, standing in for uAirwaves' live
+// poller.
+type fakeBattery struct {
+	percent  int8
+	charging bool
+}
+
+func (f *fakeBattery) GetPercentage() int8 { return f.percent }
+
+func (f *fakeBattery) IsCharging() bool { return f.charging }
+
+// TestBatteryIndicator checks the header's battery glyph against a baseline
+// with no battery wired up at all: every real reading has to change the
+// header, and a negative reading (nothing read yet) has to draw nothing,
+// matching the no-battery baseline exactly.
+func TestBatteryIndicator(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	baseline, baselineCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	baseline.Draw(baselineCanvas, 0)
+
+	for _, testCase := range []struct {
+		name     string
+		fake     fakeBattery
+		wantSame bool
+	}{
+		{name: "84 percent, not charging", fake: fakeBattery{percent: 84}},
+		{name: "8 percent, charging", fake: fakeBattery{percent: 8, charging: true}},
+		{name: "a full battery", fake: fakeBattery{percent: 100}},
+		{name: "an empty battery", fake: fakeBattery{percent: 0}},
+		{name: "no reading yet draws nothing", fake: fakeBattery{percent: -1}, wantSame: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithBattery(&testCase.fake))
+			scene.Draw(canv, 0)
+
+			same := identical(canv, baselineCanvas)
+			if same != testCase.wantSame {
+				t.Errorf("battery drawn same as no battery = %v, want %v", same, testCase.wantSame)
+			}
+		})
+	}
+}
+
+// headerRightBox covers both clocks and the battery slot on the right of the
+// header band at the panel's resolution.
+var headerRightBox = image.Rect(900, 16, 1264, 64) //nolint:gochecknoglobals // a rectangle is data.
+
+// utcClockBox sits to the left of the local clock, in the region confirmed to
+// hold only the UTC clock: the same instant in two different zones paints
+// this area identically while the local clock beside it differs.
+var utcClockBox = image.Rect(1000, 16, 1180, 64) //nolint:gochecknoglobals // a rectangle is data.
+
+// TestHeaderClocks checks that a fixed instant draws both clocks, and that the
+// same instant expressed in two different zones draws the same UTC half while
+// the local clock differs.
+func TestHeaderClocks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a fixed clock draws both clocks", func(t *testing.T) {
+		t.Parallel()
+
+		frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+		frame.Now = time.Date(2026, time.September, 15, 21, 30, 0, 0, time.FixedZone("CEST", 2*60*60))
+
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		scene.Draw(canv, 0)
+
+		if painted(canv, headerRightBox) == 0 {
+			t.Fatal("the header drew nothing, want both clocks")
+		}
+	})
+
+	t.Run("the same instant in two zones draws the same UTC half", func(t *testing.T) {
+		t.Parallel()
+
+		zoneA := time.FixedZone("A", 60*60)
+		zoneB := time.FixedZone("B", -5*60*60)
+		instant := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+
+		frameA := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+		frameA.Now = instant.In(zoneA)
+
+		frameB := frameA
+		frameB.Now = instant.In(zoneB)
+
+		sceneA, canvasA, _ := sceneOn(t, panelWidth, panelHeight, frameA)
+		sceneA.Draw(canvasA, 0)
+
+		sceneB, canvasB, _ := sceneOn(t, panelWidth, panelHeight, frameB)
+		sceneB.Draw(canvasB, 0)
+
+		if identical(canvasA, canvasB) {
+			t.Error("two different zones drew identical headers, want the local clock to differ")
+		}
+
+		if !identicalIn(canvasA, canvasB, utcClockBox) {
+			t.Error("the UTC clock differed between two zones showing the same instant")
+		}
+	})
+}
+
+// TestRowTableRespectsItsRightEdge draws the compact rows at the panel width
+// and at a canvas just over minColumnWidth, and checks the margin strip beside
+// the first row is never painted there: the table never runs its own right
+// column past the layout's own right edge.
+//
+// The check is scoped to the row band rather than the whole frame height,
+// because the key bar spans the full width of the layout, not just the
+// column, and can legitimately end a few pixels past its own break point; that
+// is a property of the key bar, not of the row table this test is about.
+func TestRowTableRespectsItsRightEdge(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(fleet(5, 10)...)
+
+	// firstRowTop and firstRowHeight bound the first compact row's own line.
+	// The card and the header above it are sized only from font metrics, so
+	// this row starts at the same y on every canvas size tested here.
+	const (
+		firstRowTop    = 285
+		firstRowHeight = 20
+		marginWidth    = 16
+	)
+
+	for _, testCase := range []struct {
+		name          string
+		width, height int
+	}{
+		{name: "the panel width", width: panelWidth, height: panelHeight},
+		{name: "just over the column threshold", width: 641, height: 480},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, _ := sceneOn(t, testCase.width, testCase.height, frame)
+			scene.Draw(canv, 0)
+
+			row := image.Rect(0, firstRowTop, testCase.width, firstRowTop+firstRowHeight)
+			if painted(canv, row) == 0 {
+				t.Fatal("nothing was drawn on the first row, want a real aircraft row there")
+			}
+
+			margin := image.Rect(testCase.width-marginWidth, firstRowTop, testCase.width, firstRowTop+firstRowHeight)
+			if painted(canv, margin) != 0 {
+				t.Error("the row table ran past its own right edge into the margin")
+			}
+		})
+	}
+}
+
+// TestAirlineLegendEmptySky checks the guard that keeps the legend from
+// drawing anything when there is nothing to show: an airline-mode frame with
+// no aircraft has no operator to name and nothing uncoloured to call OTHER, so
+// the strip stays blank rather than an empty swatch or a stray label.
+func TestAirlineLegendEmptySky(t *testing.T) {
+	t.Parallel()
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(), radar.WithColour(radar.ColourAirline))
+	scene.Draw(canv, 0)
+
+	if painted(canv, legendStrip) != 0 {
+		t.Error("the airline legend drew something with no aircraft on screen, want nothing")
+	}
+}
+
+// TestAirlineColourAdaptsToThePalette checks that operator colours are
+// adapted for the field they land on: WithSettings carries the colour mode at
+// construction the same way WithColour does, and Paper's light field takes
+// the OnLight() half of an airline's colour rather than OnDark()'s.
+func TestAirlineColourAdaptsToThePalette(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	t.Run("WithSettings carries the colour mode at construction", func(t *testing.T) {
+		t.Parallel()
+
+		altitude, altitudeCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+		altitude.Draw(altitudeCanvas, 0)
+
+		airline, airlineCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame,
+			radar.WithSettings(radar.Settings{Colour: radar.ColourAirline}))
+		airline.Draw(airlineCanvas, 0)
+
+		if identical(altitudeCanvas, airlineCanvas) {
+			t.Error("WithSettings(Settings{Colour: ColourAirline}) drew the same picture as the default")
+		}
+	})
+
+	t.Run("an operator's colour is adapted differently on each palette", func(t *testing.T) {
+		t.Parallel()
+
+		night, nightCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+		night.Draw(nightCanvas, 0)
+
+		paper, paperCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame,
+			radar.WithColour(radar.ColourAirline), radar.WithPalette(theme.Paper))
+		paper.Draw(paperCanvas, 0)
+
+		if painted(paperCanvas, scopeBox) == 0 {
+			t.Fatal("nothing was drawn on the paper palette in airline mode")
+		}
+
+		if identicalIn(nightCanvas, paperCanvas, scopeBox) {
+			t.Error("night and paper drew the same operator colour, want OnDark and OnLight to differ")
+		}
+	})
+}
+
+// TestDetailsSquawkEmergency checks that an emergency squawk carries the
+// accent into the details block, the one place besides the selection that
+// colour marks.
+func TestDetailsSquawkEmergency(t *testing.T) {
+	t.Parallel()
+
+	plane := scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)
+	plane.Squawk = "7700"
+	plane.Emergency = true
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(plane))
+	scene.Draw(canv, 0)
+
+	if countColour(canv, detailsBlockBox, theme.Night.Accent) == 0 {
+		t.Error("an emergency squawk did not paint the accent colour in the details block")
 	}
 }

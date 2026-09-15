@@ -82,6 +82,19 @@ const (
 	appTitle    = "USCOPE"
 	clockFormat = "15:04"
 
+	// The two clocks, matching the radar's header. Aviation runs on UTC, so
+	// the specimen mocks both: the point of the scene is judging the type at
+	// the sizes the radar sets it in, and one clock would leave the Body face
+	// on the right of the band untested.
+	labelUTC   = "UTC"
+	labelLocal = "LCL"
+	utcSuffix  = "Z"
+
+	// clockLabelGap is the air between a clock's label and the clock, and
+	// clockGap the air between the two clocks.
+	clockLabelGap = 5
+	clockGap      = 16
+
 	cardLabel    = "01 / SELECTED FLIGHT"
 	cardCallsign = "UAE35Q"
 	cardType     = "BOEING 777-300ER"
@@ -148,7 +161,7 @@ var flightRows = [...][columns]string{
 var keyCaps = [...]keyCap{
 	{key: "Q", label: "QUIT"},
 	{key: "L", label: "THEME"},
-	{key: "S", label: "SCENE"},
+	{key: "V", label: "VIEW"},
 }
 
 // Faces are the four console fonts the scene sets type in. A nil face is not

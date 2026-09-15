@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
@@ -29,6 +30,8 @@ const (
 	defaultBackend = "auto"
 	defaultScene   = "radar"
 	defaultTheme   = "night"
+	defaultColour  = "altitude"
+	defaultOn      = "on"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -88,6 +91,9 @@ var (
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
 	errScene      = errors.New(appName + ": --scene must be radar, pattern or specimen")
 	errTheme      = errors.New(appName + ": --theme must be night or paper")
+	errColour     = errors.New(appName + ": --colour must be altitude or airline")
+	errAirports   = errors.New(appName + ": --airports must be on or off")
+	errBattery    = errors.New(appName + ": --battery must not be empty")
 	errLatitude   = errors.New(appName + ": --lat out of range")
 	errLongitude  = errors.New(appName + ": --lon out of range")
 	errLatLonPair = errors.New(appName + ": --lat and --lon must be given together")
@@ -110,6 +116,12 @@ type config struct {
 	backend     backend.Kind
 	scene       app.SceneKind
 	theme       theme.Kind
+	colour      radar.ColourMode
+	airports    radar.Toggle
+
+	// battery is the power-supply file to read instead of looking one up. It
+	// is empty for the normal case, which is autodiscovery.
+	battery string
 
 	// Where the aircraft come from, and where the receiver is if the operator
 	// said. hasLocation is separate from the two coordinates because latitude
@@ -132,6 +144,9 @@ type rawFlags struct {
 	backend     string
 	scene       string
 	theme       string
+	colour      string
+	airports    string
+	battery     string
 	beast       string
 	replay      string
 	latitude    string
@@ -182,6 +197,12 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"what to draw: radar, pattern or specimen")
 	set.StringVar(&raw.theme, "theme", defaultTheme,
 		"colour theme: night or paper")
+	set.StringVar(&raw.colour, "colour", defaultColour,
+		"what an aircraft's colour means: altitude or airline")
+	set.StringVar(&raw.airports, "airports", defaultOn,
+		"draw the airfield markers on the scope: on or off")
+	set.StringVar(&raw.battery, "battery", "",
+		"power-supply uevent file to read the battery from; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
 		"fly an invented fleet instead of decoding one, for a machine with no receiver")
 	set.StringVar(&raw.beast, "beast", "",
@@ -198,41 +219,97 @@ func bind(set *flag.FlagSet) *rawFlags {
 	return raw
 }
 
-// validated range-checks everything and produces the config.
-func (raw rawFlags) validated() (config, error) {
-	if raw.fb == "" {
-		return config{}, errEmptyFB
-	}
+// display is the half of the command line that decides what gets drawn and
+// where it lands.
+//
+// It is a struct rather than eight return values because validated would
+// otherwise carry one branch per flag, and the flags keep arriving. Grouping
+// them by what they do beats grouping them by which function happened to parse
+// them first.
+type display struct {
+	rotation   rotate.Rotation
+	autoRotate bool
+	size       image.Point
+	backend    backend.Kind
+	scene      app.SceneKind
+	theme      theme.Kind
+	radar      radar.Settings
+}
 
-	if raw.fps < minFPS || raw.fps > maxFPS {
-		return config{}, fmt.Errorf("%w: got %d, want %d to %d", errFPSRange, raw.fps, minFPS, maxFPS)
-	}
-
-	if raw.frames < minFrames || raw.frames > maxFrames {
-		return config{}, fmt.Errorf("%w: got %d, want %d to %d", errFrames, raw.frames, minFrames, maxFrames)
-	}
-
-	rot, auto, err := parseRotate(raw.rotate)
+// display parses every flag that is an allow list or a shape, in the order
+// they appear in --help.
+func (raw rawFlags) display() (display, error) {
+	rotation, auto, err := parseRotate(raw.rotate)
 	if err != nil {
-		return config{}, err
+		return display{}, err
 	}
 
 	size, err := parseSize(raw.size)
 	if err != nil {
-		return config{}, err
+		return display{}, err
 	}
 
 	kind, err := parseBackend(raw.backend, raw.png)
 	if err != nil {
-		return config{}, err
+		return display{}, err
 	}
 
 	scene, err := parseScene(raw.scene)
 	if err != nil {
-		return config{}, err
+		return display{}, err
 	}
 
 	themeKind, err := parseTheme(raw.theme)
+	if err != nil {
+		return display{}, err
+	}
+
+	colour, err := parseColour(raw.colour)
+	if err != nil {
+		return display{}, err
+	}
+
+	airports, err := parseAirports(raw.airports)
+	if err != nil {
+		return display{}, err
+	}
+
+	return display{
+		rotation:   rotation,
+		autoRotate: auto,
+		size:       size,
+		backend:    kind,
+		scene:      scene,
+		theme:      themeKind,
+		radar:      radar.Settings{Colour: colour, Airports: airports},
+	}, nil
+}
+
+// limits range-checks the three numeric flags, which are the only ones that
+// are a number rather than a name.
+func (raw rawFlags) limits() error {
+	if raw.fb == "" {
+		return errEmptyFB
+	}
+
+	if raw.fps < minFPS || raw.fps > maxFPS {
+		return fmt.Errorf("%w: got %d, want %d to %d", errFPSRange, raw.fps, minFPS, maxFPS)
+	}
+
+	if raw.frames < minFrames || raw.frames > maxFrames {
+		return fmt.Errorf("%w: got %d, want %d to %d", errFrames, raw.frames, minFrames, maxFrames)
+	}
+
+	return checkBattery(raw.battery)
+}
+
+// validated range-checks everything and produces the config.
+func (raw rawFlags) validated() (config, error) {
+	if err := raw.limits(); err != nil {
+		return config{}, err
+	}
+
+	show, err := raw.display()
 	if err != nil {
 		return config{}, err
 	}
@@ -249,16 +326,19 @@ func (raw rawFlags) validated() (config, error) {
 
 	return config{
 		fbPath:      raw.fb,
-		rotation:    rot,
-		autoRotate:  auto,
+		rotation:    show.rotation,
+		autoRotate:  show.autoRotate,
 		fps:         raw.fps,
 		frames:      raw.frames,
 		testPattern: raw.testPattern,
 		pngPath:     raw.png,
-		size:        size,
-		backend:     kind,
-		scene:       scene,
-		theme:       themeKind,
+		size:        show.size,
+		backend:     show.backend,
+		scene:       show.scene,
+		theme:       show.theme,
+		colour:      show.radar.Colour,
+		airports:    show.radar.Airports,
+		battery:     raw.battery,
 		source:      chosen,
 		beast:       raw.beast,
 		replay:      raw.replay,
@@ -394,6 +474,44 @@ func parseTheme(text string) (theme.Kind, error) {
 	}
 
 	return kind, nil
+}
+
+// parseColour reads --colour against internal/radar's allow list.
+func parseColour(text string) (radar.ColourMode, error) {
+	mode, err := radar.ParseColour(text)
+	if err != nil {
+		return radar.ColourAltitude, fmt.Errorf("%w: %w", errColour, err)
+	}
+
+	return mode, nil
+}
+
+// parseAirports reads --airports against internal/radar's on/off allow list.
+func parseAirports(text string) (radar.Toggle, error) {
+	toggle, err := radar.ParseToggle(text)
+	if err != nil {
+		return radar.ToggleOn, fmt.Errorf("%w: %w", errAirports, err)
+	}
+
+	return toggle, nil
+}
+
+// checkBattery rejects an override that was given as an empty string.
+//
+// Leaving --battery off means autodiscovery, so an empty value is the operator
+// asking for a file named nothing rather than asking for the default. The path
+// itself is not checked: picking it is the point of the flag, and the reader
+// below reports a file it cannot open.
+func checkBattery(path string) error {
+	if path == "" {
+		return nil
+	}
+
+	if strings.TrimSpace(path) == "" {
+		return errBattery
+	}
+
+	return nil
 }
 
 // parseBackend reads --backend and reconciles it with --png.
