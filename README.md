@@ -61,9 +61,11 @@ startup is a worse trade than falling back to blocks.
 `--scene radar` is the default. The left half is the scope: a square field
 with the coastline under it, three dashed range rings, the cardinal letters, a
 marker where the receiver is, and the airfields that fall inside the current
-range as small hollow squares with their ICAO codes beside them. `a` turns the
-airfields off when the field is busy enough that they are in the way, and
-`--airports off` starts without them.
+range as small hollow squares with their ICAO codes beside them. Each ring
+carries its range in nautical miles, and an airfield that would land under
+that label is left off rather than drawn through it. `a` turns the airfields
+off when the field is busy enough that they are in the way, and `--airports
+off` starts without them.
 
 None of that is redrawn every frame. It goes onto a background layer of its
 own and gets copied under each frame, and the layer is rebuilt only when
@@ -119,11 +121,15 @@ colour say the same thing, so the band survives airline mode instead of being
 the price of turning it on: the list still answers "how high" while the scope
 answers "who". The card's altitude figure is set the same way.
 
-Every column is sized from the widest value it could hold rather than from the
-values on screen, so a table full of moving numbers stays still. The rows take
-whatever height is left between the card and the block under them, between
-three and sixteen of them, and a longer list ends on a muted `+N MORE` that
-counts everything not on screen.
+Every column, and the card's three figures, are sized from the widest value
+they could hold rather than from the values on screen, so a table full of
+moving numbers stays still and a value climbing through a digit never nudges
+its neighbour. On a narrow right column the card gives its figures up units
+first, then a smaller face, then the speed and distance figures in that
+order, keeping altitude to the last. The rows take whatever height is left
+between the card and the block under them, between three and sixteen of
+them, and a longer list ends on a muted `+N MORE` that counts everything not
+on screen.
 
 The details block holds the five things about the selected aircraft the card
 has no room for: vertical rate with the same climb or descent triangle,

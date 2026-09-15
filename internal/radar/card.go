@@ -25,12 +25,6 @@ const (
 	rowGap         = 12
 	columnGap      = 12
 
-	// figureCount is how many numbers sit along the bottom of the card. The
-	// card is divided into that many equal columns rather than measured,
-	// because a measured column would shift every time a value changed width
-	// and the numbers would never sit still.
-	figureCount = 3
-
 	cardLabelSuffix = " / SELECTED FLIGHT"
 	cardNoSelection = "--"
 	noContact       = "NO CONTACT"
@@ -253,44 +247,275 @@ func (s *Scene) drawSquawk(dst *canvas.Canvas, rightX, y int, squawk string) {
 	text.Draw(dst, face, pen, y, code, s.pal.Ink)
 }
 
+// The three figures along the bottom of the card, in the order they are
+// drawn and given up as the column narrows.
+const (
+	figureDistance = iota
+	figureAltitude
+	figureSpeed
+
+	// figureCount is how many figures there are, which is what every loop over
+	// them runs to.
+	figureCount
+)
+
+// cardFigureValues are the widest plausible value each figure can hold, used
+// to measure a layout rather than the value actually on screen. Sizing from
+// the widest plausible value is what keeps the figures still: a figure
+// measured from its own contents would shift sideways the moment a value
+// changed width, and an altitude climbing through a thousand feet would then
+// nudge the speed figure beside it on every such frame.
+//
+//nolint:gochecknoglobals // the widest plausible values are data, and an array cannot be const.
+var cardFigureValues = [figureCount]string{
+	figureDistance: "999.9",
+	figureAltitude: "999,999",
+	figureSpeed:    "999",
+}
+
+// cardFigureUnits are the unit suffixes that go with cardFigureValues.
+//
+//nolint:gochecknoglobals // ditto.
+var cardFigureUnits = [figureCount]string{
+	figureDistance: unitNm,
+	figureAltitude: unitFT,
+	figureSpeed:    unitKT,
+}
+
+// cardFigureStage is one attempt at fitting the three figures in the card's
+// width, in the order they are tried.
+type cardFigureStage struct {
+	// body draws the figures in Body at scale 1 instead of Large, which is
+	// tried once the unit suffixes are already gone and the card is still too
+	// narrow.
+	body bool
+	unit bool
+	show [figureCount]bool
+}
+
+// cardFigureStages is the shrink order a narrow card falls through: full
+// size with units, full size without them, Body instead of Large, the speed
+// figure dropped, then the distance figure dropped too. Altitude is never in
+// the drop list, because it is the one figure the card cannot do without.
+//
+//nolint:gochecknoglobals // a fallback order is data, and an array cannot be const.
+var cardFigureStages = [...]cardFigureStage{
+	{unit: true, show: [figureCount]bool{figureDistance: true, figureAltitude: true, figureSpeed: true}},
+	{show: [figureCount]bool{figureDistance: true, figureAltitude: true, figureSpeed: true}},
+	{body: true, show: [figureCount]bool{figureDistance: true, figureAltitude: true, figureSpeed: true}},
+	{body: true, show: [figureCount]bool{figureDistance: true, figureAltitude: true}},
+	{body: true, show: [figureCount]bool{figureAltitude: true}},
+}
+
+// cardFigureLayout is where each shown figure goes, and what it is drawn
+// with. It is worked out once per card rather than carried as loose
+// arguments, because the font and the unit suffix are the same for every
+// figure in a given stage.
+type cardFigureLayout struct {
+	rects [figureCount]image.Rectangle
+	show  [figureCount]bool
+	font  *psf.Font
+	unit  bool
+}
+
+// planCardFigures measures the three figures against the box they have to
+// share and returns the first stage that fits. If nothing fits even with
+// only the altitude figure left, that figure is still placed: there is
+// nothing further to give up, so a card too narrow for it draws it anyway
+// rather than showing nothing at all.
+func (s *Scene) planCardFigures(box image.Rectangle) cardFigureLayout {
+	for _, stage := range cardFigureStages[:len(cardFigureStages)-1] {
+		if layout, fits := s.fitFigures(box, s.stageFont(stage), stage.unit, stage.show); fits {
+			return layout
+		}
+	}
+
+	last := cardFigureStages[len(cardFigureStages)-1]
+
+	return s.forceFigures(box, s.stageFont(last), last.unit, last.show)
+}
+
+// stageFont is the font a stage draws its figures in: Body instead of Large
+// once the card has given up on full size.
+func (s *Scene) stageFont(stage cardFigureStage) *psf.Font {
+	if stage.body {
+		return s.faces.Body
+	}
+
+	return s.faces.Large
+}
+
+// measureFigures reports each shown figure's width at font and unit, plus
+// their total and how many are shown, so fitFigures and forceFigures build a
+// layout from the same numbers instead of two ways of measuring the same
+// thing.
+func (s *Scene) measureFigures(font *psf.Font, unit bool, show [figureCount]bool) ([figureCount]int, int, int) {
+	var widths [figureCount]int
+
+	total, count := 0, 0
+
+	for index := range figureCount {
+		if !show[index] {
+			continue
+		}
+
+		widths[index] = figureWidth(font, s.faces.Small, cardFigureValues[index], cardFigureUnits[index], unit)
+		total += widths[index]
+		count++
+	}
+
+	return widths, total, count
+}
+
+// fitFigures lays out the shown figures if they fit side by side in box with
+// at least columnGap between them, and reports false without placing them
+// otherwise, so the caller can move on to the next stage without paying for a
+// placement it would only throw away.
+func (s *Scene) fitFigures(
+	box image.Rectangle, font *psf.Font, unit bool, show [figureCount]bool,
+) (cardFigureLayout, bool) {
+	layout := cardFigureLayout{show: show, font: font, unit: unit}
+
+	if font == nil {
+		return layout, false
+	}
+
+	widths, total, count := s.measureFigures(font, unit, show)
+	if count == 0 || total+max(count-1, 0)*columnGap > box.Dx() {
+		return layout, false
+	}
+
+	layout.rects = placeFigures(box, widths, show, total, count)
+
+	return layout, true
+}
+
+// forceFigures places the shown figures the way fitFigures does, without
+// checking that they fit. It exists for the last stage only, where altitude
+// is the one figure left and there is nowhere further to shrink.
+func (s *Scene) forceFigures(box image.Rectangle, font *psf.Font, unit bool, show [figureCount]bool) cardFigureLayout {
+	layout := cardFigureLayout{show: show, font: font, unit: unit}
+
+	if font == nil {
+		return layout
+	}
+
+	widths, total, count := s.measureFigures(font, unit, show)
+	if count == 0 {
+		return layout
+	}
+
+	layout.rects = placeFigures(box, widths, show, total, count)
+
+	return layout
+}
+
+// figureWidth is one figure's width at font: the widest plausible value,
+// plus, when the unit suffix is still being drawn, the gap before it and its
+// own width in small.
+//
+//nolint:revive // flag-parameter: withUnit picks which of two widths to measure, not a mode to branch deeper on.
+func figureWidth(font, small *psf.Font, value, unit string, withUnit bool) int {
+	width, _ := text.Measure(font, value)
+	if !withUnit {
+		return width
+	}
+
+	unitWidth, _ := text.Measure(small, unit)
+
+	return width + unitGap + unitWidth
+}
+
+// placeFigures spreads the shown figures across box left to right, so the
+// first starts on its left edge and the last one's own width finishes on its
+// right edge. The slack between them is shared the way rowPlan.place shares
+// it: interpolated on the figure's position rather than added as one fixed
+// gap, so the last figure does not stop short of the edge it is meant to
+// reach.
+func placeFigures(
+	box image.Rectangle, widths [figureCount]int, show [figureCount]bool, total, count int,
+) [figureCount]image.Rectangle {
+	var rects [figureCount]image.Rectangle
+
+	slack := max(box.Dx()-total-max(count-1, 0)*columnGap, 0)
+	gaps := max(count-1, 1)
+	used, seen := 0, 0
+
+	for index := range figureCount {
+		if !show[index] {
+			continue
+		}
+
+		left := box.Min.X + used + seen*columnGap + slack*seen/gaps
+		rects[index] = image.Rect(left, box.Min.Y, left+widths[index], box.Max.Y)
+		used += widths[index]
+		seen++
+	}
+
+	return rects
+}
+
 // drawCardFigures sets the three numbers along the bottom of the card, each
-// with its unit small and muted beside it.
+// with its unit small and muted beside it when there is room for one.
+//
+// The layout is measured rather than divided into three equal columns: an
+// equal division has no idea how wide "999,999 FT" actually is, and on a
+// right column narrower than about 760 pixels that let the three figures run
+// into each other. planCardFigures works out how much of the three the card
+// has room for before anything is drawn, and each figure is formatted and
+// drawn immediately afterwards, one at a time in the order it is laid out,
+// because they all share the scene's scratch buffers and formatting them all
+// up front would leave three slices pointing at the same bytes.
 func (s *Scene) drawCardFigures(
 	dst *canvas.Canvas, box image.Rectangle, receiver source.Receiver, plane airplane.Snapshot,
 ) {
-	column := box.Dx() / figureCount
-	unitTop := box.Min.Y + lineHeight(s.faces.Large) - lineHeight(s.faces.Small)
+	plan := s.planCardFigures(box)
+	if plan.font == nil {
+		return
+	}
 
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 
-	s.drawFigure(dst, box.Min.X, box.Min.Y, unitTop,
-		figure{value: s.distance(away), unit: unitNm, ink: s.pal.Ink})
-	s.drawFigure(dst, box.Min.X+column, box.Min.Y, unitTop,
-		figure{value: s.thousands(plane.Altitude), unit: unitFT, ink: s.bandColour(plane.Altitude)})
-	s.drawFigure(dst, box.Min.X+2*column, box.Min.Y, unitTop,
-		figure{value: s.whole(plane.Velocity), unit: unitKT, ink: s.pal.Ink})
+	if plan.show[figureDistance] {
+		s.drawPlannedFigure(dst, plan, figureDistance, figure{value: s.distance(away), unit: unitNm, ink: s.pal.Ink})
+	}
+
+	if plan.show[figureAltitude] {
+		s.drawPlannedFigure(dst, plan, figureAltitude,
+			figure{value: s.thousands(plane.Altitude), unit: unitFT, ink: s.bandColour(plane.Altitude)})
+	}
+
+	if plan.show[figureSpeed] {
+		s.drawPlannedFigure(dst, plan, figureSpeed,
+			figure{value: s.whole(plane.Velocity), unit: unitKT, ink: s.pal.Ink})
+	}
 }
 
 // figure is one of the three numbers along the bottom of the card.
 //
 // The three parts travel together because they belong to one cell, and because
 // the altitude figure takes its own ink: passing a sixth loose argument to
-// drawFigure would have made its signature the longest in the package for no
-// gain in clarity.
+// drawPlannedFigure would have made its signature the longest in the package
+// for no gain in clarity.
 type figure struct {
 	value []byte
 	unit  string
 	ink   color.RGBA
 }
 
-// drawFigure draws one number with its unit.
-//
-// Each figure is formatted immediately before it is drawn because they all
-// share the scene's one scratch buffer; formatting all three first would
-// leave three slices of the same bytes. The unit stays muted whatever the
-// number is set in: the number is the reading and the unit is the label.
-func (s *Scene) drawFigure(dst *canvas.Canvas, left, top, unitTop int, fig figure) {
-	pen := drawBytes(dst, s.faces.Large, left, top, fig.value, fig.ink)
+// drawPlannedFigure draws one figure at the box the plan measured for it, in
+// the font the plan settled on, with its unit suffix only when the plan kept
+// room for one. The unit stays muted whatever the number is set in: the
+// number is the reading and the unit is the label.
+func (s *Scene) drawPlannedFigure(dst *canvas.Canvas, plan cardFigureLayout, index int, fig figure) {
+	rect := plan.rects[index]
+
+	pen := drawBytes(dst, plan.font, rect.Min.X, rect.Min.Y, fig.value, fig.ink)
+	if !plan.unit {
+		return
+	}
+
+	unitTop := rect.Min.Y + lineHeight(plan.font) - lineHeight(s.faces.Small)
 	text.Draw(dst, s.faces.Small, pen+unitGap, unitTop, fig.unit, s.pal.Muted)
 }
 

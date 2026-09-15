@@ -184,6 +184,16 @@ type Scene struct {
 	// filled it and the draw path never allocates one.
 	counts tally
 
+	// rangeLabelRects and rangeLabelCount are where the background layer put
+	// its range labels the last time it drew them, so the airport overlay
+	// drawn right after it can skip a marker that would sit on top of one.
+	// Both are reset and refilled at the start of every drawRings call rather
+	// than grown into, which is what keeps a fixed array the right container
+	// for them: ringCount never draws more than three, so three is all the
+	// room they ever need.
+	rangeLabelRects [ringCount]image.Rectangle
+	rangeLabelCount int
+
 	// battery is what the header's indicator reads, or nil on a machine with
 	// no battery to read. Nil is the normal state on a desktop, so it is a
 	// state rather than a failure and nothing is drawn for it.

@@ -2,6 +2,7 @@ package radar
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uAirwaves/pkg/airports"
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/source"
@@ -804,6 +806,121 @@ func TestProjectorAt(t *testing.T) {
 			t.Error("at(NaN, lon) reported inside, want it dropped")
 		}
 	})
+}
+
+// The fixture TestDrawAirportsSkipsRangeLabelOverlap builds: a 200 nautical
+// mile scope with round numbers, chosen so the outer range label lands well
+// clear of every dashed ring and the solid boundary, and a canvas large
+// enough to hold all of it with room to spare.
+const (
+	overlapCenter  = 300
+	overlapRangeR  = 270
+	overlapScopeNm = 200.0
+	overlapLat0    = 52.0
+	overlapLon0    = 4.0
+	overlapCanvas  = 620
+
+	// overlapElsewhereDY is how far above the centre the "elsewhere" airport
+	// sits: far enough from every ring radius (90, 180 and 270 at this
+	// fixture) that no ring pixel falls inside its check box either.
+	overlapElsewhereDY = 50
+	overlapCheckMargin = 5
+)
+
+// invertProjection is projector.at run backwards: the position that would
+// project onto pixel (x, y), rather than the pixel a position projects onto.
+// It only exists here, where a synthetic airport has to be placed at a known
+// pixel instead of a known position.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func invertProjection(proj projector, x, y int) (float64, float64) {
+	eastNm := float64(x-proj.centerX) / proj.scale
+	northNm := float64(proj.centerY-y) / proj.scale
+
+	return proj.lat0 + northNm/nmPerDegree, proj.lon0 + eastNm/(nmPerDegree*proj.cosLat0)
+}
+
+// TestDrawAirportsSkipsRangeLabelOverlap checks the fix for the range label
+// colliding with an airport marker, seen live as "200EDDV" on the outer ring.
+// An airport placed exactly under the outer range label is skipped, and one
+// well clear of every range label is drawn as usual.
+func TestDrawAirportsSkipsRangeLabelOverlap(t *testing.T) {
+	t.Parallel()
+
+	small, err := fonts.Small()
+	if err != nil {
+		t.Fatalf("fonts.Small: %v", err)
+	}
+
+	scene := &Scene{faces: Faces{Small: small}, pal: theme.Night}
+
+	canv, err := canvas.New(overlapCanvas, overlapCanvas)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	lay := layout{dst: canv, labels: true}
+	geom := scopeGeometry{
+		centerX: overlapCenter, centerY: overlapCenter, outer: overlapRangeR + ringInset, rangeR: overlapRangeR,
+	}
+
+	scene.drawRings(&lay, geom, overlapScopeNm)
+
+	if scene.rangeLabelCount == 0 {
+		t.Fatal("drawRings recorded no range labels; the fixture needs adjusting")
+	}
+
+	outerLabel := scene.rangeLabelRects[scene.rangeLabelCount-1]
+
+	proj, ok := newProjector(geom, source.Receiver{Latitude: overlapLat0, Longitude: overlapLon0}, overlapScopeNm)
+	if !ok {
+		t.Fatal("newProjector(...) ok = false, want true")
+	}
+
+	underLat, underLon := invertProjection(proj, outerLabel.Min.X+outerLabel.Dx()/2, outerLabel.Min.Y+outerLabel.Dy()/2)
+	elsewhereLat, elsewhereLon := invertProjection(proj, overlapCenter, overlapCenter-overlapElsewhereDY)
+
+	fields := []airports.Airport{
+		{ICAO: "UNDR", Latitude: underLat, Longitude: underLon},
+		{ICAO: "ELSE", Latitude: elsewhereLat, Longitude: elsewhereLon},
+	}
+
+	scene.drawAirports(&lay, proj, fields)
+
+	if got := colourCount(canv, outerLabel, scene.pal.Rule); got != 0 {
+		t.Errorf("airport marker pixels under the outer range label = %d, want 0", got)
+	}
+
+	elsewhereBox := image.Rect(
+		overlapCenter-overlapCheckMargin, overlapCenter-overlapElsewhereDY-overlapCheckMargin,
+		overlapCenter+overlapCheckMargin, overlapCenter-overlapElsewhereDY+overlapCheckMargin,
+	)
+
+	if got := colourCount(canv, elsewhereBox, scene.pal.Rule); got == 0 {
+		t.Error("an airport clear of every range label was not drawn")
+	}
+}
+
+// TestRecordRangeLabelCapsAtThree checks the safety net past the fixed three
+// slots. drawRings never calls this a fourth time, since ringCount is three,
+// but recordRangeLabel has to hold that limit on its own rather than assume
+// its only caller keeps it.
+func TestRecordRangeLabelCapsAtThree(t *testing.T) {
+	t.Parallel()
+
+	var scene Scene
+
+	for index := range ringCount + 1 {
+		scene.recordRangeLabel(image.Rect(index, index, index+1, index+1))
+	}
+
+	if scene.rangeLabelCount != ringCount {
+		t.Errorf("rangeLabelCount = %d, want %d", scene.rangeLabelCount, ringCount)
+	}
+
+	if want := (image.Rect(0, 0, 1, 1)); scene.rangeLabelRects[0] != want {
+		t.Errorf("rangeLabelRects[0] = %v, want %v kept rather than overwritten", scene.rangeLabelRects[0], want)
+	}
 }
 
 func TestLayoutFits(t *testing.T) {
@@ -2100,6 +2217,183 @@ func TestDrawCardFiguresInk(t *testing.T) {
 
 	if colourCount(canv, speedCell, pal.Ink) == 0 {
 		t.Error("the speed figure did not use the reading ink")
+	}
+}
+
+// cardFigureTestFaces loads the three real faces the card figures are set
+// in, so the layout is measured against the metrics it actually runs on
+// rather than a synthetic stand-in.
+func cardFigureTestFaces(t *testing.T) Faces {
+	t.Helper()
+
+	large, err := fonts.Large()
+	if err != nil {
+		t.Fatalf("fonts.Large: %v", err)
+	}
+
+	body, err := fonts.Body()
+	if err != nil {
+		t.Fatalf("fonts.Body: %v", err)
+	}
+
+	small, err := fonts.Small()
+	if err != nil {
+		t.Fatalf("fonts.Small: %v", err)
+	}
+
+	return Faces{Large: large, Body: body, Small: small}
+}
+
+// TestPlanCardFiguresNeverOverlaps table-tests the layout across a spread of
+// widths, from far more room than the three figures need down to less than
+// the altitude figure alone needs at Body size. Two figures resolving to
+// overlapping boxes is the bug this layout exists to fix, seen on a narrow
+// right column as "1,2000 KT".
+func TestPlanCardFiguresNeverOverlaps(t *testing.T) {
+	t.Parallel()
+
+	const cardFigureTestHeight = 32
+
+	scene := &Scene{faces: cardFigureTestFaces(t)}
+
+	for _, width := range []int{200, 400, 640, 1000} {
+		t.Run(fmt.Sprintf("width %d", width), func(t *testing.T) {
+			t.Parallel()
+
+			box := image.Rect(0, 0, width, cardFigureTestHeight)
+			plan := scene.planCardFigures(box)
+
+			if first, second, found := overlappingFigures(plan); found {
+				t.Errorf("figure %d overlaps figure %d at width %d: %v vs %v",
+					first, second, width, plan.rects[first], plan.rects[second])
+			}
+
+			if figuresShown(plan) == 0 {
+				t.Errorf("width %d: no figure was shown at all, want at least altitude", width)
+			}
+		})
+	}
+}
+
+// overlappingFigures reports the first pair of shown figures in plan whose
+// rectangles overlap, if there is one.
+func overlappingFigures(plan cardFigureLayout) (int, int, bool) {
+	for index := range figureCount {
+		if !plan.show[index] {
+			continue
+		}
+
+		for other := index + 1; other < figureCount; other++ {
+			if plan.show[other] && plan.rects[index].Overlaps(plan.rects[other]) {
+				return index, other, true
+			}
+		}
+	}
+
+	return 0, 0, false
+}
+
+// figuresShown counts how many figures a plan actually draws.
+func figuresShown(plan cardFigureLayout) int {
+	count := 0
+
+	for index := range figureCount {
+		if plan.show[index] {
+			count++
+		}
+	}
+
+	return count
+}
+
+// TestDrawCardFiguresNarrowKeepsAltitude checks the last stage of the
+// shrink order: a card too narrow for even one figure at Body size still
+// draws the altitude figure, in its band colour, because altitude is the one
+// figure planCardFigures never gives up.
+func TestDrawCardFiguresNarrowKeepsAltitude(t *testing.T) {
+	t.Parallel()
+
+	const (
+		narrowWidth    = 24
+		narrowHeight   = 32
+		narrowAltitude = 4000.0
+		narrowLat      = 52.0
+		narrowLon      = 4.0
+		narrowLatStep  = 1.0
+	)
+
+	pal := theme.Palette{
+		Ink:    color.RGBA{R: 1, A: opaque},
+		Muted:  color.RGBA{R: 2, A: opaque},
+		AltLow: color.RGBA{R: 3, A: opaque},
+	}
+
+	scene := &Scene{faces: cardFigureTestFaces(t), pal: pal}
+
+	canv, err := canvas.New(narrowWidth, narrowHeight)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	box := image.Rect(0, 0, narrowWidth, narrowHeight)
+	receiver := source.Receiver{Latitude: narrowLat, Longitude: narrowLon}
+	plane := airplane.Snapshot{Altitude: narrowAltitude, Latitude: narrowLat + narrowLatStep, Longitude: narrowLon}
+
+	scene.drawCardFigures(canv, box, receiver, plane)
+
+	if colourCount(canv, canv.Bounds(), pal.AltLow) == 0 {
+		t.Error("the altitude figure was not drawn in its band colour at a narrow width")
+	}
+}
+
+// TestPlanCardFiguresNoFaces checks that a Scene with no faces at all plans
+// nothing to draw rather than measuring against a nil font, the same way
+// lineHeight and glyphWidth treat a missing face as nothing to draw with.
+func TestPlanCardFiguresNoFaces(t *testing.T) {
+	t.Parallel()
+
+	var scene Scene
+
+	plan := scene.planCardFigures(image.Rect(0, 0, 1000, 40))
+	if plan.font != nil {
+		t.Errorf("plan.font = %v, want nil with no faces set", plan.font)
+	}
+}
+
+// TestDrawCardFiguresNoFaces checks that drawCardFigures leaves the canvas
+// untouched when planCardFigures could not settle on a font, rather than
+// drawing against one that is nil.
+func TestDrawCardFiguresNoFaces(t *testing.T) {
+	t.Parallel()
+
+	const noFacesWidth, noFacesHeight = 100, 40
+
+	var scene Scene
+
+	canv, err := canvas.New(noFacesWidth, noFacesHeight)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	scene.drawCardFigures(canv, canv.Bounds(), source.Receiver{}, airplane.Snapshot{})
+
+	if got, want := colourCount(canv, canv.Bounds(), color.RGBA{}), noFacesWidth*noFacesHeight; got != want {
+		t.Errorf("untouched pixels = %d, want all %d", got, want)
+	}
+}
+
+// TestForceFiguresNoFiguresShown checks the guard for a stage with nothing
+// left to draw. planCardFigures never builds one, because altitude stays on
+// in the last stage it ever reaches, but forceFigures does not know that on
+// its own and has to handle it rather than assume it.
+func TestForceFiguresNoFiguresShown(t *testing.T) {
+	t.Parallel()
+
+	scene := &Scene{faces: cardFigureTestFaces(t)}
+
+	got := scene.forceFigures(image.Rect(0, 0, 100, 32), scene.faces.Body, false, [figureCount]bool{})
+	if got.rects != ([figureCount]image.Rectangle{}) {
+		t.Errorf("rects = %v, want the zero value with nothing shown", got.rects)
 	}
 }
 

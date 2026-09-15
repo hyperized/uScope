@@ -4,11 +4,13 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airports"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
@@ -318,7 +320,7 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 	s.drawHome(lay, view.geom, frame.Receiver.Mode)
 
 	if s.airports && view.plottable {
-		s.drawAirports(lay, view.proj)
+		s.drawAirports(lay, view.proj, airports.All())
 	}
 }
 
@@ -337,6 +339,11 @@ func (s *Scene) drawTraffic(lay *layout, frame source.Frame) {
 // each one.
 func (s *Scene) drawRings(lay *layout, geom scopeGeometry, scopeNm float64) {
 	lay.dst.Circle(geom.centerX, geom.centerY, geom.outer, s.pal.Rule)
+
+	// Reset here rather than after the loop: drawRangeLabel below fills the
+	// array back in as it goes, and a label dropped for want of room simply
+	// leaves the array shorter than three rather than stale from last time.
+	s.rangeLabelCount = 0
 
 	spacing := geom.rangeR / ringCount
 
@@ -372,6 +379,23 @@ func (s *Scene) drawRangeLabel(lay *layout, geom scopeGeometry, radius, spacing 
 
 	pen := drawBytes(lay.dst, face, left, top, value, s.pal.Muted)
 	text.Draw(lay.dst, face, pen, top, rangeUnit, s.pal.Muted)
+
+	s.recordRangeLabel(image.Rect(left, top, left+width, top+face.Height()))
+}
+
+// recordRangeLabel keeps a range label's box so drawAirports can drop a
+// marker that would land on top of it instead of overlapping it, which is
+// what a wide range label and an airport near the three o'clock point used
+// to do. A label past the fixed three slots is dropped rather than grown
+// into; ringCount never draws more than three, so a fourth would mean
+// something upstream had already gone wrong.
+func (s *Scene) recordRangeLabel(box image.Rectangle) {
+	if s.rangeLabelCount >= len(s.rangeLabelRects) {
+		return
+	}
+
+	s.rangeLabelRects[s.rangeLabelCount] = box
+	s.rangeLabelCount++
 }
 
 // drawCardinals puts N, E, S and W just outside the boundary ring, which is
@@ -440,15 +464,27 @@ func (s *Scene) fixColour(mode source.FixMode, ink color.RGBA) color.RGBA {
 // drawAirports overlays the airports that fall inside the current range.
 //
 // They are drawn before the aircraft so an aeroplane on final approach is not
-// hidden underneath the field it is landing at.
+// hidden underneath the field it is landing at, and skipped rather than drawn
+// through when the label they would carry would land on the range labels
+// drawRings just put down: that furniture is the scope's own, and it reads
+// worse overlapped by an airfield than the airfield reads absent near the
+// edge.
+//
+// fields is passed in rather than read from airports.All() here so a test can
+// hand it a synthetic set instead of the whole embedded database.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawAirports(lay *layout, proj projector) {
+func (s *Scene) drawAirports(lay *layout, proj projector, fields []airports.Airport) {
 	face := s.faces.Small
 
-	for _, field := range airports.All() {
+	for _, field := range fields {
 		x, y, inside := proj.at(field.Latitude, field.Longitude)
 		if !inside {
+			continue
+		}
+
+		box := s.airportBox(x, y, lay.labels, face, field.ICAO)
+		if s.overlapsRangeLabel(box) {
 			continue
 		}
 
@@ -458,6 +494,31 @@ func (s *Scene) drawAirports(lay *layout, proj projector) {
 			text.Draw(lay.dst, face, x+airportLabelGap, y-face.Height()/2, field.ICAO, s.pal.Muted)
 		}
 	}
+}
+
+// airportBox is the rectangle an airport's marker occupies, extended to
+// include its ICAO label when one would be drawn beside it. It is what gets
+// checked against the range labels, so an airport is only dropped when the
+// part of it that would actually collide is under threat.
+//
+//nolint:varnamelen,revive // x, y is uScope's pixel idiom; labels picks which of two boxes to measure, not a mode.
+func (s *Scene) airportBox(x, y int, labels bool, face *psf.Font, icao string) image.Rectangle {
+	box := image.Rect(x-airportHalf, y-airportHalf, x+airportHalf+1, y+airportHalf+1)
+	if !labels || face == nil {
+		return box
+	}
+
+	width, height := text.Measure(face, icao)
+	top := y - face.Height()/2
+	label := image.Rect(x+airportLabelGap, top, x+airportLabelGap+width, top+height)
+
+	return box.Union(label)
+}
+
+// overlapsRangeLabel reports whether box lands on one of the range labels
+// drawRings recorded for this render of the background layer.
+func (s *Scene) overlapsRangeLabel(box image.Rectangle) bool {
+	return slices.ContainsFunc(s.rangeLabelRects[:s.rangeLabelCount], box.Overlaps)
 }
 
 // drawAircraft paints every aircraft that is inside the range: trails first,
