@@ -79,6 +79,16 @@ func (s *Scene) count(value int) []byte {
 	return strconv.AppendInt(s.digits[:0], int64(value), decimalBase)
 }
 
+// shownCount writes a count into the grouped buffer instead of into digits.
+//
+// The row table's title line draws two numbers side by side while a filter is
+// on, and both widths have to be known before either is set. One of them
+// therefore needs a buffer of its own, and grouped is free: thousands is its
+// only other user and nothing calls that while the title line is being drawn.
+func (s *Scene) shownCount(value int) []byte {
+	return strconv.AppendInt(s.grouped[:0], int64(value), decimalBase)
+}
+
 // index writes a one-based position with a leading zero under ten, which is
 // what keeps the compact rows' first column the same width all the way down.
 //

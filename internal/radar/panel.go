@@ -100,6 +100,7 @@ const (
 	capAirports
 	capShore
 	capColour
+	capFilter
 	capTheme
 	capOrbit
 	capEnvelope
@@ -109,8 +110,8 @@ const (
 // The cycling keys are labelled with the value they are on rather than with
 // the name of the setting. A cap reading COLOUR says there is a colour mode
 // without saying which one, which is the question it was being asked. The
-// trail cap is the third of them and gets its four words from
-// trailMode.label.
+// trail cap is the third of them and gets its four words from trailMode.label,
+// and the filter cap the fourth, from filterState.label.
 const (
 	labelAltitude = "ALT"
 	labelAirline  = "AIRLINE"
@@ -136,10 +137,15 @@ type keyCap struct {
 // leaving, then moving through the list, then the five things that change what
 // is on the field, then the two that change how it looks.
 //
-// Ten caps and their labels come to 736 pixels of the 1248 the panel leaves
+// Eleven caps and their labels come to 812 pixels of the 1248 the panel leaves
 // between its margins, so nothing here has to be shortened to fit. The trail
 // cap's longest word, SHORT, is a character shorter than the TRAILS it
-// replaced, so the bar did not grow when the four modes arrived.
+// replaced, so the bar did not grow when the four modes arrived; the filter
+// cap's longest, 10-25K, added 76 pixels when it did.
+//
+// F sits next to C rather than at the end of the row, because the filter is
+// the colour mode's own legend with one entry picked out of it and the two
+// keys are reached for together.
 //
 // The select cap is drawn as the two arrow glyphs rather than as N/P. Both are
 // bound, but the arrows are what a hand reaches for first, and all four
@@ -156,6 +162,7 @@ var keyCaps = [...]keyCap{
 	{key: "A", label: "AIRPORTS", state: capAirports},
 	{key: "M", label: "SHORE", state: capShore},
 	{key: "C", label: "COLOUR", state: capColour},
+	{key: "F", label: filterBarLabel, state: capFilter},
 	{key: "L", label: "THEME", state: capTheme},
 	{key: "V", label: "VIEW"},
 }
@@ -176,10 +183,11 @@ var keyCaps = [...]keyCap{
 // That was checked before this was written rather than assumed, the same way
 // the up and down pair was.
 //
-// Fourteen caps and their labels come to about 1040 pixels of the 1248 the
-// panel leaves between its margins, or about 1140 with the bias-tee cap as
-// well, so nothing here has to be shortened. See the note on keyCaps before
-// adding another.
+// Fifteen caps and their labels come to about 1116 pixels of the 1248 the
+// panel leaves between its margins, or about 1192 with the bias-tee cap as
+// well, so nothing here has to be shortened. That is the whole bar at its
+// longest and it clears the right margin by about fifty pixels. See the note
+// on keyCaps before adding another.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
@@ -306,11 +314,12 @@ func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string, on bool) 
 // capOn reports whether a cap is drawn filled. Everything that is not a
 // toggle is, because there is no state for it to be in.
 //
-// The trail cap is the exception among the cycling keys. Colour and theme
-// have no off state and are always filled, but one of the four trail modes is
-// genuinely off, and a hollow box beside the word OFF says the same thing
-// twice on purpose: it is the state somebody scanning the bar has to be able
-// to spot without reading it.
+// The trail cap is the exception among the cycling keys, and the filter cap is
+// the second one. Colour and theme have no off state and are always filled,
+// but one of the four trail modes is genuinely off and one of the filter's
+// values is genuinely everything. A hollow box beside the word OFF, or beside
+// ALL, says the same thing twice on purpose: it is the state somebody scanning
+// the bar has to be able to spot without reading it.
 func (s *Scene) capOn(which capToggle) bool {
 	switch which {
 	case capAuto:
@@ -327,6 +336,8 @@ func (s *Scene) capOn(which capToggle) bool {
 		return s.envelope
 	case capBiasTee:
 		return s.biasEnabled
+	case capFilter:
+		return s.filter.active()
 	case capAlways, capColour, capTheme:
 		fallthrough
 	default:
@@ -355,6 +366,8 @@ func (s *Scene) capLabel(entry keyCap) string {
 		return labelNight
 	case capTrails:
 		return s.trail.label()
+	case capFilter:
+		return s.filter.label()
 	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee:
 		fallthrough
 	default:

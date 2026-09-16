@@ -182,8 +182,14 @@ type Settings struct {
 
 // Apply sets the whole block on a scene that is already built, which is how
 // the flags reach a scene the run loop built before it read the config.
+//
+// The filter goes back to ALL with the colour mode, for the reason cycleColour
+// does the same: a filter value belongs to a legend, and a settings block that
+// changes the legend has changed what the value would have meant. No flag
+// carries a filter, so there is nothing to put back in its place.
 func (s *Scene) Apply(set Settings) {
 	s.colour = set.Colour
+	s.filter = filterState{}
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
 	s.shown = set.View

@@ -28,6 +28,13 @@ const (
 	cardLabelSuffix = " / SELECTED FLIGHT"
 	cardNoSelection = "--"
 
+	// filteredTag closes the card's heading while the filter is hiding the
+	// aircraft the panel is about. It is set in the same small muted face the
+	// rest of the heading is, because it is a note about the panel rather than
+	// a reading in it, and it carries its own separator the way
+	// cardLabelSuffix does.
+	filteredTag = " / FILTERED"
+
 	squawkPrefix = "SQ "
 	trackPrefix  = "TRACK "
 
@@ -61,6 +68,15 @@ const (
 	swatchSide = 10
 	swatchGap  = 6
 	legendGap  = 18
+
+	// swatchMark is how far outside a swatch the ring round the filtered entry
+	// is drawn, so the legend says which of its own rows the scope is showing.
+	//
+	// A ring rather than a brighter swatch or a second colour: the swatches are
+	// the one place in the scene where a colour means an altitude or an
+	// operator and nothing else, and changing one to mark a selection would be
+	// the legend lying about the thing it exists to explain.
+	swatchMark = 2
 
 	legendLow  = "< 10K FT"
 	legendMid  = "10-25K FT"
@@ -98,7 +114,7 @@ func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 		labels: lay.labels,
 	}
 
-	s.drawLegend(&col, frame)
+	s.drawLegend(&col)
 	s.drawCard(&col, frame)
 	s.drawRows(&col, frame)
 }
@@ -167,8 +183,8 @@ func (s *Scene) drawCard(col *layout, frame source.Frame) {
 	left, right := col.left+accentWidth+cardPadX, col.right-cardPadX
 	top := col.top + cardPadY
 
-	plane, position := s.selectedPlane(frame)
-	s.drawCardLabel(col.dst, left, top, position)
+	sel := s.selectedPlane(frame)
+	s.drawCardLabel(col.dst, left, top, sel)
 	top += plan.label + rowGap
 
 	col.top += plan.total + blockGap
@@ -176,11 +192,13 @@ func (s *Scene) drawCard(col *layout, frame source.Frame) {
 	// An empty sky puts NO TRAFFIC where the callsign goes. It used to live in
 	// the details block, which is where the eye went looking for a reason the
 	// panel was blank; now the panel says it itself.
-	if position < 0 {
+	if !sel.found {
 		text.Draw(col.dst, s.faces.Large, left, top, noTraffic, s.pal.Muted)
 
 		return
 	}
+
+	plane := sel.plane
 
 	s.drawCardIdentity(col.dst, image.Rect(left, top, right, top+plan.middle), plane)
 	top += plan.middle + rowGap
@@ -191,15 +209,48 @@ func (s *Scene) drawCard(col *layout, frame source.Frame) {
 	s.drawCardValues(col.dst, image.Rect(left, top, right, top+plan.values), plan.columns, frame, plane)
 }
 
-// selectedPlane is the aircraft the card is about and its place in the list.
-// A position of -1 means nothing is selected, which is what an empty sky looks
-// like.
-func (s *Scene) selectedPlane(frame source.Frame) (airplane.Snapshot, int) {
-	if s.selIndex < 0 || s.selIndex >= len(frame.Planes) {
-		return airplane.Snapshot{}, notSelected
+// selection is the aircraft the card is about.
+//
+// It is a struct rather than the pair of values it used to be because the
+// filter added a third state. An aircraft can be selected and on the field,
+// selected and hidden by the filter, or there can be nothing to select at all,
+// and a row number of -1 cannot say which of the last two it is.
+type selection struct {
+	plane airplane.Snapshot
+
+	// row is its place in the compact rows, or notSelected when the filter is
+	// hiding it and there is no row to point at.
+	row int
+
+	// found is whether anything is selected. False is an empty sky, which is
+	// what puts NO TRAFFIC where the callsign goes.
+	found bool
+
+	// hidden is whether the filter is keeping the selection off the field. The
+	// pin survives that, so the panel keeps drawing the aircraft and says
+	// FILTERED next to its heading until the filter widens again.
+	hidden bool
+}
+
+// selectedPlane is the aircraft the card is about.
+//
+// A pinned aircraft the filter is hiding is found by ICAO rather than by
+// index, because it has no index: the ICAO list holds the aircraft the filter
+// let through, and this one is not among them.
+func (s *Scene) selectedPlane(frame source.Frame) selection {
+	if s.selHidden {
+		plane, flying := findPlane(frame, s.selICAO)
+
+		return selection{plane: plane, row: notSelected, found: flying, hidden: flying}
 	}
 
-	return frame.Planes[s.selIndex], s.selIndex
+	if s.selIndex < 0 || s.selIndex >= len(s.icaos) {
+		return selection{row: notSelected}
+	}
+
+	plane, flying := findPlane(frame, s.icaos[s.selIndex])
+
+	return selection{plane: plane, row: s.selIndex, found: flying}
 }
 
 // cardFrame draws the hairline border and the accent bar down the left edge.
@@ -213,13 +264,22 @@ func (s *Scene) cardFrame(col *layout, total int) {
 // drawCardLabel writes the numbered heading, which ties the card to the row
 // of the same number further down the column.
 //
-// A negative number means nothing is selected and the heading reads "--",
-// which is the same shape as a number and so does not move the text beside it.
+// A negative number means there is no row to tie it to and the heading reads
+// "--", which is the same shape as a number and so does not move the text
+// beside it. That happens for an empty sky and for a pinned aircraft the
+// filter is hiding, and the second of those gets the FILTERED tag after the
+// suffix so the two cannot be confused: the card is full of readings in one
+// case and empty in the other, and the heading should say which before the eye
+// gets that far.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawCardLabel(dst *canvas.Canvas, x, y, position int) {
-	pen := s.drawLabelNumber(dst, x, y, position)
-	text.Draw(dst, s.faces.Small, pen, y, cardLabelSuffix, s.pal.Muted)
+func (s *Scene) drawCardLabel(dst *canvas.Canvas, x, y int, sel selection) {
+	pen := s.drawLabelNumber(dst, x, y, sel.row)
+	pen = text.Draw(dst, s.faces.Small, pen, y, cardLabelSuffix, s.pal.Muted)
+
+	if sel.hidden {
+		text.Draw(dst, s.faces.Small, pen, y, filteredTag, s.pal.Muted)
+	}
 }
 
 // drawLabelNumber writes the card's number, or the two dashes that stand in
@@ -607,7 +667,7 @@ func (s *Scene) distance(valueNm float64) []byte {
 // functions rather than one with a branch in the middle of it: the altitude
 // legend is a fixed list of three and the airline legend is counted off the
 // frame.
-func (s *Scene) drawLegend(col *layout, frame source.Frame) {
+func (s *Scene) drawLegend(col *layout) {
 	face := s.faces.Small
 
 	height := lineHeight(face)
@@ -618,7 +678,7 @@ func (s *Scene) drawLegend(col *layout, frame source.Frame) {
 	top := col.bottom - height
 
 	if s.colour == ColourAirline {
-		s.drawAirlineLegend(col, face, top, frame)
+		s.drawAirlineLegend(col, face, top)
 	} else {
 		s.drawBandLegend(col, face, top)
 	}
@@ -635,7 +695,7 @@ func (s *Scene) drawLegend(col *layout, frame source.Frame) {
 func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 	pen := col.left
 
-	for _, entry := range s.legendEntries() {
+	for band, entry := range s.legendEntries() {
 		width, _ := text.Measure(face, entry.label, text.WithSpacing(labelTracking))
 		if pen+swatchSide+swatchGap+width > col.right {
 			break
@@ -643,11 +703,29 @@ func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 
 		box := image.Rect(pen, top, pen+swatchSide, top+swatchSide)
 		col.dst.FillRect(box, entry.col)
+		s.markLegendEntry(col.dst, box, s.filter.marksBand(band))
 
 		pen = text.Draw(col.dst, face, box.Max.X+swatchGap, top, entry.label, s.pal.Muted,
 			text.WithSpacing(labelTracking))
 		pen += legendGap
 	}
+}
+
+// markLegendEntry rings a legend swatch when the filter is on that entry, and
+// does nothing when it is not.
+//
+// The ring sits outside the swatch rather than inside it, so the colour the
+// legend is explaining keeps every one of its own pixels. It is drawn in the
+// reading ink because it is a statement about the scene rather than another
+// colour to look up.
+//
+//nolint:revive // flag-parameter: marked picks whether to draw, not a mode to branch deeper on.
+func (s *Scene) markLegendEntry(dst *canvas.Canvas, box image.Rectangle, marked bool) {
+	if !marked {
+		return
+	}
+
+	dst.Rect(box.Inset(-swatchMark), s.pal.Ink)
 }
 
 // drawAirlineLegend names the operators with the most aircraft on the scope,
@@ -657,15 +735,11 @@ func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 // left of that slice. A legend measured from the names instead would put the
 // swatches in a different place on every frame, since the names change as
 // aircraft come and go.
-func (s *Scene) drawAirlineLegend(col *layout, face *psf.Font, top int, frame source.Frame) {
-	s.counts.reset()
-
-	for _, plane := range frame.Planes {
-		s.counts.add(plane.Callsign)
-	}
-
-	s.counts.rank()
-
+//
+// The tally is counted at the top of Draw rather than here, because the f key's
+// cycle walks these same entries in this same order and the minimal and 3D
+// views have no legend to count one. See countOperators.
+func (s *Scene) drawAirlineLegend(col *layout, face *psf.Font, top int) {
 	slots := s.counts.shown
 	if s.counts.other {
 		slots++
@@ -692,6 +766,7 @@ func (s *Scene) drawOperatorEntry(
 ) {
 	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
 	dst.FillRect(box, s.operatorColour(entry.airline))
+	s.markLegendEntry(dst, box, s.filter.marksOperator(entry.airline.ICAO))
 
 	pen := text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, entry.airline.ICAO, s.pal.Ink,
 		text.WithSpacing(labelTracking))
@@ -707,6 +782,7 @@ func (s *Scene) drawOperatorEntry(
 func (s *Scene) drawOtherEntry(dst *canvas.Canvas, face *psf.Font, origin image.Point) {
 	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
 	dst.FillRect(box, s.pal.Muted)
+	s.markLegendEntry(dst, box, s.filter.marksOther())
 
 	text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, legendOther, s.pal.Muted, text.WithSpacing(labelTracking))
 }
@@ -724,10 +800,15 @@ func fitRunes(face *psf.Font, width, tracking int) int {
 }
 
 // legendEntries pairs each band with its colour, in the order the bands go up.
-func (s *Scene) legendEntries() [figureCount]legendEntry {
-	return [figureCount]legendEntry{
-		{col: s.pal.AltLow, label: legendLow},
-		{col: s.pal.AltMid, label: legendMid},
-		{col: s.pal.AltHigh, label: legendHigh},
+//
+// It is indexed by the band constants rather than written out in order,
+// because the f key selects a band by index and the legend has to ring the one
+// it selected. Two lists in the same order by coincidence would be one
+// reordering away from ringing the wrong row.
+func (s *Scene) legendEntries() [bandCount]legendEntry {
+	return [bandCount]legendEntry{
+		bandLow:  {col: s.pal.AltLow, label: legendLow},
+		bandMid:  {col: s.pal.AltMid, label: legendMid},
+		bandHigh: {col: s.pal.AltHigh, label: legendHigh},
 	}
 }

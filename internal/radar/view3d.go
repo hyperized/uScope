@@ -429,6 +429,10 @@ func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airpor
 // Minimal mode's rules do not apply here. The selection keeps its ring and its
 // label, because the column beside the picture is still on screen for them to
 // refer to.
+//
+// The filter's do apply, and they take the whole aircraft with them: no trail,
+// no stalk, no model and no label. It asks the same predicate the flat scope
+// asks, which is what stops v from changing which aeroplanes are on screen.
 func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 	if s.trail.ghostsDrawn() {
 		for _, ghost := range frame.Ghosts {
@@ -437,10 +441,18 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 	}
 
 	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
 		s.drawTrail3(lay.dst, view, plane.PositionHistory, s.aircraftColour(plane))
 	}
 
 	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
 		s.drawContact3(lay, view, plane)
 	}
 }

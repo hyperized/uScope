@@ -9,6 +9,12 @@
 // key and --colour pick between. Airline colours come from pkg/airlines and
 // are adapted to whichever field the palette draws on.
 //
+// The f key filters the traffic down to one entry of whichever legend that
+// leaves on screen: one altitude band, or one operator and the aircraft with
+// no operator at all. Every view asks the same predicate, so the scope, the
+// rows, the centroid and the range all agree about what is on the field. See
+// filter.go.
+//
 // The aircraft arrive through internal/source, which is the only thing that
 // knows whether they came off a radio or were invented. Everything here works
 // on a source.Frame and would not notice the difference.
@@ -172,6 +178,16 @@ type Scene struct {
 	// colour is what an aircraft's colour means, which the c key cycles.
 	colour ColourMode
 
+	// filter is which slice of the traffic is drawn, which the f key cycles.
+	//
+	// It follows the colour mode, because it is the legend with one entry
+	// picked out of it: three altitude bands in one mode, the busiest
+	// operators and OTHER in the other. Pressing c puts it back to filterAll
+	// for the same reason. A filter holding an airline while the scope was
+	// coloured by height would be a setting with nothing on screen to explain
+	// it.
+	filter filterState
+
 	// airports is whether the airfield markers are drawn, which the a key
 	// toggles.
 	airports bool
@@ -329,6 +345,16 @@ type Scene struct {
 	// aeroplane happened to be first in the list when the program started.
 	// n, p, Up and Down pin it; Esc lets go again.
 	pinned bool
+
+	// selHidden says the pinned aircraft is still flying but the filter is
+	// keeping it off the field.
+	//
+	// The pin holds through it: an operator who chose an aeroplane and then
+	// narrowed the filter has not unchosen it, and the choice has to survive
+	// the filter being widened again. The card says so with a tag rather than
+	// going blank, because a panel about an aircraft nothing on screen shows
+	// needs to explain itself.
+	selHidden bool
 
 	// The scratch buffers every number in the scene is formatted into.
 	// Reusing them is what keeps the draw path free of allocations; the note
@@ -496,6 +522,11 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// ask for from the state the last one carried.
 	s.biasSupported, s.biasEnabled = frame.BiasTee.Supported, frame.BiasTee.Enabled
 
+	// The operator tally is counted before anything is drawn, because in
+	// airline mode the filter is one of its entries and everything below has
+	// to agree about which. See countOperators.
+	s.countOperators(frame)
+
 	s.syncSelection(frame)
 
 	// Minimal mode following the traffic fits its own range, around the
@@ -631,16 +662,23 @@ func glyphWidth(face *psf.Font) int {
 // An altitude of zero means nobody has decoded one yet, not sea level: a
 // Snapshot starts at zero and stays there until an altitude message arrives.
 // Those are drawn muted so they read as "unknown" rather than as "very low".
+//
+// The boundaries live in bandOf rather than here, because the f key selects a
+// band and this paints one. Two copies of the same three thresholds would be
+// two chances for the colour on the scope and the filter hiding it to
+// disagree.
 func (s *Scene) bandColour(altitude float64) color.RGBA {
-	switch {
-	case altitude <= 0:
-		return s.pal.Muted
-	case altitude < lowCeiling:
+	switch bandOf(altitude) {
+	case bandLow:
 		return s.pal.AltLow
-	case altitude < midCeiling:
+	case bandMid:
 		return s.pal.AltMid
-	default:
+	case bandHigh:
 		return s.pal.AltHigh
+	case bandUnknown:
+		fallthrough
+	default:
+		return s.pal.Muted
 	}
 }
 

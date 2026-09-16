@@ -41,6 +41,22 @@ const (
 	// right-aligned figure that grew a digit would otherwise pull the whole
 	// table left on the frame a hundredth aircraft arrived.
 	rowsCountWidest = "9999" + rowsCountSuffix
+
+	// rowsOfInfix joins the two numbers the count carries while a filter is
+	// on: how many aircraft the rows are showing, then how many are on the
+	// field. Without the second number a short list reads as a quiet sky
+	// rather than as a filter doing its job.
+	rowsOfInfix = " OF "
+
+	// rowsFilteredWidest is what the title line reserves instead while the
+	// filter is on. It is the wider string, so the table gives up about fifty
+	// pixels the moment f is pressed and takes them back when it goes to ALL.
+	//
+	// Reserving the wider one always would be the stiller table, and it would
+	// cost every unfiltered scope those pixels for a prefix it never draws. A
+	// table that moves when the operator changes what it is a table of is the
+	// better trade.
+	rowsFilteredWidest = "9999" + rowsOfInfix + rowsCountWidest
 )
 
 // Each column's width in characters, taken from the widest value that column
@@ -278,7 +294,12 @@ func (s *Scene) rowsCountWidth() int {
 		return 0
 	}
 
-	width, _ := text.Measure(face, rowsCountWidest, text.WithSpacing(labelTracking))
+	widest := rowsCountWidest
+	if s.filter.active() {
+		widest = rowsFilteredWidest
+	}
+
+	width, _ := text.Measure(face, widest, text.WithSpacing(labelTracking))
 
 	return width + columnGap
 }
@@ -304,6 +325,15 @@ func (s *Scene) planRowTable(left, right int) (rowPlan, int, bool) {
 // drawRows draws the compact list under the panel: a title line carrying the
 // column names and the aircraft count, then one line per aircraft, as many as
 // the room left in the column holds.
+//
+// The list is the aircraft the filter is showing, numbered from one down the
+// page rather than by where they sit in the fleet. The count on the title line
+// is what says how many were left out; a "#" column skipping from 3 to 17
+// would say the same thing far less clearly.
+//
+// A filter that hides everything still draws the title line and its count. An
+// empty table with "0 OF 81 AIRCRAFT" over it explains itself; an empty column
+// does not.
 func (s *Scene) drawRows(col *layout, frame source.Frame) {
 	step := s.rowStep()
 	if step == 0 || len(frame.Planes) == 0 {
@@ -324,19 +354,21 @@ func (s *Scene) drawRows(col *layout, frame source.Frame) {
 		return
 	}
 
+	shown := s.shownPlanes()
+
 	// The "+N MORE" tail gets a line of the window rather than being squeezed
 	// under it, so it cannot end up drawn over the block below. A shorter list
 	// with an honest count under it is worth one row.
-	visible := capacity
-	if len(frame.Planes) > capacity {
-		visible = capacity - 1
+	window := capacity
+	if shown > capacity {
+		window = capacity - 1
 	}
 
-	s.trackWindow(visible, len(frame.Planes))
+	s.trackWindow(window, shown)
 	s.drawRowHeader(col, plan)
 
 	if reserved > 0 {
-		s.drawRowCount(col.dst, right, col.top, len(frame.Planes))
+		s.drawRowCount(col.dst, right, col.top, shown, len(frame.Planes))
 	}
 
 	pen := rowPen{
@@ -344,17 +376,39 @@ func (s *Scene) drawRows(col *layout, frame source.Frame) {
 		glyph: glyphWidth(s.faces.Body), top: col.top + head,
 	}
 
-	for offset := range visible {
-		index := s.rowStart + offset
-		if index >= len(frame.Planes) {
+	s.drawMoreRow(col, s.drawRowWindow(col, pen, frame, window, step), shown-window)
+}
+
+// drawRowWindow draws the slice of the filtered list the window is over.
+//
+// It walks the whole fleet rather than indexing into it, because the rows are
+// the aircraft that passed the filter and nothing holds those in a list of
+// their own: the ICAO index has their identities but not their readings. The
+// walk stops at the bottom of the window, so a busy scope does not scan eighty
+// aircraft to draw twenty rows.
+// It returns the top of the line after the last row it drew, which is where
+// the "+N MORE" tail goes.
+func (s *Scene) drawRowWindow(col *layout, pen rowPen, frame source.Frame, window, step int) int {
+	index := 0
+
+	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
+		if index >= s.rowStart+window {
 			break
 		}
 
-		s.drawRow(col, pen, index, frame.Planes[index], frame.Receiver)
-		pen.top += step
+		if index >= s.rowStart {
+			s.drawRow(col, pen, index, plane, frame.Receiver)
+			pen.top += step
+		}
+
+		index++
 	}
 
-	s.drawMoreRow(col, pen.top, len(frame.Planes)-visible)
+	return pen.top
 }
 
 // drawRowHeader names the columns above the first row, in the small face so
@@ -385,16 +439,45 @@ func (s *Scene) drawRowHeader(col *layout, plan rowPlan) {
 // the column-title line and set in the same small muted face the titles are,
 // so it reads as part of the table's heading rather than as another figure.
 //
+// With a filter on it reads "12 OF 81 AIRCRAFT" instead. The second number is
+// the whole field, so the line says what is being held back as well as what is
+// on screen, and a scope that has gone quiet cannot be mistaken for one that
+// is filtered.
+//
 //nolint:varnamelen // y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawRowCount(dst *canvas.Canvas, rightX, y, count int) {
+func (s *Scene) drawRowCount(dst *canvas.Canvas, rightX, y, shown, total int) {
 	face := s.faces.Small
 
 	suffix, _ := text.Measure(face, rowsCountSuffix, text.WithSpacing(labelTracking))
-	value := s.count(count)
+	value := s.count(total)
 	left := rightX - suffix - trackedWidth(face, len(value))
+
+	if s.filter.active() {
+		left = s.drawCountLead(dst, left, y, shown)
+	}
 
 	pen := drawBytesTracked(dst, face, left, y, value, s.pal.Muted)
 	text.Draw(dst, face, pen, y, rowsCountSuffix, s.pal.Muted, text.WithSpacing(labelTracking))
+}
+
+// drawCountLead writes the "12 OF " the filtered count opens with, placed so
+// that it finishes where the total was going to start, and returns the x the
+// total now starts at.
+//
+// The number goes into its own buffer rather than into the one s.count uses,
+// because the total has already been formatted into that and a formatter's
+// slice is only good until the next call on the same array.
+//
+//nolint:varnamelen // y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawCountLead(dst *canvas.Canvas, rightX, y, shown int) int {
+	face := s.faces.Small
+
+	lead := s.shownCount(shown)
+	infix, _ := text.Measure(face, rowsOfInfix, text.WithSpacing(labelTracking))
+
+	pen := drawBytesTracked(dst, face, rightX-infix-trackedWidth(face, len(lead)), y, lead, s.pal.Muted)
+
+	return text.Draw(dst, face, pen, y, rowsOfInfix, s.pal.Muted, text.WithSpacing(labelTracking))
 }
 
 // trackWindow scrolls the row list so the selected aircraft is always one of

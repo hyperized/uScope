@@ -181,6 +181,36 @@ func TestView3DDrawsTheFurniture(t *testing.T) {
 	}
 }
 
+// TestFilterHidesAircraftInThe3DView checks the f key here too: the aircraft
+// outside the band it lands on loses its trail, its stalk and its model
+// together, the same as drawAircraft's rule for the flat scope, because
+// drawTraffic3 asks the same visible predicate.
+func TestFilterHidesAircraftInThe3DView(t *testing.T) {
+	t.Parallel()
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, filteredPair())
+	scene.Apply(view3DSettings())
+	scene.Draw(canv, 0)
+
+	if countColour(canv, view3DBox, theme.Night.AltHigh) == 0 {
+		t.Fatal("no high-band pixels before filtering in the 3D view, want the second aircraft on the field")
+	}
+
+	if !press(scene, 'f') {
+		t.Fatal("the f key was not handled, want the filter key to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, view3DBox, theme.Night.AltHigh); got != 0 {
+		t.Errorf("high-band pixels after filtering in the 3D view = %d, want none", got)
+	}
+
+	if countColour(canv, view3DBox, theme.Night.AltLow) == 0 {
+		t.Error("no low-band pixels after filtering in the 3D view, want the first aircraft still there")
+	}
+}
+
 // TestView3DEnvelopeToggle checks that e takes the envelope off the picture
 // and puts it back, leaving everything else alone.
 func TestView3DEnvelopeToggle(t *testing.T) {
@@ -540,14 +570,14 @@ func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	orbitCapBox    = image.Rect(722, 686, 738, 704)
-	envelopeCapBox = image.Rect(792, 686, 808, 704)
-	turnCapBox     = image.Rect(880, 686, 902, 704)
-	tiltCapBox     = image.Rect(950, 686, 978, 704)
+	orbitCapBox    = image.Rect(780, 686, 796, 704)
+	envelopeCapBox = image.Rect(850, 686, 866, 704)
+	turnCapBox     = image.Rect(938, 686, 960, 704)
+	tiltCapBox     = image.Rect(1008, 686, 1036, 704)
 
-	// scopeBarTail is the part of the bar row the ten shared caps never reach,
-	// which is where all four of the boxes above sit.
-	scopeBarTail = image.Rect(724, 686, 1280, 704)
+	// scopeBarTail is the part of the bar row the eleven shared caps never
+	// reach, which is where all four of the boxes above sit.
+	scopeBarTail = image.Rect(782, 686, 1280, 704)
 )
 
 // TestView3DKeyBarListsTheCameraKeys checks that all four of the view's keys

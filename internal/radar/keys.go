@@ -56,6 +56,10 @@ func (s *Scene) Handle(key input.Key) bool {
 // toggles rather than on the scope's. v is what cycles between the three
 // views, and anything not bound here falls through to the camera keys, which
 // only the 3D view takes.
+//
+// c and f are one pair rather than two keys: c picks what a colour means and f
+// picks one of the colours, so c is also what puts the filter back to ALL. See
+// cycleColour.
 func (s *Scene) handleRune(value rune) bool {
 	switch value {
 	case 'n', 'N':
@@ -77,7 +81,9 @@ func (s *Scene) handleRune(value rune) bool {
 	case 'v', 'V':
 		s.shown = s.shown.Next()
 	case 'c', 'C':
-		s.colour = s.colour.Next()
+		s.cycleColour()
+	case 'f', 'F':
+		s.cycleFilter()
 	case 'b', 'B':
 		return s.toggleBiasTee()
 	default:
@@ -85,6 +91,19 @@ func (s *Scene) handleRune(value rune) bool {
 	}
 
 	return true
+}
+
+// cycleColour moves to the other colour mode and puts the filter back to ALL,
+// which is what c does.
+//
+// The filter travels with it because a filter value is a legend entry, and
+// pressing c replaces the legend. Carrying the value across would leave the
+// cap naming an airline while the scope was coloured by height, and the field
+// showing whichever aircraft matched a designator nothing on screen mentioned
+// any more.
+func (s *Scene) cycleColour() {
+	s.colour = s.colour.Next()
+	s.filter = filterState{}
 }
 
 // toggleBiasTee asks for the dongle's LNA power to flip, which is what b
@@ -259,6 +278,8 @@ func (s *Scene) airportsDrawn() bool {
 // Pinning here rather than on a key of its own is what makes the rule one
 // rule: an operator who has not chosen an aircraft is shown the nearest one,
 // and pressing a select key is the choosing.
+// The list it steps through is the one the filter left, so n and p walk the
+// rows on screen and never land on an aeroplane nothing is drawing.
 func (s *Scene) step(delta int) {
 	count := len(s.icaos)
 	if count == 0 {
@@ -267,14 +288,14 @@ func (s *Scene) step(delta int) {
 
 	s.selIndex = ((s.selIndex+delta)%count + count) % count
 	s.selICAO = s.icaos[s.selIndex]
-	s.pinned = true
+	s.pinned, s.selHidden = true, false
 }
 
 // unpin hands the selection back to the nearest aircraft, which is what Esc
 // does. The next frame's syncSelection is what actually moves it, so this only
 // has to forget the choice.
 func (s *Scene) unpin() {
-	s.pinned = false
+	s.pinned, s.selHidden = false, false
 	s.selICAO, s.selIndex, s.rowStart = "", 0, 0
 }
 
@@ -302,30 +323,66 @@ func (s *Scene) stepRange(delta int) {
 // aeroplane without anyone pressing a key. A pinned aircraft that leaves the
 // list takes its pin with it: there is nothing left to hold, so the selection
 // goes back to following the nearest.
+//
+// The index holds only the aircraft the filter is showing, which is what makes
+// "the nearest" mean the nearest one on screen. An unpinned selection standing
+// on an aeroplane the filter then hid would be a panel about something nobody
+// can see, and the row list would carry an accent bar on a line that is not
+// there.
 func (s *Scene) syncSelection(frame source.Frame) {
 	s.icaos = s.icaos[:0]
+
 	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
 		s.icaos = append(s.icaos, plane.ICAO)
 	}
 
+	if s.pinned && s.keepPinned(frame) {
+		return
+	}
+
 	if len(s.icaos) == 0 {
-		s.selICAO, s.selIndex, s.rowStart = "", -1, 0
+		s.selICAO, s.selIndex, s.rowStart, s.selHidden = "", -1, 0, false
 
 		return
 	}
 
-	if s.pinned {
-		if index := indexOf(s.icaos, s.selICAO); index >= 0 {
-			s.selIndex = index
+	s.selIndex, s.rowStart, s.selHidden = 0, 0, false
+	s.selICAO = s.icaos[0]
+}
 
-			return
-		}
+// keepPinned holds the selection on the aircraft the operator chose, and
+// reports whether it managed to.
+//
+// Three states, and the filter is what adds the middle one. The aircraft is in
+// the index, so it has a row and the panel points at it. It is filtered out
+// but still in the frame, so the pin holds, the panel still draws it and says
+// FILTERED, and it has no row for the index to point at. Or it has gone off
+// the list altogether, and there is nothing left to hold: the pin goes and the
+// selection falls back to the nearest contact.
+//
+// The middle case is why this takes the frame rather than working off the ICAO
+// index alone. The index is what the filter left, and the whole question here
+// is about an aeroplane that is not in it.
+func (s *Scene) keepPinned(frame source.Frame) bool {
+	if index := indexOf(s.icaos, s.selICAO); index >= 0 {
+		s.selIndex, s.selHidden = index, false
 
-		s.pinned = false
+		return true
 	}
 
-	s.selIndex, s.rowStart = 0, 0
-	s.selICAO = s.icaos[0]
+	if _, flying := findPlane(frame, s.selICAO); flying {
+		s.selIndex, s.selHidden = notSelected, true
+
+		return true
+	}
+
+	s.pinned, s.selHidden = false, false
+
+	return false
 }
 
 // indexOf finds an ICAO in the list, or reports -1.
@@ -352,6 +409,12 @@ func indexOf(icaos []string, want string) int {
 // was in the list. A frame where nothing has a position leaves the range
 // alone, so the scope does not snap back to its minimum every time the feed
 // goes quiet.
+//
+// Aircraft the filter is hiding are skipped for a different reason: the range
+// is what the scope has room for, and sizing it around an aeroplane nothing
+// draws would leave the traffic on screen in a small ring in the middle of an
+// empty field. Filtering to the low band on a scope reaching 180 nautical
+// miles is meant to pull the range in with it.
 func (s *Scene) fitRange(frame source.Frame) {
 	s.fitRangeAround(frame, geo{lat: frame.Receiver.Latitude, lon: frame.Receiver.Longitude})
 }
@@ -370,6 +433,10 @@ func (s *Scene) fitRangeAround(frame source.Frame, origin geo) {
 	farthest := 0.0
 
 	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
 		distance := airplanes.HaversineDistance(origin.lat, origin.lon, plane.Latitude, plane.Longitude)
 		if distance == math.MaxFloat64 || math.IsNaN(distance) {
 			continue

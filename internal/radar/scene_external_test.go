@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/png"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -2358,8 +2361,10 @@ var (
 	//
 	// It moved twelve pixels left when the T cap stopped saying TRAILS and
 	// started naming the trail mode: LONG is two characters shorter, and the
-	// bar is laid out left to right, so everything after T came with it.
-	biasCapBox = image.Rect(722, 686, 738, 704)
+	// bar is laid out left to right, so everything after T came with it. It
+	// moved fifty-eight pixels right again when the F cap arrived between C
+	// and L, which is what an F cap reading ALL takes.
+	biasCapBox = image.Rect(780, 686, 796, 704)
 )
 
 // TestKeyCapsShowToggleState checks the one thing the bar could not say
@@ -3658,5 +3663,138 @@ func TestCardTrackArrowTurnsWithTheHeading(t *testing.T) {
 
 	if got := painted(unknownCanvas, cardTrackArrow); got != 0 {
 		t.Errorf("TRACK --- drew %d arrow pixels, want none", got)
+	}
+}
+
+// filteredPair is one aircraft in the low altitude band and one in the high
+// band, at bearings far enough apart that neither sprite nor trail overlaps
+// the other. It is the fixture the filter's pixel tests share, so a band
+// picked to keep the first and drop the second means the same thing on the
+// flat scope, in minimal mode and in the 3D view.
+func filteredPair() source.Frame {
+	return sceneFrame(
+		scenePlane("484AC1", "KLM123", 45, 12, 2400, 41),
+		scenePlane("3C6745", "DLH4EA", 200, 38, 36000, 268),
+	)
+}
+
+// TestFilterHidesAircraftOnTheScope checks the f key on the flat scope: the
+// aircraft outside the band it lands on draws nothing at all, trail included,
+// while the one inside the band is still on the field.
+func TestFilterHidesAircraftOnTheScope(t *testing.T) {
+	t.Parallel()
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, filteredPair())
+	scene.Draw(canv, 0)
+
+	if countColour(canv, scopeBox, theme.Night.AltHigh) == 0 {
+		t.Fatal("no high-band pixels before filtering, want the second aircraft on the field")
+	}
+
+	if !press(scene, 'f') {
+		t.Fatal("the f key was not handled, want the filter key to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, scopeBox, theme.Night.AltHigh); got != 0 {
+		t.Errorf("high-band pixels after filtering to the low band = %d, want none", got)
+	}
+
+	if countColour(canv, scopeBox, theme.Night.AltLow) == 0 {
+		t.Error("no low-band pixels after filtering to the low band, want the first aircraft still there")
+	}
+}
+
+// TestFilterHidesAircraftInMinimalMode checks the same key in the bare-field
+// view, which shares drawAircraft with the flat scope but has no column to
+// keep the check clear of: the whole canvas is traffic or nothing.
+func TestFilterHidesAircraftInMinimalMode(t *testing.T) {
+	t.Parallel()
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, filteredPair())
+	scene.Apply(radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm})
+	scene.Draw(canv, 0)
+
+	field := canv.Bounds()
+
+	if countColour(canv, field, theme.Night.AltHigh) == 0 {
+		t.Fatal("no high-band pixels before filtering in minimal mode, want the second aircraft on the field")
+	}
+
+	if !press(scene, 'f') {
+		t.Fatal("the f key was not handled, want the filter key to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, field, theme.Night.AltHigh); got != 0 {
+		t.Errorf("high-band pixels after filtering in minimal mode = %d, want none", got)
+	}
+
+	if countColour(canv, field, theme.Night.AltLow) == 0 {
+		t.Error("no low-band pixels after filtering in minimal mode, want the first aircraft still there")
+	}
+}
+
+// TestFilterRenderPNG writes the demo fleet under one step of each of the
+// filter's two cycles to a directory an operator names, for looking at over a
+// picture rather than proving anything a pixel count could check on its own.
+//
+// It is skipped unless USCOPE_PNG_DIR is set: nothing else in the suite
+// touches disk, and a CI run has no directory worth writing these into.
+func TestFilterRenderPNG(t *testing.T) {
+	t.Parallel()
+
+	dir := os.Getenv("USCOPE_PNG_DIR")
+	if dir == "" {
+		t.Skip("USCOPE_PNG_DIR is not set")
+	}
+
+	writeFilterPNG(t, dir, "filter-alt.png", radar.ColourAltitude, 'f')
+	writeFilterPNG(t, dir, "filter-air.png", radar.ColourAirline, 'F')
+}
+
+// writeFilterPNG draws one frame of the demo fleet in colour, presses the
+// filter key once to land on the first entry of that mode's cycle, and writes
+// the result to name inside dir.
+//
+// The key is pressed after a first, unfiltered Draw rather than before it:
+// airline mode's cycle walks the legend, and the legend is only known once
+// countOperators has seen a frame, exactly as it is for an operator working
+// the scope live.
+func writeFilterPNG(tb testing.TB, dir, name string, colour radar.ColourMode, key rune) {
+	tb.Helper()
+
+	demo, err := source.NewDemo()
+	if err != nil {
+		tb.Fatalf("source.NewDemo: %v", err)
+	}
+
+	canv, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	scene := radar.New(testFaces(tb), demo, scope.New(), radar.WithColour(colour))
+	scene.Draw(canv, 0)
+
+	if !press(scene, key) {
+		tb.Fatalf("the %c key was not handled, want the filter key to take it", key)
+	}
+
+	scene.Draw(canv, 0)
+
+	path := filepath.Join(dir, name)
+
+	file, err := os.Create(path) //nolint:gosec // an operator-named directory, the trust boundary --png also runs at.
+	if err != nil {
+		tb.Fatalf("os.Create(%s): %v", path, err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	if err := png.Encode(file, canv.Image()); err != nil {
+		tb.Fatalf("png.Encode(%s): %v", path, err)
 	}
 }

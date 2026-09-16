@@ -1012,8 +1012,12 @@ func TestLayoutSplit(t *testing.T) {
 }
 
 // sampleCallsign is a plain KLM callsign, reused wherever a test needs a
-// realistic value and does not care which operator it names.
-const sampleCallsign = "KLM123"
+// realistic value and does not care which operator it names, and sampleICAO is
+// the operator designator it looks up to.
+const (
+	sampleCallsign = "KLM123"
+	sampleICAO     = "KLM"
+)
 
 func TestCallsignOf(t *testing.T) {
 	t.Parallel()
@@ -1128,7 +1132,7 @@ func TestTallyCounting(t *testing.T) {
 		t.Errorf("seen[0].count = %d, want 3", got)
 	}
 
-	if got := counts.seen[0].airline.ICAO; got != "KLM" {
+	if got := counts.seen[0].airline.ICAO; got != sampleICAO {
 		t.Errorf("seen[0].airline.ICAO = %q, want KLM", got)
 	}
 }
@@ -1188,7 +1192,7 @@ func TestTallyRank(t *testing.T) {
 			t.Fatalf("shown = %d, want 3", counts.shown)
 		}
 
-		for index, want := range []string{"KLM", "DLH", "EIN"} {
+		for index, want := range []string{sampleICAO, "DLH", "EIN"} {
 			if got := counts.seen[index].airline.ICAO; got != want {
 				t.Errorf("seen[%d].airline.ICAO = %q, want %q", index, got, want)
 			}
@@ -3462,6 +3466,11 @@ func TestCapOn(t *testing.T) {
 		{name: "shore off", scene: Scene{}, toggle: capShore, want: false},
 		{name: "bias-tee on", scene: Scene{biasEnabled: true}, toggle: capBiasTee, want: true},
 		{name: "bias-tee off", scene: Scene{}, toggle: capBiasTee, want: false},
+		{name: "filter hollow at ALL", scene: Scene{}, toggle: capFilter, want: false},
+		{
+			name: "filter filled on a band", scene: Scene{filter: filterState{kind: filterBand, band: bandLow}},
+			toggle: capFilter, want: true,
+		},
 		{name: "quit is always on", scene: Scene{}, toggle: capAlways, want: true},
 		{name: "the colour cap is always on", scene: Scene{}, toggle: capColour, want: true},
 		{name: "the theme cap is always on", scene: Scene{}, toggle: capTheme, want: true},
@@ -3582,10 +3591,10 @@ func TestDrawCopiesBiasTeeFromFrame(t *testing.T) {
 func TestCapLabel(t *testing.T) {
 	t.Parallel()
 
-	// The three cycling entries, taken from the bar itself rather than written
+	// The four cycling entries, taken from the bar itself rather than written
 	// out again, so a rename of any of their labels cannot leave this table
 	// testing a cap that is no longer on screen.
-	trailCap, colourCap, themeCap := keyCaps[4], keyCaps[7], keyCaps[8]
+	trailCap, colourCap, filterCap, themeCap := keyCaps[4], keyCaps[7], keyCaps[8], keyCaps[9]
 
 	for _, testCase := range []struct {
 		name  string
@@ -3632,6 +3641,25 @@ func TestCapLabel(t *testing.T) {
 		{
 			name: "the zero trail mode reads as long", scene: Scene{},
 			entry: trailCap, want: labelTrailLong,
+		},
+		{
+			name: "the filter on everything", scene: Scene{},
+			entry: filterCap, want: labelFilterAll,
+		},
+		{
+			name:  "the filter on a band",
+			scene: Scene{filter: filterState{kind: filterBand, band: bandMid}},
+			entry: filterCap, want: labelFilterMid,
+		},
+		{
+			name:  "the filter on an operator",
+			scene: Scene{filter: filterState{kind: filterOperator, icao: sampleICAO}},
+			entry: filterCap, want: sampleICAO,
+		},
+		{
+			name:  "the filter on the uncoloured aircraft",
+			scene: Scene{filter: filterState{kind: filterOther}},
+			entry: filterCap, want: legendOther,
 		},
 		{
 			name: "a plain toggle keeps its own label", scene: Scene{},
@@ -3712,7 +3740,10 @@ func TestCentroidOf(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, ok := centroidOf(testCase.planes)
+			// A zero Scene filters nothing, so this measures the arithmetic
+			// and not the predicate; TestCentroidSkipsFilteredAircraft is what
+			// covers the other half.
+			got, ok := (&Scene{}).centroidOf(testCase.planes)
 			if ok != testCase.wantOK {
 				t.Fatalf("centroidOf(...) ok = %v, want %v", ok, testCase.wantOK)
 			}

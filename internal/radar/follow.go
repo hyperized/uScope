@@ -92,7 +92,7 @@ func (s *Scene) following() bool {
 // doing.
 func (s *Scene) follow(frame source.Frame, elapsed time.Duration) {
 	if s.due(frame.Now) {
-		if centroid, found := centroidOf(frame.Planes); found {
+		if centroid, found := s.centroidOf(frame.Planes); found {
 			s.lastFit = frame.Now
 			s.aim(centroid, elapsed)
 			s.fitRangeAround(frame, centroid)
@@ -187,13 +187,19 @@ func between(start, target geo, along float64) geo {
 // The two means are taken separately and the antimeridian is not corrected
 // for. A fleet spread across it would average onto the wrong side of the
 // world, and it is not a fleet any single scope range holds anyway.
-func centroidOf(planes airplanes.List) (geo, bool) {
+//
+// Aircraft the filter is hiding are skipped too, which is what makes minimal
+// mode centre on the traffic it is actually drawing. It is a method for that
+// reason alone: the mean is arithmetic and knows nothing about the scene, but
+// which aeroplanes go into it is the scene's own answer and has to be the same
+// answer the rest of the frame got.
+func (s *Scene) centroidOf(planes airplanes.List) (geo, bool) {
 	var sum geo
 
 	count := 0
 
 	for _, plane := range planes {
-		if !positioned(plane.Latitude, plane.Longitude) {
+		if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
 			continue
 		}
 

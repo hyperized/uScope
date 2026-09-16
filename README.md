@@ -428,6 +428,68 @@ they are drawn: anything too dark to read against night's near-black field is
 lifted, and anything too light for paper is brought down. The scope decides
 which way round from the palette it is drawing with.
 
+### Traffic filter
+
+`f` and `F` cycle a filter that narrows the field to one entry of whichever
+legend the colour mode is currently drawing, and the key cap between `C` and
+`L` names the value it is on: hollow at `ALL`, filled with the value's own
+word otherwise, the same rule `T` and `C` follow for theirs.
+
+In altitude mode the cycle runs:
+
+| Cap | Shows |
+|---|---|
+| `F ALL` | every aircraft |
+| `F <10K` | under 10,000 feet |
+| `F 10-25K` | 10,000 up to 25,000 feet |
+| `F >25K` | 25,000 feet and above |
+
+back to `F ALL`. Those are the same three bands the legend names and the same
+boundaries the altitude colours use, so a value under `f` and a colour on the
+scope never disagree about which band an aircraft belongs to. An aircraft
+whose altitude nobody has decoded yet carries no band at all, so it comes off
+the field the moment any band is picked. In airline mode the cycle runs `ALL`,
+then each operator the legend is currently naming, most aircraft first, then
+`OTHER`, then back to `ALL`. `OTHER` is the aircraft with no callsign or one
+the database does not know, the same aircraft the legend's own `OTHER` row
+stands for, and the cycle only offers it when the legend is drawing one: a
+field with nothing uncoloured has nowhere for that value to point. The filter
+holds an operator by its three-letter designator rather than by its rank in
+the legend, so an airline that slips down the count keeps the scope pointed at
+it instead of quietly handing the field to whichever operator took its place.
+Pressing `c` puts the filter back to `ALL` along with the colour mode, because
+a filter value is one entry of a legend and `c` is what replaces the legend.
+
+An aircraft the filter is holding back is not drawn anywhere: no silhouette on
+the flat scope, no model, stalk or label in the 3D view, no trail in any view,
+no row in the compact list. Minimal mode's centroid and the auto range both
+work from what is left, so narrowing to the low band on a scope that had
+widened to 180 nautical miles pulls the range in with it. Ghost trails are the
+one exception. A ghost is the track of an aircraft that has stopped
+transmitting, so there is no live aircraft left to test against a band or a
+callsign, only a last reading that could be any age, and hiding a track on a
+reading that old would be a decision nobody watching the scope could check.
+
+The row list's title line says which state you are in: `81 AIRCRAFT` at `ALL`,
+`12 OF 81 AIRCRAFT` while a filter is on, so a short list under a filter reads
+as the filter doing its job rather than as a quiet sky. The rows are numbered
+from one down the page rather than by where each aircraft sits in the fleet,
+and the table gives up about fifty pixels of width to the longer count while a
+filter is on, taking them back the moment it goes to `ALL`. The legend marks
+its own place in this too: whichever entry the filter is on gets a ring around
+its swatch, drawn outside it in the reading ink, so the legend says which of
+its own rows the scope is showing.
+
+Selection follows the same rule as everything else, with one exception for a
+pin. An unpinned selection moves to the nearest aircraft the filter is still
+showing, so it follows the field when a value hides the aircraft it was on. A
+pinned aircraft the filter hides stays selected: the panel keeps drawing it
+and the card's heading reads `-- / SELECTED FLIGHT / FILTERED` until the
+filter widens enough to let it back in. A pinned aircraft that leaves the list
+altogether still loses its pin, exactly as it did before the filter existed.
+There is no flag for the filter; it is reachable from `f` and nowhere else,
+the same as the trail modes.
+
 ### The header
 
 The band bleeds to the top, left and right edges rather than sitting inside the
@@ -737,6 +799,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `a`, `A` | airfield markers on or off; minimal keeps its own |
 | `m`, `M` | coastline on or off; minimal keeps its own |
 | `c`, `C` | cycle the colour mode: altitude or airline |
+| `f`, `F` | cycle the filter to one entry of the current legend, then back to all |
 | `l`, `L` | cycle the colour theme |
 | `b`, `B` | bias-tee on or off; only bound when the source has one |
 | `e`, `E` | 3D view only: the receiving envelope on or off |

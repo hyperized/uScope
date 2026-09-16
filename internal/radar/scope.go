@@ -648,6 +648,11 @@ func (s *Scene) overlapsRangeLabel(box image.Rectangle) bool {
 // for an aircraft has none for a ghost either, and both ask trailMode.plan
 // the same question.
 //
+// The f key's business is which aircraft there are at all. A filtered-out
+// aeroplane loses its trail, its silhouette and its label together, because
+// half of one on the field would say there is something there without saying
+// what. Ghosts are not filtered; see visible.
+//
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 	if s.trail.ghostsDrawn() {
@@ -657,10 +662,18 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 	}
 
 	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
 		s.drawTrail(lay.dst, proj, plane)
 	}
 
 	for _, plane := range frame.Planes {
+		if !s.visible(plane) {
+			continue
+		}
+
 		x, y, inside := proj.at(plane.Latitude, plane.Longitude)
 		if !inside {
 			continue
