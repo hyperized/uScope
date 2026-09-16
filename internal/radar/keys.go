@@ -78,9 +78,34 @@ func (s *Scene) handleRune(value rune) bool {
 		s.shown = s.shown.Next()
 	case 'c', 'C':
 		s.colour = s.colour.Next()
+	case 'b', 'B':
+		return s.toggleBiasTee()
 	default:
 		return s.handle3DRune(value)
 	}
+
+	return true
+}
+
+// toggleBiasTee asks for the dongle's LNA power to flip, which is what b
+// does.
+//
+// It does no work itself and it waits for nothing. Setting a bias-tee is a USB
+// control transfer, and this runs on the goroutine that draws: a dongle that
+// takes its time answering would take the scope down with it. The Toggler
+// takes it away and reports its own failures.
+//
+// It reports false on a run with no dongle behind it, so b falls through to
+// the run loop exactly as an unbound key does, for the reason the camera keys
+// fall through outside the 3D view. Nothing in the loop binds b either, so
+// the press is a no-op, but a key that silently ate itself would be a key
+// whose effect turned up as a surprise later.
+func (s *Scene) toggleBiasTee() bool {
+	if s.biasTee == nil || !s.biasSupported {
+		return false
+	}
+
+	s.biasTee.Toggle()
 
 	return true
 }
@@ -101,7 +126,7 @@ func (s *Scene) handle3DRune(value rune) bool {
 	case 'e', 'E':
 		s.envelope = !s.envelope
 	case 'o', 'O':
-		s.startOrbit()
+		s.toggleOrbit()
 	case '[':
 		s.tilt(-tiltStep)
 	case ']':
@@ -131,11 +156,37 @@ func (s *Scene) nudgeOrbit(degrees float64) bool {
 	return true
 }
 
-// startOrbit sets the camera turning again from wherever it is now, which is
-// what o does.
+// toggleOrbit starts the camera turning or stops it where it is, which is what
+// o does.
 //
-// It rebases rather than resuming, so pressing it while the orbit is already
-// running changes nothing: the azimuth it starts from is the one on screen.
+// It used to only start it. The orbit is on from the first frame and turns at
+// one revolution every two minutes, so the commonest press was one that
+// rebased an azimuth already where it was and changed nothing anyone could
+// see, which made o read as a key that did nothing. The useful half was always
+// the other one: holding the camera still on the side of the envelope being
+// read, or on an aircraft being followed across it.
+//
+// The cap says which state it is in, because capOrbit reads s.orbiting, so
+// the bar answers the question the key used to leave open.
+func (s *Scene) toggleOrbit() {
+	if !s.orbiting {
+		s.startOrbit()
+
+		return
+	}
+
+	// Freeze the camera where the picture actually has it, not where the last
+	// keypress left s.azimuth. cameraAzimuth winds forward from azimuthAt
+	// while the orbit runs, so keeping the stored value would snap the view
+	// back to wherever the orbit began on the very next frame.
+	s.azimuth = s.cameraAzimuth(s.elapsed)
+	s.orbiting = false
+}
+
+// startOrbit sets the camera turning again from wherever it is now.
+//
+// It rebases rather than resuming, so the azimuth it starts from is the one on
+// screen and the camera does not jump when the orbit picks up again.
 func (s *Scene) startOrbit() {
 	s.azimuth = s.cameraAzimuth(s.elapsed)
 	s.azimuthAt = s.elapsed

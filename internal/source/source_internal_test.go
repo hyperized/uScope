@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperized/rtl2832u"
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
@@ -25,12 +26,29 @@ import (
 // reported, never the text.
 var errStreamFailure = errors.New("stub ingest: stream failed") //nolint:gochecknoglobals // error sentinel, not state.
 
+// errDongleOpenFailure and errDongleOpenPreset stand in for whatever the
+// dongle might fail to open with. Static so err113 is satisfied; the
+// dongle-opener tests below only care which one comes back, never its text.
+var (
+	//nolint:gochecknoglobals // error sentinel, not state.
+	errDongleOpenFailure = errors.New("test dongle: open failed")
+	//nolint:gochecknoglobals // error sentinel, not state.
+	errDongleOpenPreset = errors.New("test dongle: preset opener called")
+)
+
 // stubIngest is a minimal ingest implementation for calling stream directly,
 // without the goroutine Start adds. Every call happens on the test's own
 // goroutine, so unlike the Start/Close tests in the external file this needs
 // no synchronisation.
 type stubIngest struct {
 	err error
+
+	// The bias-tee half. biasErr is what SetBiasTee reports; the two bools
+	// are what the cached read hands back, and sweeping what the header asks.
+	biasSupported bool
+	biasEnabled   bool
+	sweeping      bool
+	biasErr       error
 }
 
 func (s stubIngest) Stream(context.Context, *airplanes.Airplanes) error { return s.err }
@@ -38,6 +56,13 @@ func (s stubIngest) Stream(context.Context, *airplanes.Airplanes) error { return
 func (stubIngest) Source() adsb.SourceInfo { return adsb.SourceInfo{} }
 
 func (stubIngest) Stats() adsb.Stats { return adsb.Stats{} }
+
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (s stubIngest) BiasTeeState() (supported, enabled bool) { return s.biasSupported, s.biasEnabled }
+
+func (s stubIngest) SetBiasTee(bool) error { return s.biasErr }
+
+func (s stubIngest) Sweeping() bool { return s.sweeping }
 
 // almostEqual compares two float64 values within a tolerance, since the
 // offset/latitude/longitude arithmetic below is never exact.
@@ -1233,4 +1258,157 @@ func TestDemoObserveFleetSkipsQuiet(t *testing.T) {
 		t.Errorf("MaxRangeNm = %v, want %v (the farther, quiet aircraft must not have been observed)",
 			got, wantDistance)
 	}
+}
+
+// TestLiveWithBiasTeeOption checks that WithBiasTee sets the field plainly,
+// on or off. Unlike WithClock or WithStderr there is no nil or zero value to
+// guard against: false is as deliberate a choice as true, since it is what an
+// operator without an LNA wants.
+func TestLiveWithBiasTeeOption(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		on   bool
+	}{
+		{name: "on", on: true},
+		{name: "off", on: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			live := &Live{}
+			WithBiasTee(testCase.on)(live)
+
+			if live.biasTee != testCase.on {
+				t.Errorf("biasTee after WithBiasTee(%v) = %v, want %v", testCase.on, live.biasTee, testCase.on)
+			}
+		})
+	}
+}
+
+// TestLiveWithAutoSweepOption mirrors TestLiveWithBiasTeeOption for the other
+// half of the pairing: WithAutoSweep sets autoSweep plainly, on or off.
+func TestLiveWithAutoSweepOption(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		on   bool
+	}{
+		{name: "on", on: true},
+		{name: "off", on: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			live := &Live{}
+			WithAutoSweep(testCase.on)(live)
+
+			if live.autoSweep != testCase.on {
+				t.Errorf("autoSweep after WithAutoSweep(%v) = %v, want %v", testCase.on, live.autoSweep, testCase.on)
+			}
+		})
+	}
+}
+
+// TestWithDongleOpenerOption checks that withDongleOpener replaces the seam
+// the bias-tee factory opens the radio through, and that a nil opener leaves
+// whatever was already there in place, the same nil-guard contract every
+// other option with a default carries.
+func TestWithDongleOpenerOption(t *testing.T) {
+	t.Parallel()
+
+	t.Run("replaces the opener", func(t *testing.T) {
+		t.Parallel()
+
+		custom := func(...rtl2832u.Option) (*rtl2832u.Receiver, error) { return nil, errDongleOpenFailure }
+
+		live := &Live{}
+		withDongleOpener(custom)(live)
+
+		if _, err := live.openDongle(); !errors.Is(err, errDongleOpenFailure) {
+			t.Errorf("openDongle() error = %v, want %v", err, errDongleOpenFailure)
+		}
+	})
+
+	t.Run("nil leaves the opener unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		preset := func(...rtl2832u.Option) (*rtl2832u.Receiver, error) { return nil, errDongleOpenPreset }
+
+		live := &Live{openDongle: preset}
+		withDongleOpener(nil)(live)
+
+		if _, err := live.openDongle(); !errors.Is(err, errDongleOpenPreset) {
+			t.Errorf("openDongle() error = %v, want %v (unchanged)", err, errDongleOpenPreset)
+		}
+	})
+}
+
+// TestLiveSdrOptions covers all four combinations of biasTee and autoSweep:
+// each flag appends exactly one adsb.Option when it is on and nothing when it
+// is off, and the two are independent of each other. The options themselves
+// cannot be compared, so this only asserts on how many came back.
+func TestLiveSdrOptions(t *testing.T) {
+	t.Parallel()
+
+	const baseLen = 1 // whatever adsbOptions had already built up before this ran.
+
+	for _, testCase := range []struct {
+		name      string
+		biasTee   bool
+		autoSweep bool
+		wantAdded int
+	}{
+		{name: "neither on", biasTee: false, autoSweep: false, wantAdded: 0},
+		{name: "bias-tee only", biasTee: true, autoSweep: false, wantAdded: 1},
+		{name: "auto-sweep only", biasTee: false, autoSweep: true, wantAdded: 1},
+		{name: "both on", biasTee: true, autoSweep: true, wantAdded: 2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			live := &Live{biasTee: testCase.biasTee, autoSweep: testCase.autoSweep}
+
+			got := live.sdrOptions(make([]adsb.Option, baseLen))
+
+			if len(got) != baseLen+testCase.wantAdded {
+				t.Errorf("len(sdrOptions()) = %d, want %d", len(got), baseLen+testCase.wantAdded)
+			}
+		})
+	}
+}
+
+// TestBiasTeeFactory covers both branches: a dongle that opens hands back a
+// non-nil adsb.Receiver, and one that fails wraps the error so a caller's
+// errors.Is still finds it underneath.
+func TestBiasTeeFactory(t *testing.T) {
+	t.Parallel()
+
+	t.Run("open succeeds", func(t *testing.T) {
+		t.Parallel()
+
+		open := func(...rtl2832u.Option) (*rtl2832u.Receiver, error) { return &rtl2832u.Receiver{}, nil }
+
+		rcv, err := biasTeeFactory(open)()
+		if err != nil {
+			t.Fatalf("biasTeeFactory()() error = %v, want nil", err)
+		}
+
+		if rcv == nil {
+			t.Error("biasTeeFactory()() receiver = nil, want the opened dongle")
+		}
+	})
+
+	t.Run("open fails", func(t *testing.T) {
+		t.Parallel()
+
+		open := func(...rtl2832u.Option) (*rtl2832u.Receiver, error) { return nil, errDongleOpenFailure }
+
+		_, err := biasTeeFactory(open)()
+		if !errors.Is(err, errDongleOpenFailure) {
+			t.Errorf("biasTeeFactory()() error = %v, want it to wrap %v", err, errDongleOpenFailure)
+		}
+	})
 }

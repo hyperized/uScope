@@ -348,6 +348,19 @@ func (d *Demo) Frame() Frame {
 // goroutine, no file and no socket.
 func (*Demo) Close() error { return nil }
 
+// BiasTee reports no dongle. The invented fleet has no antenna in front of it
+// and so nothing to power, which is why the key bar draws no BIAS-T cap under
+// --demo at all: a control for hardware that is not there is furniture
+// pretending to be a switch.
+//
+//nolint:nonamedreturns // (supported, enabled) reads clearer named at this signature.
+func (*Demo) BiasTee() (supported, enabled bool) { return false, false }
+
+// SetBiasTee refuses, with the same error uAirwaves' ingest returns for a
+// BEAST feed, so a caller's errors.Is check does not have to know which kind
+// of sourceless source it is holding.
+func (*Demo) SetBiasTee(bool) error { return adsb.ErrBiasTeeUnsupported }
+
 // validate range-checks an operator-supplied receiver position.
 func (d *Demo) validate() error {
 	if !d.manual {

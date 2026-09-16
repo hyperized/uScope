@@ -638,15 +638,15 @@ func TestMeasuredEnvelopeSkipsAnEmptySector(t *testing.T) {
 	gapped, gappedCanvas := view3DScene(t, coveredFrame(0, lowBand, lowBand+1))
 	gapped.Draw(gappedCanvas, 0)
 
-	fullInk := countInk(fullCanvas, theme.Night.Accent)
-	gappedInk := countInk(gappedCanvas, theme.Night.Accent)
+	fullInk := countInk(fullCanvas, full.measuredInk())
+	gappedInk := countInk(gappedCanvas, gapped.measuredInk())
 
 	if fullInk == 0 {
-		t.Fatal("the full envelope drew no accent pixels, so this comparison proves nothing")
+		t.Fatal("the full envelope drew no pixels at all, so this comparison proves nothing")
 	}
 
 	if gappedInk >= fullInk {
-		t.Errorf("the gapped envelope drew %d accent pixels against the full one's %d, want fewer",
+		t.Errorf("the gapped envelope drew %d pixels against the full one's %d, want fewer",
 			gappedInk, fullInk)
 	}
 }
@@ -665,8 +665,8 @@ func TestMeasuredEnvelopeNeedsObservations(t *testing.T) {
 	scene, canv := view3DScene(t, frame)
 	scene.Draw(canv, 0)
 
-	if got := countInk(canv, theme.Night.Accent); got != 0 {
-		t.Errorf("an empty coverage snapshot drew %d accent pixels, want none", got)
+	if got := countInk(canv, scene.measuredInk()); got != 0 {
+		t.Errorf("an empty coverage snapshot drew %d envelope pixels, want none", got)
 	}
 }
 
@@ -713,7 +713,7 @@ func TestMeasuredEnvelopeBreaksOverAnEmptyBand(t *testing.T) {
 					t.Fatalf("band %d came back empty, so the fixture proves nothing", band)
 				}
 
-				scene.drawMeasuredRing3(ringsOnly, view, band, reach)
+				scene.drawMeasuredRing3(ringsOnly, view, band, reach, scene.measuredInk())
 			}
 
 			if identicalPixels(whole, ringsOnly) == testCase.wantEdges {
@@ -782,10 +782,10 @@ func TestDrawEdge3CullsOffPicture(t *testing.T) {
 
 	behind := point3{north: -1000}
 
-	scene.drawEdge3(canv, view, behind, point3{east: 10})
-	scene.drawEdge3(canv, view, point3{east: 10}, behind)
+	scene.drawEdge3(canv, view, scene.measuredInk(), behind, point3{east: 10})
+	scene.drawEdge3(canv, view, scene.measuredInk(), point3{east: 10}, behind)
 
-	if got := countInk(canv, theme.Night.Accent); got != 0 {
+	if got := countInk(canv, scene.measuredInk()); got != 0 {
 		t.Errorf("an edge with an end behind the camera drew %d pixels, want none", got)
 	}
 }
@@ -1272,6 +1272,200 @@ func TestView3DRefusesABoxItCannotDrawIn(t *testing.T) {
 
 			if !identicalPixels(canv, blank) {
 				t.Errorf("%s drew something, want nothing", testCase.name)
+			}
+		})
+	}
+}
+
+// The two theme names, used as case names wherever a table runs once per
+// palette. They are constants because the same pair turns up in four tables
+// across this package's tests.
+const (
+	caseNight = "night"
+	casePaper = "paper"
+)
+
+// TestEnvelopeInkIsFadedIntoTheField pins the two wireframe colours to exact
+// values.
+//
+// Both shapes used to be drawn in their palette colour at full strength, and
+// the measured mesh came out brighter than the aircraft it surrounds. The
+// envelope is context, so it has to sit behind the traffic rather than in
+// front of it, and the only way a pixel test elsewhere in this package can
+// count envelope pixels is if it knows exactly which colour they are. These
+// literals are what the external tests compute independently, so a change to
+// either fade or to mix fails here and there rather than silently passing a
+// test that is now counting nothing.
+func TestEnvelopeInkIsFadedIntoTheField(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name         string
+		pal          theme.Palette
+		wantMeasured color.RGBA
+		wantBowl     color.RGBA
+	}{
+		{
+			name: caseNight, pal: theme.Night,
+			wantMeasured: color.RGBA{R: 91, G: 65, B: 30, A: opaque},
+			wantBowl:     color.RGBA{R: 39, G: 48, B: 58, A: opaque},
+		},
+		{
+			name: casePaper, pal: theme.Paper,
+			wantMeasured: color.RGBA{R: 228, G: 196, B: 156, A: opaque},
+			wantBowl:     color.RGBA{R: 196, G: 198, B: 197, A: opaque},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			scene.SetPalette(testCase.pal)
+
+			if got := scene.measuredInk(); got != testCase.wantMeasured {
+				t.Errorf("measuredInk() = %v, want %v", got, testCase.wantMeasured)
+			}
+
+			if got := scene.bowlInk(); got != testCase.wantBowl {
+				t.Errorf("bowlInk() = %v, want %v", got, testCase.wantBowl)
+			}
+		})
+	}
+}
+
+// TestEnvelopeInkSitsBetweenTheFieldAndItsSource checks the property the exact
+// values above are an instance of: a faded wireframe is nearer the field than
+// the palette colour it came from, in every channel and in both themes.
+//
+// The literals pin today's arithmetic; this pins what the arithmetic is for,
+// so a future change that moves the numbers still has to keep the shapes
+// receding rather than advancing.
+func TestEnvelopeInkSitsBetweenTheFieldAndItsSource(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		pal  theme.Palette
+	}{
+		{name: caseNight, pal: theme.Night},
+		{name: casePaper, pal: theme.Paper},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			scene.SetPalette(testCase.pal)
+
+			assertBetween(t, "measured", testCase.pal.Field, scene.measuredInk(), testCase.pal.Accent)
+			assertBetween(t, "bowl", testCase.pal.Field, scene.bowlInk(), testCase.pal.Muted)
+		})
+	}
+}
+
+// assertBetween reports whether mixed lies between field and source in every
+// channel, which is what "faded towards the field" means channel by channel
+// without assuming which of the two ends is the brighter one. Paper's field is
+// lighter than its ink and night's is darker, so a test written as "dimmer"
+// would only hold on one theme.
+func assertBetween(tb testing.TB, what string, field, mixed, toward color.RGBA) {
+	tb.Helper()
+
+	for _, channel := range []struct {
+		name          string
+		from, got, to uint8
+	}{
+		{name: "red", from: field.R, got: mixed.R, to: toward.R},
+		{name: "green", from: field.G, got: mixed.G, to: toward.G},
+		{name: "blue", from: field.B, got: mixed.B, to: toward.B},
+	} {
+		low, high := min(channel.from, channel.to), max(channel.from, channel.to)
+		if channel.got < low || channel.got > high {
+			tb.Errorf("%s %s = %d, want between the field's %d and the palette's %d",
+				what, channel.name, channel.got, channel.from, channel.to)
+		}
+	}
+}
+
+// TestToggleOrbit checks that o is a switch rather than a restart, and that
+// stopping freezes the camera where the picture actually has it.
+//
+// The second half is the subtle one. While the orbit runs, the azimuth on
+// screen is wound forward from azimuthAt by the render clock, and s.azimuth
+// holds only where the last keypress left it. Stopping by setting orbiting to
+// false and nothing else would snap the view back to wherever the revolution
+// began, which is a jump of up to a full turn on the frame after the press.
+func TestToggleOrbit(t *testing.T) {
+	t.Parallel()
+
+	// A quarter of a revolution, so the wound-forward azimuth is a right
+	// angle from where the orbit started and cannot be confused with it.
+	const quarterTurn = 90.0
+
+	scene := &Scene{shown: View3D, orbiting: true, elapsed: orbitPeriod / 4}
+
+	if got := scene.cameraAzimuth(scene.elapsed); got != quarterTurn {
+		t.Fatalf("cameraAzimuth = %v, want %v, so the fixture proves nothing", got, quarterTurn)
+	}
+
+	if !scene.handleRune('o') {
+		t.Fatal("handleRune('o') = false, want the 3D view to take it")
+	}
+
+	if scene.orbiting {
+		t.Error("o left the camera orbiting, want it stopped")
+	}
+
+	if got := scene.azimuth; got != quarterTurn {
+		t.Errorf("o froze the camera at %v, want the %v the picture was showing", got, quarterTurn)
+	}
+
+	// Frozen means frozen: the render clock moving on must not move the view.
+	if got := scene.cameraAzimuth(orbitPeriod); got != quarterTurn {
+		t.Errorf("a stopped camera drifted to %v, want it held at %v", got, quarterTurn)
+	}
+
+	if !scene.handleRune('o') {
+		t.Fatal("a second handleRune('o') = false, want the 3D view to take it")
+	}
+
+	if !scene.orbiting {
+		t.Error("a second o left the camera stopped, want it turning again")
+	}
+
+	// Restarted from where it was rather than from where the last revolution
+	// began, so the picture does not jump when the orbit picks up.
+	if got := scene.cameraAzimuth(scene.elapsed); got != quarterTurn {
+		t.Errorf("the restarted orbit began at %v, want the %v on screen", got, quarterTurn)
+	}
+}
+
+// TestToggleOrbitIsThreeDOnly checks that o falls through in the other two
+// views, the way every camera key does.
+//
+// There is no camera to stop in the scope or in minimal, and a key that
+// quietly changed state nothing on screen could show would be a key whose
+// effect turned up as a surprise the next time v was pressed.
+func TestToggleOrbitIsThreeDOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		view View
+	}{
+		{name: "scope", view: ViewScope},
+		{name: "minimal", view: ViewMinimal},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{shown: testCase.view, orbiting: true}
+
+			if scene.handleRune('o') {
+				t.Error("handleRune('o') = true, want the key to fall through to the run loop")
+			}
+
+			if !scene.orbiting {
+				t.Error("o stopped the orbit from a view with no camera in it")
 			}
 		})
 	}

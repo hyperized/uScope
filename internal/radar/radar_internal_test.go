@@ -1782,8 +1782,8 @@ func TestBandMuted(t *testing.T) {
 		name string
 		pal  theme.Palette
 	}{
-		{name: "night", pal: theme.Night},
-		{name: "paper", pal: theme.Paper},
+		{name: caseNight, pal: theme.Night},
+		{name: casePaper, pal: theme.Paper},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -2523,6 +2523,24 @@ type stubSource struct {
 func (s *stubSource) Frame() source.Frame { return s.frame }
 
 func (*stubSource) Close() error { return nil }
+
+// BiasTee reads the same frame the scene does, so a test that sets the frame's
+// bias-tee state gets a source that agrees with it.
+//
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (s *stubSource) BiasTee() (supported, enabled bool) {
+	return s.frame.BiasTee.Supported, s.frame.BiasTee.Enabled
+}
+
+// SetBiasTee is never reached: the scene hands the flip to a Toggler and never
+// calls the source itself, which is the rule this stub helps pin.
+func (*stubSource) SetBiasTee(bool) error { return errStubBiasTee }
+
+// errStubBiasTee is what stubSource.SetBiasTee reports if anything ever calls
+// it, which nothing in the scene is allowed to.
+//
+//nolint:gochecknoglobals // error sentinel, not state.
+var errStubBiasTee = errors.New("stub source: SetBiasTee must not be called from the scene")
 
 // layerTestFaces loads all four embedded faces, for the tests below that
 // draw a whole frame rather than measuring one glyph.
@@ -3429,6 +3447,8 @@ func TestCapOn(t *testing.T) {
 		{name: "airports off", scene: Scene{}, toggle: capAirports, want: false},
 		{name: "shore on", scene: Scene{shoreOn: true}, toggle: capShore, want: true},
 		{name: "shore off", scene: Scene{}, toggle: capShore, want: false},
+		{name: "bias-tee on", scene: Scene{biasEnabled: true}, toggle: capBiasTee, want: true},
+		{name: "bias-tee off", scene: Scene{}, toggle: capBiasTee, want: false},
 		{name: "quit is always on", scene: Scene{}, toggle: capAlways, want: true},
 		{name: "the colour cap is always on", scene: Scene{}, toggle: capColour, want: true},
 		{name: "the theme cap is always on", scene: Scene{}, toggle: capTheme, want: true},
@@ -3441,6 +3461,105 @@ func TestCapOn(t *testing.T) {
 				t.Errorf("capOn(%d) = %v, want %v", testCase.toggle, got, testCase.want)
 			}
 		})
+	}
+}
+
+// fakeToggler counts how many times it is asked to flip, which is what lets
+// TestToggleBiasTee prove the key reaches the Toggler exactly once and does
+// nothing more, without any of it touching a real dongle.
+type fakeToggler struct {
+	calls int
+}
+
+// Toggle records that it was called. It does no work of its own: a real
+// implementation would talk to the USB device, and that is exactly what
+// these tests must not do.
+func (f *fakeToggler) Toggle() { f.calls++ }
+
+// TestToggleBiasTee checks the three answers b has to give: nothing wired, a
+// toggler wired to a source with no bias-tee, and a toggler wired to one that
+// has it.
+//
+// The first two report false rather than swallowing the key. That is what
+// lets b fall through to the run loop exactly as the camera keys already do
+// outside the 3D view: nothing in the loop binds b either, so the press is a
+// no-op either way, but a key that silently ate itself would be a key whose
+// effect turned up as a surprise later rather than as nothing happening at
+// all.
+func TestToggleBiasTee(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		wireUp    bool
+		supported bool
+		wantTaken bool
+		wantCalls int
+	}{
+		{name: "no toggler wired reports false and calls nothing"},
+		{
+			name:      "a toggler wired to an unsupported source reports false and calls nothing",
+			wireUp:    true,
+			supported: false,
+		},
+		{
+			name:      "a toggler wired to a supported source reports true and is called once",
+			wireUp:    true,
+			supported: true,
+			wantTaken: true,
+			wantCalls: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			toggler := &fakeToggler{}
+			scene := &Scene{biasSupported: testCase.supported}
+
+			if testCase.wireUp {
+				scene.biasTee = toggler
+			}
+
+			if got := scene.toggleBiasTee(); got != testCase.wantTaken {
+				t.Errorf("toggleBiasTee() = %v, want %v", got, testCase.wantTaken)
+			}
+
+			if toggler.calls != testCase.wantCalls {
+				t.Errorf("Toggle() called %d times, want %d", toggler.calls, testCase.wantCalls)
+			}
+		})
+	}
+}
+
+// TestDrawCopiesBiasTeeFromFrame checks that Draw takes biasSupported and
+// biasEnabled off the frame it was just handed rather than asking the source
+// again. The pair rides on the frame for the same reason elapsed does: the b
+// key reads them between two frames, and reaching back through the seam here
+// would put a USB control transfer on a path that has to stay free of one.
+// stubSource.SetBiasTee reports an error sentinel for exactly this reason:
+// nothing in the scene is allowed to call it.
+func TestDrawCopiesBiasTeeFromFrame(t *testing.T) {
+	t.Parallel()
+
+	frame := layerFrame(layerBaseLat)
+	frame.BiasTee = source.BiasTeeState{Supported: true, Enabled: true}
+
+	src := &stubSource{frame: frame}
+	scene := New(layerTestFaces(t), src, scope.New(scope.WithCurrent(layerRangeNm)))
+
+	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	scene.Draw(canv, 0)
+
+	if !scene.biasSupported {
+		t.Error("biasSupported = false after Draw, want it copied from the frame")
+	}
+
+	if !scene.biasEnabled {
+		t.Error("biasEnabled = false after Draw, want it copied from the frame")
 	}
 }
 
@@ -3474,11 +3593,11 @@ func TestCapLabel(t *testing.T) {
 			entry: colourCap, want: labelAltitude,
 		},
 		{
-			name: "night", scene: Scene{},
+			name: caseNight, scene: Scene{},
 			entry: themeCap, want: labelNight,
 		},
 		{
-			name: "paper", scene: Scene{light: true},
+			name: casePaper, scene: Scene{light: true},
 			entry: themeCap, want: labelPaper,
 		},
 		{

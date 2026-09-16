@@ -54,6 +54,11 @@ type runner struct {
 	// shore, which is what a caller that only wants the pattern scene gets;
 	// main decodes the embedded data once at startup and fills it in.
 	shoreSet *shore.Set
+
+	// biasTee runs the b key's flip off the draw goroutine. It is built after
+	// the options have been applied, because it holds the source and the
+	// stderr they may have replaced, and Run waits on it before returning.
+	biasTee *biasToggler
 }
 
 // newRunner builds the production wiring and then applies the overrides.
@@ -83,6 +88,10 @@ func newRunner(opts ...Option) *runner {
 	for _, opt := range opts {
 		opt(run)
 	}
+
+	// Built last, on purpose: it captures the source and the error writer as
+	// the options left them, and both of those have options of their own.
+	run.biasTee = newBiasToggler(run.source, run.stderr)
 
 	return run
 }

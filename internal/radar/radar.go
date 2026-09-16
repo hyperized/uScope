@@ -134,6 +134,27 @@ type BatteryReader interface {
 	IsCharging() bool
 }
 
+// Toggler is what the b key asks to flip the dongle's bias-tee.
+//
+// It is one method and it returns nothing, which is the whole design. Setting
+// the bias-tee is a USB control transfer, and a dongle wedged by an unplug or
+// a bus reset mid-write can take seconds to answer. Doing that on the
+// goroutine that draws would freeze the scope; uAirwaves learned the same
+// thing on its event loop and put the flip behind a worker there too.
+//
+// So an implementation returns at once and does the work somewhere else. It
+// is also where the in-flight guard and the failure report belong: the scene
+// has nothing useful to do with either, and a key that reports an error it
+// cannot act on is a key that stutters.
+//
+// It is declared here, where it is consumed, for the same reason
+// BatteryReader is.
+type Toggler interface {
+	// Toggle asks for the bias-tee to flip to whatever it is not. It must not
+	// block: it is called from the key handler, between two frames.
+	Toggle()
+}
+
 // Scene is the radar.
 type Scene struct {
 	faces      Faces
@@ -277,6 +298,25 @@ type Scene struct {
 	// state rather than a failure and nothing is drawn for it.
 	battery BatteryReader
 
+	// biasTee is what the b key flips, or nil on a run nobody wired one to,
+	// which is every run that is not driving the radio itself.
+	biasTee Toggler
+
+	// biasSupported and biasEnabled are the last frame's bias-tee, copied out
+	// of it in Draw the way elapsed is.
+	//
+	// They are read off the frame rather than out of the source because the
+	// key bar draws the cap and the key handler reads the same two bits, and
+	// neither may reach through the seam: the answer would be a USB transfer
+	// on the draw path in one case and on the key path in the other. The
+	// source caches the pair and the frame carries the cache.
+	//
+	// A b press before the first frame therefore does nothing. That is the
+	// right way round: until a frame has arrived nothing knows whether there
+	// is a dongle to talk to.
+	biasSupported bool
+	biasEnabled   bool
+
 	// The selection is keyed by ICAO so it survives the list being re-sorted
 	// when an aircraft overtakes another. selIndex and icaos are what the
 	// n and p keys step through, refreshed from the list every frame.
@@ -351,6 +391,17 @@ func WithClock(now func() time.Time) Option {
 // a machine with no battery: an empty glyph would say the battery is flat.
 func WithBattery(reader BatteryReader) Option {
 	return func(s *Scene) { s.battery = reader }
+}
+
+// WithBiasTee wires the b key to whatever flips the dongle's LNA power.
+//
+// Without it the key does nothing and the cap is never drawn, which is the
+// right answer for a run with no radio behind it. The cap also stays away
+// when a toggler is wired but the frame says the source does not support one:
+// internal/app wires the same toggler whichever source was chosen, and the
+// source is what knows whether there is a dongle.
+func WithBiasTee(toggler Toggler) Option {
+	return func(s *Scene) { s.biasTee = toggler }
 }
 
 // WithShore supplies the coastlines the scope draws under everything else.
@@ -445,6 +496,10 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// Kept for the camera keys, which arrive between two frames and have to
 	// know where the orbit had got to when the last one was drawn.
 	s.elapsed = elapsed
+
+	// Same reason: the b key arrives between two frames and decides what to
+	// ask for from the state the last one carried.
+	s.biasSupported, s.biasEnabled = frame.BiasTee.Supported, frame.BiasTee.Enabled
 
 	s.syncSelection(frame)
 

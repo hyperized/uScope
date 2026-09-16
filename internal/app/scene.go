@@ -93,6 +93,11 @@ type sceneDeps struct {
 	scopeRange *scope.Scope
 	battery    radar.BatteryReader
 	shoreSet   *shore.Set
+
+	// biasTee is what the radar's b key asks to flip. A nil one leaves the
+	// key unbound and the cap undrawn, which is what a caller building scenes
+	// without a run loop around them gets.
+	biasTee radar.Toggler
 }
 
 // defaultScenes is the production scene set.
@@ -102,6 +107,7 @@ func (r *runner) defaultScenes() ([]Drawer, error) {
 		scopeRange: r.scopeRange,
 		battery:    r.battery,
 		shoreSet:   r.shoreSet,
+		biasTee:    r.biasTee,
 	})
 }
 
@@ -136,7 +142,8 @@ func buildScenes(small, body, bodyBold, large fontLoader, deps sceneDeps) ([]Dra
 
 	return []Drawer{
 		radar.New(radar.Faces(faces), src, scopeRange,
-			radar.WithBattery(deps.battery), radar.WithShore(deps.shoreSet)),
+			radar.WithBattery(deps.battery), radar.WithShore(deps.shoreSet),
+			radar.WithBiasTee(deps.biasTee)),
 		pattern.New(),
 	}, nil
 }

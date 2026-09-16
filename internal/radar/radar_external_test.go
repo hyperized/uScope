@@ -62,6 +62,34 @@ func (f *fakeSource) Close() error {
 	return nil
 }
 
+// BiasTee reads the frame the test prepared, so the source and the scene see
+// the same bias-tee state.
+//
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (f *fakeSource) BiasTee() (supported, enabled bool) {
+	return f.frame.BiasTee.Supported, f.frame.BiasTee.Enabled
+}
+
+// SetBiasTee must never be reached: the scene hands the flip to a Toggler.
+func (*fakeSource) SetBiasTee(bool) error { return errFakeBiasTee }
+
+// errFakeBiasTee marks the call the scene is not allowed to make.
+//
+//nolint:gochecknoglobals // error sentinel, not state.
+var errFakeBiasTee = errors.New("fake source: SetBiasTee must not be called from the scene")
+
+// fakeToggler counts how many times the b key asked it to flip, which is what
+// TestOptions uses to prove WithBiasTee actually wires the key to the
+// Toggler it was given rather than to the source or to nothing at all.
+type fakeToggler struct {
+	calls int
+}
+
+// Toggle records that it was called. It does no work of its own: the point of
+// the interface is that flipping a real bias-tee never happens on the
+// goroutine that draws, and a test is the last place that should change.
+func (f *fakeToggler) Toggle() { f.calls++ }
+
 // testFaces loads the four embedded faces. A radar drawn with synthetic fonts
 // would not exercise the fallback glyph or the real metrics the layout is
 // built on.

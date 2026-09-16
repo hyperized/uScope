@@ -282,10 +282,16 @@ airliner sits about as far above the ground as the outer ring is wide, which is
 where two aircraft a flight level apart are visibly a flight level apart.
 
 The camera turns on its own, one revolution every two minutes. Left and Right
-nudge it fifteen degrees and stop it turning; `o` sets it going again from
-wherever the nudges left it. `[` and `]` tilt it between ten and eighty degrees
-of elevation, starting at thirty-five. The key cap `O ORBIT` is filled while it
-is turning.
+nudge it fifteen degrees and stop it turning. `o` is the switch: it stops the
+orbit where the picture has it, and starts it again from there. Stopping is
+usually what you want it for, to hold one side of the envelope still while
+reading it. `[` and `]` tilt the camera between ten and eighty degrees of
+elevation, starting at thirty-five.
+
+The bar lists all four while the view is up: `O ORBIT`, `E ENVELOPE`, a cap
+with the two arrows labelled `TURN`, and `[ ]` for `TILT`. The orbit and
+envelope caps are filled while their setting is on and hollow when it is off.
+None of the four appears in the other two views, where the keys do nothing.
 
 #### The envelope
 
@@ -295,8 +301,7 @@ shapes drawn together, from two different sources.
 The first is the theoretical one: the radio horizon. A ring at every five
 thousand feet up to forty-five thousand, at the distance an aircraft at that
 height would come over the horizon for an antenna thirty feet up, drawn dashed
-in the quietest ink the palette has, with eight meridians running up the
-outside of it. The distance is `1.23 * (sqrt(h_antenna) + sqrt(h_aircraft))`
+with eight meridians running up the outside of it. The distance is `1.23 * (sqrt(h_antenna) + sqrt(h_aircraft))`
 nautical miles, the standard VHF and radar line-of-sight approximation, which
 folds atmospheric refraction in by pretending the earth is a third larger than
 it is.
@@ -307,8 +312,8 @@ at that range every altitude above five thousand feet is over the horizon and
 the bowl has nothing left to say. Open the range past a hundred and the curve
 appears on its own.
 
-The second is the measured one, in the accent colour: where the antenna has
-actually heard something. uScope runs uAirwaves' coverage tracker behind every
+The second is the measured one: where the antenna has actually heard
+something. uScope runs uAirwaves' coverage tracker behind every
 source, binning each decoded fix by distance, altitude band and bearing sector,
 and the wireframe is a ring through the sixteen sectors at each altitude band
 with vertical edges joining the bands. A sector nothing has ever
@@ -319,6 +324,15 @@ so does its envelope.
 
 Two bands with an empty one between them are not bridged. An edge drawn through
 a band nothing was heard in would be claiming reception the tracker never saw.
+
+Both shapes are drawn faded into the field rather than at full strength. The
+measured mesh is the palette's accent mixed 35 percent into the field and the
+theoretical bowl is the muted colour mixed 60 percent in. At full strength the
+mesh was brighter than the aircraft inside it, so the picture read as a
+wireframe with some dots caught in it: the envelope is context, and context
+that outshines its subject is in the way. The mixing happens once per frame and
+the lines are then drawn solid, which on a near-uniform field gives the same
+picture as blending every pixel for a fraction of the work.
 
 The 3D view keeps no background layer. The camera moves on every frame the
 orbit is running, so a cached picture would be rebuilt each time and cost the
@@ -362,6 +376,16 @@ The wordmark and the ingest source on the left, with a filled dot when the
 source is connected and a hollow one when it is not. The receiver's position
 under them, or `EST ±22 NM` when it was worked out from the aircraft, or
 `NO FIX`.
+
+While `--auto-sweep` is walking the gain grid the source label picks up a
+`SWEEP` suffix in the accent colour. A sweep decodes nothing for the few
+seconds it runs, so without the marker the scope is empty for no stated reason,
+which reads as a broken receiver. It is the one place the accent is used for
+something other than the selected aircraft, and during a sweep there is no
+selected aircraft to confuse it with. The marker takes its room out of the
+label's budget rather than being appended after it, so a long `--beast`
+address is cut one character shorter instead of pushing `SWEEP` across the
+clocks.
 
 On the right, two clocks and the battery. Local time keeps the 32 pixel face;
 UTC sits beside it in the 16 pixel one with a `Z` after it, because aviation
@@ -416,6 +440,39 @@ for a known position, `EST ±22 NM` for an estimate, `NO FIX` for neither.
 A known position is worth giving if you have one. With a reference nearby a
 single CPR frame resolves to a position; without one the decoder waits for the
 matching half of the pair, which takes up to ten seconds per aircraft.
+
+### The bias-tee and the gain sweep
+
+An external LNA at the antenna is powered up the coax, and the dongle's
+bias-tee is what puts 5 V on the centre conductor. `--bias-t` turns it on, and
+because rtl2832u pulls the pin high during chip configuration rather than
+afterwards, the LNA is already running by the time anything else touches the
+radio.
+
+`--auto-sweep` walks the gain grid once before the first frame and keeps the
+cell that decoded best. The order matters: a sweep run against an unpowered LNA
+measures a chain that is not the one that will be receiving, picks the wrong
+cell, and leaves the receiver sitting there deaf. Give `--bias-t` as well when
+there is an LNA on the mast, or leave both off.
+
+Both settings only mean something when uScope is driving the radio itself.
+Under `--beast` the gain belongs to whoever runs the remote demodulator, a
+captured IQ file has no gain at all, and the demo fleet has no antenna in front
+of it. In all three cases the flags are ignored rather than refused, which is
+what uAirwaves does with the same pair, and one line on stderr says so:
+
+```
+uScope: --bias-t and --auto-sweep need the local SDR; ignored under --demo
+```
+
+Silence would be the wrong answer there. `--bias-t` is the flag that powers
+somebody's LNA, and an operator who believes it is powered when it is not
+spends the next hour wondering why the scope is so quiet.
+
+The `b` key flips the bias-tee while uScope is running, so the LNA can be cut
+without restarting. The key bar grows a `B BIAS-T` cap while the source has a
+bias-tee to flip, filled when the LNA is powered and hollow when it is not, and
+the cap is absent entirely under `--demo`, `--beast` and `--replay-iq`.
 
 ### Range
 
@@ -611,8 +668,9 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `m`, `M` | coastline on or off; minimal keeps its own |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `l`, `L` | cycle the colour theme |
+| `b`, `B` | bias-tee on or off; only bound when the source has one |
 | `e`, `E` | 3D view only: the receiving envelope on or off |
-| `o`, `O` | 3D view only: set the camera orbiting again |
+| `o`, `O` | 3D view only: the camera orbit on or off |
 | Left, Right | 3D view only: nudge the camera 15 degrees and stop the orbit |
 | `[`, `]` | 3D view only: tilt the camera, 10 to 80 degrees |
 | `Esc` | in the radar, hand the selection back to the nearest aircraft |
@@ -621,8 +679,8 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 The four camera keys are claimed by the 3D view and by nothing else. In the
 scope and minimal views there is no camera to move and no envelope to toggle,
 so they fall through to the run loop rather than quietly changing state nothing
-on screen could show. The key bar says the same thing from its side: `O ORBIT`
-and `E ENVELOPE` only appear while the 3D view is up.
+on screen could show. The key bar says the same thing from its side: `O ORBIT`,
+`E ENVELOPE`, `TURN` and `TILT` only appear while the 3D view is up.
 
 Both cases are bound because caps lock is easy to hit by accident on the
 uConsole's keyboard, and the unshifted twins of `+` and `-` are bound for the
@@ -630,7 +688,16 @@ same reason.
 
 The letters name what they do rather than where the thing lives: `r` for range,
 `a` for airports, `m` for map, `t` for trails, `c` for colour, `l` for look,
-`v` for view.
+`v` for view, `b` for bias-tee.
+
+`b` behaves like the camera keys: it does nothing and falls through to the run
+loop on a source with no dongle behind it, and the `B BIAS-T` cap stays off the
+bar to say so. Flipping a bias-tee is a USB control transfer, and a dongle
+wedged by an unplug mid-write can take seconds to answer, so the press hands
+the work to a worker goroutine and returns at once. A second press while one
+flip is still running is dropped rather than queued. The cap shows the cached
+state that arrived on the last frame, never a fresh read of the chip, so
+nothing on the draw path can block on the bus.
 
 The radar scene gets first refusal on every key and passes on the ones it does
 not want, which is what keeps `q` working while it is on screen. `v` is one of
@@ -665,6 +732,8 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` to stay on the receiver |
 | `--no-decay` | off | draw every trail segment at full strength, and keep the trail of an aircraft that goes quiet |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
+| `--bias-t` | off | power an external LNA over the coax from the dongle's bias-tee; local SDR only |
+| `--auto-sweep` | off | walk the gain grid once before the first frame and keep the best cell; local SDR only |
 | `--demo` | off | fly twelve invented aircraft instead of decoding any; one of them goes quiet after 90 seconds |
 | `--demo-sector` | off | put the whole invented fleet in the north-west quadrant, as a directional antenna would |
 | `--beast` | | take Mode S frames from `HOST:PORT` |

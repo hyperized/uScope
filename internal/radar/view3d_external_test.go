@@ -3,6 +3,8 @@ package radar_test
 import (
 	"errors"
 	"image"
+	"image/color"
+	"math"
 	"testing"
 	"time"
 
@@ -162,12 +164,16 @@ func TestView3DDrawsTheFurniture(t *testing.T) {
 		t.Error("the 3D view drew no rule-coloured pixels, want the range rings")
 	}
 
-	if got := countColour(canv, view3DBox, theme.Night.Accent); got == 0 {
-		t.Error("the 3D view drew no accent pixels, want the measured envelope")
+	if got := countColour(canv, view3DBox, measuredWireInk); got == 0 {
+		t.Error("the 3D view drew no measured-envelope pixels, want the wireframe")
+	}
+
+	if got := countColour(canv, view3DBox, bowlWireInk); got == 0 {
+		t.Error("the 3D view drew no bowl pixels, want the theoretical envelope")
 	}
 
 	if got := countColour(canv, view3DBox, theme.Night.Muted); got == 0 {
-		t.Error("the 3D view drew no muted pixels, want the bowl and the stalks")
+		t.Error("the 3D view drew no muted pixels, want the aircraft stalks")
 	}
 
 	if got := countColour(canv, view3DBox, theme.Night.AltHigh); got == 0 {
@@ -186,9 +192,15 @@ func TestView3DEnvelopeToggle(t *testing.T) {
 	scene.Apply(view3DSettings())
 	scene.Draw(canv, 0)
 
-	// The selection ring and its callsign are drawn in the accent too, so the
-	// envelope going leaves fewer accent pixels rather than none.
-	withEnvelope := countColour(canv, view3DBox, theme.Night.Accent)
+	// The envelope has a colour of its own now that the wireframe is faded
+	// into the field, where it used to share the accent with the selection
+	// ring. Counting its own colour means e has to take every one of these
+	// pixels away rather than merely some of them, which is a sharper check
+	// than the comparison this test used to make.
+	withEnvelope := countColour(canv, view3DBox, measuredWireInk)
+	if withEnvelope == 0 {
+		t.Fatal("the 3D view drew no envelope to toggle, so this proves nothing")
+	}
 
 	if !press(scene, 'e') {
 		t.Fatal("Handle('e') = false, want the 3D view to take it")
@@ -196,16 +208,21 @@ func TestView3DEnvelopeToggle(t *testing.T) {
 
 	scene.Draw(canv, 0)
 
-	withoutEnvelope := countColour(canv, view3DBox, theme.Night.Accent)
-	if withoutEnvelope >= withEnvelope {
-		t.Errorf("e left %d accent pixels against the original %d, want fewer", withoutEnvelope, withEnvelope)
+	if got := countColour(canv, view3DBox, measuredWireInk); got != 0 {
+		t.Errorf("e left %d envelope pixels, want none", got)
+	}
+
+	// The selection ring is still drawn in the accent itself, so turning the
+	// envelope off must not have taken the rest of the picture with it.
+	if got := countColour(canv, view3DBox, theme.Night.Accent); got == 0 {
+		t.Error("e took the accent off the picture as well, want the selection ring left alone")
 	}
 
 	press(scene, 'e')
 	scene.Draw(canv, 0)
 
-	if got := countColour(canv, view3DBox, theme.Night.Accent); got != withEnvelope {
-		t.Errorf("e put %d accent pixels back, want the original %d", got, withEnvelope)
+	if got := countColour(canv, view3DBox, measuredWireInk); got != withEnvelope {
+		t.Errorf("e put %d envelope pixels back, want the original %d", got, withEnvelope)
 	}
 }
 
@@ -330,7 +347,7 @@ func TestView3DWithoutAPosition(t *testing.T) {
 		t.Error("the 3D view drew no rings without a position, want them drawn anyway")
 	}
 
-	if got := countColour(canv, view3DBox, theme.Night.Accent); got == 0 {
+	if got := countColour(canv, view3DBox, measuredWireInk); got == 0 {
 		t.Error("the 3D view drew no envelope without a position, want it drawn anyway")
 	}
 
@@ -457,5 +474,194 @@ func TestView3DOrbitMovesThePicture(t *testing.T) {
 
 	if !identicalIn(first, second, view3DBox) {
 		t.Error("the picture moved after the orbit was stopped, want it still")
+	}
+}
+
+// The two colours the 3D view draws its wireframes in: the measured envelope
+// faded 35 percent of the way from the field towards the accent, and the
+// theoretical bowl 60 percent of the way towards the muted colour.
+//
+// They are worked out here rather than read off the scene because the mix is
+// unexported, and they are worked out rather than written down so a change to
+// the scene's own arithmetic shows up as a failing count instead of a test
+// that quietly starts matching nothing. The exact values are pinned on the
+// other side by TestEnvelopeInkIsFadedIntoTheField in the internal file, so
+// the two have to agree.
+//
+//nolint:gochecknoglobals // a colour is data, read-only after init.
+var (
+	measuredWireInk = fadeInto(theme.Night.Field, theme.Night.Accent, 0.35)
+	bowlWireInk     = fadeInto(theme.Night.Field, theme.Night.Muted, 0.60)
+)
+
+// fadeInto mixes ink towards field by alpha, where 1 is all ink and 0 all
+// field. It is the external twin of the scene's own fade, written out again
+// rather than shared, which is the point: two independent implementations of
+// the same arithmetic disagree when one of them changes.
+func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
+	channel := func(from, to uint8) uint8 {
+		return uint8(math.Round(float64(from) + (float64(to)-float64(from))*alpha))
+	}
+
+	return color.RGBA{
+		R: channel(field.R, ink.R),
+		G: channel(field.G, ink.G),
+		B: channel(field.B, ink.B),
+		A: 0xFF,
+	}
+}
+
+// The 3D view's own cap boxes in the bottom bar, at the panel's resolution and
+// with no bias-tee cap in front of them.
+//
+// They are written down rather than derived because the arithmetic that places
+// them is the thing under test: a box worked out by re-running drawCaps' own
+// sums would move whenever the bar did and never fail. These came off a
+// rendered frame by scanning the bar row for runs of filled ink.
+//
+//nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
+var (
+	orbitCapBox    = image.Rect(734, 686, 750, 704)
+	envelopeCapBox = image.Rect(804, 686, 820, 704)
+	turnCapBox     = image.Rect(892, 686, 914, 704)
+	tiltCapBox     = image.Rect(962, 686, 990, 704)
+
+	// scopeBarTail is the part of the bar row the ten shared caps never reach,
+	// which is where all four of the boxes above sit.
+	scopeBarTail = image.Rect(724, 686, 1280, 704)
+)
+
+// TestView3DKeyBarListsTheCameraKeys checks that all four of the view's keys
+// are on the bar while it is up, and that none of them is on it otherwise.
+//
+// The camera keys were bound and undocumented on screen: the arrows turned the
+// camera and the brackets tilted it, and the only way to find that out was to
+// read the README, which is not where anyone looks while holding the device.
+// The other half matters just as much. A cap for a key that does nothing in
+// the view on screen is furniture pretending to be a control, so the scope's
+// bar has to stop after VIEW.
+func TestView3DKeyBarListsTheCameraKeys(t *testing.T) {
+	t.Parallel()
+
+	frame := covered(sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)))
+
+	flat, flatCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	flat.Apply(radar.Settings{RangeNm: sceneRangeNm})
+	flat.Draw(flatCanvas, 0)
+
+	perspective, perspectiveCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	perspective.Apply(view3DSettings())
+	perspective.Draw(perspectiveCanvas, 0)
+
+	for _, testCase := range []struct {
+		name string
+		box  image.Rectangle
+	}{
+		{name: "orbit", box: orbitCapBox},
+		{name: "envelope", box: envelopeCapBox},
+		{name: "turn", box: turnCapBox},
+		{name: "tilt", box: tiltCapBox},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := painted(perspectiveCanvas, testCase.box); got == 0 {
+				t.Errorf("the 3D bar drew nothing in the %s cap's box, want a cap there", testCase.name)
+			}
+
+			if got := painted(flatCanvas, testCase.box); got != 0 {
+				t.Errorf("the scope bar drew %d pixels in the %s cap's box, want none", got, testCase.name)
+			}
+		})
+	}
+
+	// Nothing at all past VIEW on the flat scope, which is the stronger claim:
+	// the four boxes above could each be blank while a fifth cap nobody asked
+	// for sat between them.
+	if got := painted(flatCanvas, scopeBarTail); got != 0 {
+		t.Errorf("the scope bar drew %d pixels past VIEW, want the bar to stop there", got)
+	}
+}
+
+// TestView3DKeyBarFitsAtPanelWidth checks that fourteen caps and their labels
+// still stop short of the right margin.
+//
+// The bar has no wrapping and no eliding: drawCaps stops after the cap that
+// reaches the margin, so a bar that outgrew the panel would silently lose its
+// last control rather than complain. Airline mode is the wide case, because
+// the colour cap is labelled with the mode it is on and AIRLINE is four
+// characters longer than ALT.
+func TestView3DKeyBarFitsAtPanelWidth(t *testing.T) {
+	t.Parallel()
+
+	frame := covered(sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+	scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourAirline})
+	scene.Draw(canv, 0)
+
+	_, last := paintedExtent(canv, keyBarBox)
+	if last < 0 {
+		t.Fatal("the key bar drew nothing at all, so this proves nothing")
+	}
+
+	// baseMargin is 16, so the bar has to end before 1264 at this width.
+	const rightMargin = panelWidth - 16
+
+	if last >= rightMargin {
+		t.Errorf("the 3D key bar reached x=%d, want it to stop before the %d margin", last, rightMargin)
+	}
+
+	// The tilt cap is the last one, so the bar must reach at least that far or
+	// a cap has been dropped rather than merely fitting.
+	if last < tiltCapBox.Max.X {
+		t.Errorf("the 3D key bar ended at x=%d, before the tilt cap at %d", last, tiltCapBox.Max.X)
+	}
+}
+
+// TestView3DOrbitCapFollowsTheKey checks that o reads as a switch.
+//
+// The orbit is on from the first frame, so before o toggled, the commonest
+// press was one that rebased an azimuth already where it was: nothing on
+// screen changed and the key read as dead. A filled cap that goes hollow is
+// the bar saying which of the two states the camera is in.
+func TestView3DOrbitCapFollowsTheKey(t *testing.T) {
+	t.Parallel()
+
+	frame := covered(sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Apply(view3DSettings())
+	scene.Draw(canv, 0)
+
+	orbitingInk := countColour(canv, orbitCapBox, theme.Night.Ink)
+	orbitingField := countColour(canv, orbitCapBox, theme.Night.Field)
+
+	if orbitingInk <= orbitingField {
+		t.Errorf("orbit on: %d ink and %d field pixels, want a filled cap", orbitingInk, orbitingField)
+	}
+
+	if !press(scene, 'o') {
+		t.Fatal("Handle('o') = false, want the 3D view to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	stoppedInk := countColour(canv, orbitCapBox, theme.Night.Ink)
+	stoppedField := countColour(canv, orbitCapBox, theme.Night.Field)
+
+	if stoppedField <= stoppedInk {
+		t.Errorf("orbit off: %d ink and %d field pixels, want a hollow cap", stoppedInk, stoppedField)
+	}
+
+	if stoppedInk == 0 {
+		t.Error("the hollow orbit cap drew no ink at all, want an outline and a letter")
+	}
+
+	press(scene, 'o')
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, orbitCapBox, theme.Night.Ink); got != orbitingInk {
+		t.Errorf("a second o left %d ink pixels in the cap, want the original %d", got, orbitingInk)
 	}
 }

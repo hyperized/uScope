@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -957,6 +958,30 @@ func TestOptions(t *testing.T) {
 			t.Error("WithSprite(nil) changed the picture, want the built-in silhouette left alone")
 		}
 	})
+}
+
+// TestWithBiasTeeWiresTheKey checks the option on its own rather than as a
+// subtest of TestOptions, only because the function it would otherwise join
+// is already at the line budget. It is otherwise the same shape: build a
+// scene with the option, press the key, and check the effect the option
+// promised rather than reading a field back.
+func TestWithBiasTeeWiresTheKey(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	frame.BiasTee = source.BiasTeeState{Supported: true}
+
+	toggler := &fakeToggler{}
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithBiasTee(toggler))
+	scene.Draw(canv, 0)
+
+	if !press(scene, 'b') {
+		t.Fatal("Handle('b') = false, want the scene to take it once the source supports a bias-tee")
+	}
+
+	if toggler.calls != 1 {
+		t.Errorf("Toggle() called %d times, want 1", toggler.calls)
+	}
 }
 
 // TestFrameWithoutPlanesButWithAStatsLine keeps the stats line honest: it has
@@ -2235,6 +2260,16 @@ var (
 	quitCapBox = image.Rect(16, 686, 32, 704)
 	autoCapBox = image.Rect(244, 686, 260, 704)
 	keyBarBox  = image.Rect(0, 686, 1280, 704)
+
+	// biasCapBox is the B cap the bar draws once a frame says the source has
+	// a bias-tee, at the panel's resolution. It sits right after the ten
+	// fixed caps in keyCaps, so its left edge is where the bar's painted
+	// extent ends when the cap is not there at all, and its width is one
+	// small glyph plus the cap's own padding on both sides. Verified against
+	// a rendered PNG: at (734, 686) to (750, 704) the cap is solid ink when
+	// the bias-tee is on and a hollow outline when it is off, the same
+	// pattern autoCapBox checks for AUTO.
+	biasCapBox = image.Rect(734, 686, 750, 704)
 )
 
 // TestKeyCapsShowToggleState checks the one thing the bar could not say
@@ -2301,6 +2336,148 @@ func TestKeyCapsShowTheColourMode(t *testing.T) {
 
 	if got := airlineEnd - altitudeEnd; got != labelDelta*smallGlyph {
 		t.Errorf("the key bar grew by %d pixels in airline mode, want %d", got, labelDelta*smallGlyph)
+	}
+}
+
+// TestBiasCapAppearsOnlyWhenSupported checks that the B BIAS-T cap is only
+// added to the bar when the frame says the source has one to flip. A cap for
+// a control that does nothing is furniture pretending to be a switch, which
+// is why the bar leaves it out entirely under --demo, --beast and
+// --replay-iq rather than drawing it disabled.
+func TestBiasCapAppearsOnlyWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	unsupported := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	unsupported.BiasTee = source.BiasTeeState{Supported: false}
+
+	supported := unsupported
+	supported.BiasTee = source.BiasTeeState{Supported: true}
+
+	without, withoutCanvas, _ := sceneOn(t, panelWidth, panelHeight, unsupported)
+	without.Draw(withoutCanvas, 0)
+
+	with, withCanvas, _ := sceneOn(t, panelWidth, panelHeight, supported)
+	with.Draw(withCanvas, 0)
+
+	_, withoutEnd := paintedExtent(withoutCanvas, keyBarBox)
+	_, withEnd := paintedExtent(withCanvas, keyBarBox)
+
+	if withEnd <= withoutEnd {
+		t.Errorf("key bar end with a bias-tee supported = %d, without = %d, want it further right", withEnd, withoutEnd)
+	}
+}
+
+// TestBiasCapShowsToggleState checks that the B cap follows the same on/off
+// convention every other toggle cap does: a filled box with the letter
+// knocked out when the bias-tee is on, and a hollow outline with the letter
+// in ink when it is off.
+func TestBiasCapShowsToggleState(t *testing.T) {
+	t.Parallel()
+
+	base := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	enabledFrame := base
+	enabledFrame.BiasTee = source.BiasTeeState{Supported: true, Enabled: true}
+
+	disabledFrame := base
+	disabledFrame.BiasTee = source.BiasTeeState{Supported: true, Enabled: false}
+
+	onScene, onCanvas, _ := sceneOn(t, panelWidth, panelHeight, enabledFrame)
+	onScene.Draw(onCanvas, 0)
+
+	offScene, offCanvas, _ := sceneOn(t, panelWidth, panelHeight, disabledFrame)
+	offScene.Draw(offCanvas, 0)
+
+	filledInk := countColour(onCanvas, biasCapBox, theme.Night.Ink)
+	filledField := countColour(onCanvas, biasCapBox, theme.Night.Field)
+	hollowInk := countColour(offCanvas, biasCapBox, theme.Night.Ink)
+	hollowField := countColour(offCanvas, biasCapBox, theme.Night.Field)
+
+	if filledInk <= filledField {
+		t.Errorf("bias-tee on: %d ink and %d field pixels, want a filled cap", filledInk, filledField)
+	}
+
+	if hollowField <= hollowInk {
+		t.Errorf("bias-tee off: %d ink and %d field pixels, want a hollow cap", hollowInk, hollowField)
+	}
+
+	if hollowInk == 0 {
+		t.Error("the hollow cap drew no ink at all, want an outline and a letter")
+	}
+}
+
+// sweepScene draws one frame with a given source label and sweep state at the
+// panel's resolution, which is what the two SWEEP marker tests below both
+// build on.
+func sweepScene(tb testing.TB, label string, sweeping bool) *canvas.Canvas {
+	tb.Helper()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	frame.Source = adsb.SourceInfo{Label: label, Connected: true}
+	frame.Sweeping = sweeping
+
+	scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, frame)
+	scene.Draw(canv, 0)
+
+	return canv
+}
+
+// TestSweepMarkerInHeader checks that SWEEP only shows up in the header while
+// the gain sweep is running, and only in the accent colour. A sweep decodes
+// nothing for a few seconds, so this is the one line on screen that explains
+// why the scope looks empty rather than broken, and it must not linger once
+// the sweep has finished.
+func TestSweepMarkerInHeader(t *testing.T) {
+	t.Parallel()
+
+	band := headerBand(panelWidth)
+
+	still := sweepScene(t, "SDR", false)
+	sweeping := sweepScene(t, "SDR", true)
+
+	if got := countColour(still, band, theme.Night.Accent); got != 0 {
+		t.Errorf("accent pixels in the header with no sweep running = %d, want 0", got)
+	}
+
+	if got := countColour(sweeping, band, theme.Night.Accent); got == 0 {
+		t.Error("no accent pixels in the header while the sweep is running, want the SWEEP marker drawn")
+	}
+}
+
+// TestSweepMarkerLeavesRoomInALongLabel checks that the marker's room comes
+// out of the label's own budget rather than being appended past the header's
+// right edge. A long --beast address is already cut to fit before the clocks
+// on the other side of the band, and the marker must never push it past them.
+func TestSweepMarkerLeavesRoomInALongLabel(t *testing.T) {
+	t.Parallel()
+
+	const (
+		longLabelRunes = 80
+		gap            = 24 // radar's own sourceLabelGap.
+	)
+
+	longLabel := strings.Repeat("X", longLabelRunes)
+
+	band := headerBand(panelWidth)
+	blockLeft, _ := paintedExtent(sourceLabelScene(t, panelWidth, ""), band)
+	labelBand := image.Rect(band.Min.X, band.Min.Y, blockLeft, band.Max.Y)
+
+	still := sweepScene(t, longLabel, false)
+	sweeping := sweepScene(t, longLabel, true)
+
+	_, stillEnd := paintedExtent(still, labelBand)
+	_, sweepEnd := paintedExtent(sweeping, labelBand)
+
+	if stillEnd < 0 || sweepEnd < 0 {
+		t.Fatal("nothing at all was drawn for the source label")
+	}
+
+	if stillEnd > blockLeft-gap {
+		t.Errorf("the label alone ended at %d, want it to stop by %d", stillEnd, blockLeft-gap)
+	}
+
+	if sweepEnd > blockLeft-gap {
+		t.Errorf("the label with the sweep marker ended at %d, want it to stop by %d", sweepEnd, blockLeft-gap)
 	}
 }
 

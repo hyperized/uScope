@@ -83,6 +83,8 @@ const (
 	flagDemoSector = "--demo-sector"
 	flagView       = "--view"
 	flagExaggerate = "--exaggerate"
+	flagBiasT      = "--bias-t"
+	flagAutoSweep  = "--auto-sweep"
 
 	// patternValue is the one non-default --scene spelling, named because it
 	// turns up in several tables. specimenValue is the spelling --scene no
@@ -1302,6 +1304,13 @@ func (*fakeIngest) Source() adsb.SourceInfo { return adsb.SourceInfo{Label: "FAK
 
 func (*fakeIngest) Stats() adsb.Stats { return adsb.Stats{} }
 
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (*fakeIngest) BiasTeeState() (supported, enabled bool) { return false, false }
+
+func (*fakeIngest) SetBiasTee(bool) error { return adsb.ErrBiasTeeUnsupported }
+
+func (*fakeIngest) Sweeping() bool { return false }
+
 func TestParseFlagsSource(t *testing.T) {
 	t.Parallel()
 
@@ -1559,6 +1568,194 @@ func TestSourceForRejectsABadPosition(t *testing.T) {
 				t.Error("sourceFor returned a source alongside an error")
 			}
 		})
+	}
+}
+
+// --- dongle-only flags -----------------------------------------------------
+
+// TestDongleOnlyFlags pins the phrasing dongleOnlyFlags hands to warnNoDongle:
+// which flag or flags get named, and how the pair is joined.
+//
+// One line covers both flags rather than one line per flag, because they are
+// ignored for the same reason and two warnings about one mistake read as two
+// mistakes.
+func TestDongleOnlyFlags(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		cfg  config
+		want string
+	}{
+		{name: "neither flag set", cfg: config{}, want: ""},
+		{name: "only bias-t", cfg: config{biasTee: true}, want: flagBiasT},
+		{name: "only auto-sweep", cfg: config{autoSweep: true}, want: flagAutoSweep},
+		{
+			name: "both flags set",
+			cfg:  config{biasTee: true, autoSweep: true},
+			want: flagBiasT + " and " + flagAutoSweep,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := dongleOnlyFlags(testCase.cfg); got != testCase.want {
+				t.Errorf("dongleOnlyFlags(%+v) = %q, want %q", testCase.cfg, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestWarnNoDongleStaysSilentWithNeitherFlagGiven holds warnNoDongle to the
+// branch that keeps an ordinary --demo run quiet: with neither radio-only
+// flag set there is nothing to say, and the writer must receive nothing at
+// all rather than an empty line.
+func TestWarnNoDongleStaysSilentWithNeitherFlagGiven(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+
+	warnNoDongle(config{}, &stderr, flagDemo)
+
+	if stderr.Len() != 0 {
+		t.Errorf("warnNoDongle wrote %q, want nothing", stderr.String())
+	}
+}
+
+// TestWarnNoDongleNamesTheFlagAndTheSource pins the message an operator
+// actually needs: which flag is being ignored and which source it was
+// ignored under, so a --bias-t left over in a shell history does not read as
+// an LNA that is powered when it is not. It also has to land on the writer it
+// was handed rather than on the real stderr, the same way every other
+// warning in this program does.
+func TestWarnNoDongleNamesTheFlagAndTheSource(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+
+	warnNoDongle(config{biasTee: true}, &stderr, flagDemo)
+
+	got := stderr.String()
+
+	if !strings.Contains(got, flagBiasT) {
+		t.Errorf("warnNoDongle stderr = %q, want it to contain %q", got, flagBiasT)
+	}
+
+	if !strings.Contains(got, flagDemo) {
+		t.Errorf("warnNoDongle stderr = %q, want it to contain %q", got, flagDemo)
+	}
+}
+
+// TestSourceForWarnsAboutDongleOnlyFlags covers every sourceless path
+// sourceFor can be sent down deliberately: replay, beast and demo all warn
+// once, naming the radio-only flag and the source that is ignoring it.
+func TestSourceForWarnsAboutDongleOnlyFlags(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		cfg        config
+		wantChosen string
+	}{
+		{
+			name:       "replay source",
+			cfg:        config{source: sourceReplay, replay: captureFile, biasTee: true},
+			wantChosen: flagReplay,
+		},
+		{
+			name:       "beast source",
+			cfg:        config{source: sourceBeast, beast: beastAddr, biasTee: true},
+			wantChosen: flagBeast,
+		},
+		{
+			name:       demoValue,
+			cfg:        config{source: sourceDemo, biasTee: true},
+			wantChosen: flagDemo,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+
+			src, err := sourceFor(testCase.cfg, linuxGOOS, &stderr)
+			if err != nil {
+				t.Fatalf("sourceFor: %v", err)
+			}
+
+			defer func() { _ = src.Close() }()
+
+			got := stderr.String()
+
+			if !strings.Contains(got, flagBiasT) {
+				t.Errorf("sourceFor stderr = %q, want it to contain %q", got, flagBiasT)
+			}
+
+			if !strings.Contains(got, testCase.wantChosen) {
+				t.Errorf("sourceFor stderr = %q, want it to contain %q", got, testCase.wantChosen)
+			}
+		})
+	}
+}
+
+// TestSourceForAutoWarnsAfterTheNoReceiverLine covers the one path that
+// prints two lines: off Linux, with nothing chosen, sourceFor first says
+// there is no receiver on this platform and only then, since a radio-only
+// flag was also given, that the flag is being ignored. Both lines have to
+// land, in that order, or the second line loses the context the first one
+// gave it.
+func TestSourceForAutoWarnsAfterTheNoReceiverLine(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+
+	src, err := sourceFor(config{source: sourceAuto, biasTee: true}, "darwin", &stderr)
+	if err != nil {
+		t.Fatalf("sourceFor: %v", err)
+	}
+
+	defer func() { _ = src.Close() }()
+
+	got := stderr.String()
+
+	noReceiverIndex := strings.Index(got, "no receiver on")
+	dongleIndex := strings.Index(got, flagBiasT)
+
+	if noReceiverIndex == -1 {
+		t.Fatalf("sourceFor stderr = %q, want it to contain %q", got, "no receiver on")
+	}
+
+	if dongleIndex == -1 {
+		t.Fatalf("sourceFor stderr = %q, want it to contain %q", got, flagBiasT)
+	}
+
+	if noReceiverIndex >= dongleIndex {
+		t.Errorf("sourceFor stderr = %q, want the no-receiver line before the %s warning", got, flagBiasT)
+	}
+}
+
+// TestSourceForLocalSDRStaysSilent covers the one source where the two
+// radio-only flags are not being ignored: on Linux with nothing else chosen,
+// sourceFor builds the local SDR, and warnNoDongle must not fire.
+//
+// NewLive opens nothing at construction time - the radio is opened by Start,
+// on the goroutine that runs the ingest - so building one here and closing it
+// again touches no hardware.
+func TestSourceForLocalSDRStaysSilent(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+
+	src, err := sourceFor(config{source: sourceAuto, biasTee: true}, linuxGOOS, &stderr)
+	if err != nil {
+		t.Fatalf("sourceFor: %v", err)
+	}
+
+	defer func() { _ = src.Close() }()
+
+	if stderr.Len() != 0 {
+		t.Errorf("sourceFor stderr = %q, want nothing: the local SDR path is where these flags actually apply",
+			stderr.String())
 	}
 }
 
@@ -2302,6 +2499,47 @@ func TestParseFlagsBooleans(t *testing.T) {
 				checkConfig(t, got, want)
 			})
 		}
+	}
+}
+
+// TestParseFlagsBiasTeeAndAutoSweep covers --bias-t and --auto-sweep given
+// alone, together and not at all. They land in two separate config fields, so
+// a table shaped like TestParseFlagsSource's - one row per combination,
+// several fields checked at once - catches a mix-up between them that a
+// per-flag table would not.
+func TestParseFlagsBiasTeeAndAutoSweep(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name          string
+		args          []string
+		wantBiasTee   bool
+		wantAutoSweep bool
+	}{
+		{name: caseDefault, args: nil},
+		{name: "bias-t alone", args: []string{flagBiasT}, wantBiasTee: true},
+		{name: "auto-sweep alone", args: []string{flagAutoSweep}, wantAutoSweep: true},
+		{
+			name:          "both together",
+			args:          []string{flagBiasT, flagAutoSweep},
+			wantBiasTee:   true,
+			wantAutoSweep: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.biasTee = testCase.wantBiasTee
+			want.autoSweep = testCase.wantAutoSweep
+
+			checkConfig(t, got, want)
+		})
 	}
 }
 

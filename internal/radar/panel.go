@@ -49,6 +49,14 @@ const (
 	// coordinateSeparator sits between the two halves of a position.
 	coordinateSeparator = " / "
 
+	// sweepSuffix follows the source label while the gain auto-sweep is
+	// running. It is drawn in the accent rather than in BandInk because it is
+	// the one thing in the band that explains an otherwise empty scope: the
+	// sweep walks the gain grid for a few seconds and decodes nothing while it
+	// does, and a receiver that looks broken for no stated reason is the bug
+	// report this line prevents.
+	sweepSuffix = " SWEEP"
+
 	// sourceLabelGap is the air the source label leaves between itself and the
 	// clocks on the other side of the band. It is what stops a long label
 	// running up against the UTC label rather than stopping short of it.
@@ -84,6 +92,7 @@ const (
 	capTheme
 	capOrbit
 	capEnvelope
+	capBiasTee
 )
 
 // The two cycling keys are labelled with the value they are on rather than
@@ -130,18 +139,46 @@ var keyCaps = [...]keyCap{
 	{key: "V", label: "VIEW"},
 }
 
-// view3DCaps are the two caps the 3D view adds to the end of the bar.
+// view3DCaps are the caps the 3D view adds to the end of the bar.
 //
-// They are appended rather than living in keyCaps because neither key does
-// anything in the other two views, and a cap for a key with no effect is
-// furniture pretending to be a control. In the 3D view the bar comes to about
-// 900 pixels of the 1248 the panel leaves between its margins, so the pair
-// fits without anything above having to give way.
+// They are appended rather than living in keyCaps because none of these keys
+// does anything in the other two views, and a cap for a key with no effect is
+// furniture pretending to be a control.
+//
+// All four of the view's keys are listed, not just the two toggles. The camera
+// keys were bound and undocumented on screen, so the only way to find out the
+// arrows turned the camera and the brackets tilted it was to read the README,
+// which is not where anyone looks while holding the device.
+//
+// The arrows are the glyphs rather than shapes drawn by hand, matching the
+// SELECT cap two rows up, and all four embedded faces carry U+2190 and U+2192.
+// That was checked before this was written rather than assumed, the same way
+// the up and down pair was.
+//
+// Fourteen caps and their labels come to about 1040 pixels of the 1248 the
+// panel leaves between its margins, or about 1140 with the bias-tee cap as
+// well, so nothing here has to be shortened. See the note on keyCaps before
+// adding another.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
 	{key: "O", label: "ORBIT", state: capOrbit},
 	{key: "E", label: "ENVELOPE", state: capEnvelope},
+	{key: "←→", label: "TURN"},
+	{key: "[ ]", label: "TILT"},
+}
+
+// biasCap is the cap the bar adds when the source has a bias-tee to flip.
+//
+// It is drawn conditionally for the same reason view3DCaps are: a cap for a
+// control that does nothing is furniture pretending to be a switch. Under
+// --demo, --beast and --replay-iq there is no dongle in the loop, so the bar
+// never mentions one. It is a one-element array rather than a bare keyCap so
+// drawCaps can take it as a slice without the caller allocating per frame.
+//
+//nolint:gochecknoglobals // scene content, read-only after init.
+var biasCap = [...]keyCap{
+	{key: "B", label: "BIAS-T", state: capBiasTee},
 }
 
 // drawKeyBar puts the key legend on the bottom edge and takes the room it
@@ -159,6 +196,15 @@ func (s *Scene) drawKeyBar(lay *layout) {
 	top := lay.bottom - (reserved - blockGap)
 
 	pen := s.drawCaps(lay, lay.left, top, keyCaps[:])
+
+	// The bias-tee cap goes before the camera keys rather than after them, so
+	// it keeps its place in the bar when v switches to the 3D view and the
+	// pair on the end appears. A control that moved every time the view
+	// changed would be one the eye has to hunt for.
+	if s.biasSupported && pen < lay.right {
+		pen = s.drawCaps(lay, pen, top, biasCap[:])
+	}
+
 	if s.perspective() && pen < lay.right {
 		s.drawCaps(lay, pen, top, view3DCaps[:])
 	}
@@ -252,6 +298,8 @@ func (s *Scene) capOn(which capToggle) bool {
 		return s.orbiting
 	case capEnvelope:
 		return s.envelope
+	case capBiasTee:
+		return s.biasEnabled
 	case capAlways, capColour, capTheme:
 		fallthrough
 	default:
@@ -278,7 +326,7 @@ func (s *Scene) capLabel(entry keyCap) string {
 		}
 
 		return labelNight
-	case capAlways, capAuto, capTrails, capAirports, capShore, capOrbit, capEnvelope:
+	case capAlways, capAuto, capTrails, capAirports, capShore, capOrbit, capEnvelope, capBiasTee:
 		fallthrough
 	default:
 		return entry.label
@@ -357,13 +405,19 @@ func (s *Scene) headerHeight(lay *layout) int {
 	return total
 }
 
-// drawWordmark sets USCOPE, then the ingest source beside it behind a dot.
+// drawWordmark sets USCOPE, then the ingest source beside it behind a dot,
+// and SWEEP after that while the gain sweep is running.
 //
 // The dot is filled when the source is connected and hollow when it is not,
 // which is one glance rather than a word to read. It is the low-altitude
 // green rather than the accent, because the accent marks the selected
 // aircraft and nothing else, and it is left in its own colour rather than
 // moved onto the band's BandInk/Muted split: it is a status light, not text.
+//
+// The sweep marker is the one exception to "the accent marks the selected
+// aircraft and nothing else". A sweep decodes nothing for a few seconds, so
+// the scope it explains is empty and there is no selected aircraft for the
+// accent to be confused with.
 func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int) {
 	// Both faces are known to be present: drawHeader drops the whole band
 	// unless all three of its faces loaded, so there is nothing to check here.
@@ -385,9 +439,22 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	pen += 2*dotRadius + dotGap
 	label := top + (markHeight-face.Height())/2
 
-	head, marker := fitLabel(face, frame.Source.Label, limit-pen)
+	// The sweep marker takes its room out of the label's budget before the
+	// label is cut rather than being appended after it. Appended, a long
+	// --beast address would push SWEEP across the clocks on the other side of
+	// the band, which is the one thing sourceLabelGap exists to prevent.
+	reserved := 0
+	if frame.Sweeping {
+		reserved, _ = text.Measure(face, sweepSuffix, text.WithSpacing(labelTracking))
+	}
+
+	head, marker := fitLabel(face, frame.Source.Label, limit-pen-reserved)
 	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.BandInk, text.WithSpacing(labelTracking))
-	text.Draw(lay.dst, face, pen, label, marker, s.pal.BandInk, text.WithSpacing(labelTracking))
+	pen = text.Draw(lay.dst, face, pen, label, marker, s.pal.BandInk, text.WithSpacing(labelTracking))
+
+	if frame.Sweeping {
+		text.Draw(lay.dst, face, pen, label, sweepSuffix, s.pal.Accent, text.WithSpacing(labelTracking))
+	}
 }
 
 // fitLabel cuts a label to the pixel width it has been given, and says what

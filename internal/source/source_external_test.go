@@ -38,6 +38,15 @@ type fakeIngest struct {
 	calls    int
 	source   adsb.SourceInfo
 	stats    adsb.Stats
+
+	// The bias-tee half. Guarded by the same mutex as the rest, because
+	// SetBiasTee is driven from a worker goroutine while the test reads the
+	// flip back from its own.
+	biasSupported bool
+	biasEnabled   bool
+	sweeping      bool
+	biasErr       error
+	biasCalls     int
 }
 
 // Stream counts the call and then defers to streamFn, or returns nil when
@@ -60,6 +69,49 @@ func (f *fakeIngest) Source() adsb.SourceInfo { return f.source }
 
 // Stats returns whatever Stats the test configured.
 func (f *fakeIngest) Stats() adsb.Stats { return f.stats }
+
+// BiasTeeState is the cached read, which is the one Frame is allowed to make.
+//
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (f *fakeIngest) BiasTeeState() (supported, enabled bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.biasSupported, f.biasEnabled
+}
+
+// SetBiasTee records the flip and applies it unless the test asked for a
+// failure, so a caller can check both that it was called and with what.
+func (f *fakeIngest) SetBiasTee(enable bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.biasCalls++
+
+	if f.biasErr != nil {
+		return f.biasErr
+	}
+
+	f.biasEnabled = enable
+
+	return nil
+}
+
+// Sweeping reports whatever the test configured.
+func (f *fakeIngest) Sweeping() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.sweeping
+}
+
+// biasCallCount reports how many times SetBiasTee has been called.
+func (f *fakeIngest) biasCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.biasCalls
+}
 
 // callCount reports how many times Stream has been called, guarded so a test
 // can read it while a Stream call is still running on another goroutine.
@@ -1548,4 +1600,144 @@ func countFilledSectors(sectors [coverage.BearingSectorCount]float64) int {
 	}
 
 	return count
+}
+
+// TestEmptyBiasTee checks that a Source with nothing behind it reports no
+// dongle and refuses to power one, the same contract Demo gives a caller with
+// no radio at all.
+func TestEmptyBiasTee(t *testing.T) {
+	t.Parallel()
+
+	var empty source.Empty
+
+	if supported, enabled := empty.BiasTee(); supported || enabled {
+		t.Errorf("BiasTee() = (%v, %v), want (false, false)", supported, enabled)
+	}
+
+	if err := empty.SetBiasTee(true); !errors.Is(err, adsb.ErrBiasTeeUnsupported) {
+		t.Errorf("SetBiasTee(true) error = %v, want ErrBiasTeeUnsupported", err)
+	}
+}
+
+// TestDemoBiasTee checks that the invented fleet reports no dongle and
+// refuses to power one. There is no antenna in front of --demo, which is why
+// the key bar draws no BIAS-T control under it at all.
+func TestDemoBiasTee(t *testing.T) {
+	t.Parallel()
+
+	demo, err := source.NewDemo()
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	if supported, enabled := demo.BiasTee(); supported || enabled {
+		t.Errorf("BiasTee() = (%v, %v), want (false, false)", supported, enabled)
+	}
+
+	if err := demo.SetBiasTee(true); !errors.Is(err, adsb.ErrBiasTeeUnsupported) {
+		t.Errorf("SetBiasTee(true) error = %v, want ErrBiasTeeUnsupported", err)
+	}
+}
+
+// TestLiveBiasTee checks that BiasTee reads straight off the ingest's cache
+// rather than deriving an answer of its own: whatever the fake reports comes
+// back unchanged.
+func TestLiveBiasTee(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name          string
+		biasSupported bool
+		biasEnabled   bool
+	}{
+		{name: "no dongle behind this ingest", biasSupported: false, biasEnabled: false},
+		{name: "dongle present with the LNA powered", biasSupported: true, biasEnabled: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeIngest{biasSupported: testCase.biasSupported, biasEnabled: testCase.biasEnabled}
+
+			live, err := source.NewLive(source.WithIngest(fake))
+			if err != nil {
+				t.Fatalf("NewLive: %v", err)
+			}
+
+			supported, enabled := live.BiasTee()
+			if supported != testCase.biasSupported || enabled != testCase.biasEnabled {
+				t.Errorf("BiasTee() = (%v, %v), want (%v, %v)",
+					supported, enabled, testCase.biasSupported, testCase.biasEnabled)
+			}
+		})
+	}
+}
+
+// TestLiveFrameBiasTeeAndSweeping checks that Frame folds the ingest's
+// bias-tee cache and sweep flag straight into the frame it hands back, the
+// same way it already does for Source and Stats.
+func TestLiveFrameBiasTeeAndSweeping(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeIngest{biasSupported: true, biasEnabled: true, sweeping: true}
+
+	live, err := source.NewLive(source.WithIngest(fake))
+	if err != nil {
+		t.Fatalf("NewLive: %v", err)
+	}
+
+	frame := live.Frame()
+
+	wantBiasTee := source.BiasTeeState{Supported: true, Enabled: true}
+	if frame.BiasTee != wantBiasTee {
+		t.Errorf("Frame().BiasTee = %+v, want %+v", frame.BiasTee, wantBiasTee)
+	}
+
+	if !frame.Sweeping {
+		t.Error("Frame().Sweeping = false, want true")
+	}
+}
+
+// TestLiveSetBiasTee checks that SetBiasTee passes the flag straight to the
+// ingest and, on failure, wraps the ingest's error rather than replacing it,
+// so a caller's errors.Is still finds the original underneath.
+func TestLiveSetBiasTee(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success reaches the ingest with the flag", func(t *testing.T) {
+		t.Parallel()
+
+		fake := &fakeIngest{}
+
+		live, err := source.NewLive(source.WithIngest(fake))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		if err := live.SetBiasTee(true); err != nil {
+			t.Fatalf("SetBiasTee(true) error = %v, want nil", err)
+		}
+
+		if got := fake.biasCallCount(); got != 1 {
+			t.Errorf("SetBiasTee call count = %d, want 1", got)
+		}
+
+		if _, enabled := live.BiasTee(); !enabled {
+			t.Error("BiasTee() enabled = false after SetBiasTee(true), want true")
+		}
+	})
+
+	t.Run("failure wraps the ingest's error", func(t *testing.T) {
+		t.Parallel()
+
+		fake := &fakeIngest{biasErr: errFakeIngestDisrupted}
+
+		live, err := source.NewLive(source.WithIngest(fake))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		if err := live.SetBiasTee(true); !errors.Is(err, errFakeIngestDisrupted) {
+			t.Errorf("SetBiasTee(true) error = %v, want it to wrap %v", err, errFakeIngestDisrupted)
+		}
+	})
 }

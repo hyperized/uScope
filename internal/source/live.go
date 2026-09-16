@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hyperized/rtl2832u"
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/location"
@@ -43,7 +44,30 @@ type ingest interface {
 	Stream(ctx context.Context, planes *airplanes.Airplanes) error
 	Source() adsb.SourceInfo
 	Stats() adsb.Stats
+
+	// BiasTeeState is the cached bias-tee bit. uAirwaves keeps it behind a
+	// lock next to the controller and refreshes it when the receiver opens
+	// and on every successful write, so reading it costs no USB transfer.
+	// That is the whole reason it is here rather than BiasTeeEnabled, which
+	// does one control transfer per call: Frame runs once per drawn frame.
+	BiasTeeState() (supported, enabled bool)
+
+	// SetBiasTee drives the GPIO. It is the only method here that talks to
+	// the device on demand, which is why Live never calls it from Frame.
+	SetBiasTee(enable bool) error
+
+	// Sweeping reports whether the gain auto-sweep is running.
+	Sweeping() bool
 }
+
+// dongleOpener is how the bias-tee receiver factory opens the radio.
+//
+// Its default is rtl2832u.Open itself rather than a wrapper around it, so
+// there is no adapter carrying a success branch no machine without a dongle
+// could ever run. It names the concrete receiver for the same reason: the
+// factory widens it to adsb.Receiver after the error check, which is the one
+// order that cannot hand the ingest a non-nil interface holding a nil pointer.
+type dongleOpener func(opts ...rtl2832u.Option) (*rtl2832u.Receiver, error)
 
 // Live is the real thing: aircraft decoded from radio, a BEAST feed or a
 // replayed capture.
@@ -70,6 +94,22 @@ type Live struct {
 
 	manualLat, manualLon float64
 	manual               bool
+
+	// biasTee powers an LNA over the coax from the moment the dongle opens,
+	// and autoSweep walks the gain grid before the first frame. Both only
+	// mean something on the local-SDR path: a BEAST feed's gain belongs to
+	// whoever runs the remote demodulator, and a capture has no gain at all.
+	//
+	// Order matters between the two. The bias-tee goes high at chip-config
+	// time, inside Open, so the LNA is already powered when the sweep starts
+	// measuring. A sweep run against an unpowered LNA picks the wrong gain
+	// cell and the receiver then sits there deaf, which is the failure this
+	// pairing exists to avoid.
+	biasTee   bool
+	autoSweep bool
+
+	// openDongle is the seam the bias-tee factory opens the radio through.
+	openDongle dongleOpener
 
 	now              func() time.Time
 	stderr           io.Writer
@@ -155,6 +195,43 @@ func WithIngest(in ingest) LiveOption {
 	}
 }
 
+// WithBiasTee powers an LNA over the coax, from the moment the dongle opens.
+//
+// It is ignored by every source but the local SDR, which is what uAirwaves
+// does with the same flag: a BEAST feed's gain stage is somebody else's and a
+// replayed capture has none. The flag layer says so on stderr rather than
+// leaving the operator to wonder why nothing lit up.
+//
+// Powering at open rather than after it is deliberate. rtl2832u pulls the bias
+// pin high during chip config, so by the time WithAutoSweep starts measuring
+// the LNA is already running, and the sweep measures the chain that will
+// actually be receiving.
+func WithBiasTee(on bool) LiveOption {
+	return func(l *Live) { l.biasTee = on }
+}
+
+// WithAutoSweep walks the gain grid once before the first frame and keeps the
+// cell that decoded best.
+//
+// Local SDR only, for the same reason WithBiasTee is. It costs a few seconds
+// of silence at startup, which is why the header says SWEEP while it runs: an
+// empty scope with no explanation reads as a broken receiver.
+func WithAutoSweep(on bool) LiveOption {
+	return func(l *Live) { l.autoSweep = on }
+}
+
+// withDongleOpener replaces how the bias-tee factory opens the radio.
+//
+// Unexported on purpose, the same way the ingest interface is: it is a test
+// seam and not API. A nil opener leaves rtl2832u.Open in place.
+func withDongleOpener(open dongleOpener) LiveOption {
+	return func(l *Live) {
+		if open != nil {
+			l.openDongle = open
+		}
+	}
+}
+
 // WithGhosts keeps the trail of an aircraft that stops transmitting.
 //
 // uAirwaves prunes an aircraft from the store once it has been quiet long
@@ -190,6 +267,7 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 		stderr:           os.Stderr,
 		estimateInterval: defaultEstimateInterval,
 		coverage:         newCoverage(),
+		openDongle:       rtl2832u.Open,
 	}
 
 	for _, opt := range opts {
@@ -244,6 +322,8 @@ func (l *Live) Frame() Frame {
 	planes := l.planes.Sorted(receiver.Latitude, receiver.Longitude, airplanes.WithTrails())
 	now := l.now()
 
+	supported, enabled := l.in.BiasTeeState()
+
 	return Frame{
 		Planes:   planes,
 		Ghosts:   l.observe(planes),
@@ -251,8 +331,33 @@ func (l *Live) Frame() Frame {
 		Source:   l.in.Source(),
 		Stats:    l.in.Stats(),
 		Now:      now,
+		BiasTee:  BiasTeeState{Supported: supported, Enabled: enabled},
+		Sweeping: l.in.Sweeping(),
 		Coverage: l.coverage.snapshot(now),
 	}
+}
+
+// BiasTee reports whether this receiver can power an LNA and whether it is.
+//
+// It reads uAirwaves' cache rather than the chip, so it is safe to call from
+// the goroutine that draws. The cache is seeded when the receiver opens and
+// rewritten on every successful SetBiasTee; a flip made outside this process,
+// with rtl_biast say, is not seen until one of those happens again.
+//
+//nolint:nonamedreturns // (supported, enabled) reads clearer named at this signature.
+func (l *Live) BiasTee() (supported, enabled bool) { return l.in.BiasTeeState() }
+
+// SetBiasTee flips the LNA power.
+//
+// This is a USB control transfer and may block for as long as the dongle
+// takes to answer, so it belongs on a worker goroutine. internal/app is what
+// puts it there; nothing on the draw path calls this.
+func (l *Live) SetBiasTee(enable bool) error {
+	if err := l.in.SetBiasTee(enable); err != nil {
+		return fmt.Errorf("source: setting the bias-tee: %w", err)
+	}
+
+	return nil
 }
 
 // Close stops the ingest and waits for its goroutine.
@@ -337,7 +442,43 @@ func (l *Live) adsbOptions() []adsb.Option {
 			adsb.WithBeastAddress(l.beast),
 			adsb.WithSourceLabel("BEAST "+l.beast))
 	default:
-		return append(opts, adsb.WithSourceLabel("SDR"))
+		return l.sdrOptions(append(opts, adsb.WithSourceLabel("SDR")))
+	}
+}
+
+// sdrOptions adds the two settings that only mean something when uScope is
+// driving the radio itself.
+//
+// It is split out of adsbOptions rather than inlined into its default branch
+// because the switch above is about which source was chosen and this is about
+// how one of them is opened. Both flags are off unless asked for, so the
+// ordinary run appends nothing here.
+func (l *Live) sdrOptions(opts []adsb.Option) []adsb.Option {
+	if l.biasTee {
+		opts = append(opts, adsb.WithReceiverFactory(biasTeeFactory(l.openDongle)))
+	}
+
+	if l.autoSweep {
+		opts = append(opts, adsb.WithAutoSweep())
+	}
+
+	return opts
+}
+
+// biasTeeFactory opens the dongle with the bias pin already high.
+//
+// uAirwaves' own biasTeeReceiverFactory does exactly this. The factory is
+// called once per Stream call rather than once here, because Stream owns the
+// receiver's lifetime and closes it when it returns, so a reconnect after an
+// unplug powers the LNA again on its own.
+func biasTeeFactory(open dongleOpener) adsb.ReceiverFactory {
+	return func() (adsb.Receiver, error) {
+		rcv, err := open(rtl2832u.WithBiasTee(true))
+		if err != nil {
+			return nil, fmt.Errorf("source: opening the SDR with the bias-tee on: %w", err)
+		}
+
+		return rcv, nil
 	}
 }
 

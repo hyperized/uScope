@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -11,9 +12,11 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/radar"
@@ -271,6 +274,11 @@ type optionOverrideSource struct{}
 func (optionOverrideSource) Frame() source.Frame { return source.Frame{} }
 
 func (optionOverrideSource) Close() error { return nil }
+
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (optionOverrideSource) BiasTee() (supported, enabled bool) { return false, false }
+
+func (optionOverrideSource) SetBiasTee(bool) error { return adsb.ErrBiasTeeUnsupported }
 
 // wantSceneCount is how many scenes the production set holds: the radar and
 // the pattern.
@@ -1068,4 +1076,556 @@ func isTermReader(src io.Reader) bool {
 	_, ok := src.(*term.Reader)
 
 	return ok
+}
+
+// --- the bias-tee toggle ---------------------------------------------------
+
+// biasTeeTestTimeout bounds every blocking wait in the tests below, so a
+// regression that deadlocks the guard fails the test instead of hanging the
+// job.
+const biasTeeTestTimeout = 3 * time.Second
+
+// biasStderr is a goroutine-safe io.Writer. The toggler writes its warnings
+// from the worker goroutine that runs flip, and the tests below read them
+// back from the goroutine that called wait, so a plain bytes.Buffer would be
+// a race.
+type biasStderr struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *biasStderr) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("biasStderr: %w", err)
+	}
+
+	return n, nil
+}
+
+func (b *biasStderr) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
+}
+
+// errBiasTeeSet is what fakeBiasSource's SetBiasTee reports when a test wants
+// a failing flip. It is a sentinel because err113 wants a static error, and
+// the tests only check that the message reaches stderr, never the identity.
+//
+//nolint:gochecknoglobals // error sentinel, not state.
+var errBiasTeeSet = errors.New("bias-tee: set failed")
+
+// fakeBiasSource is a biasTeeSource, and a full source.Source besides, whose
+// cached state and SetBiasTee outcome a test controls directly. The call
+// count and the last argument SetBiasTee ran with are read from a different
+// goroutine than the one that calls Toggle, so both live behind a mutex and
+// come back through accessors rather than being read off the struct.
+type fakeBiasSource struct {
+	mu sync.Mutex
+
+	supported bool
+	enabled   bool
+	err       error
+	panicWith any
+
+	calls   int
+	lastArg bool
+}
+
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (f *fakeBiasSource) BiasTee() (supported, enabled bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.supported, f.enabled
+}
+
+func (f *fakeBiasSource) SetBiasTee(enable bool) error {
+	f.mu.Lock()
+	f.calls++
+	f.lastArg = enable
+	err := f.err
+	panicWith := f.panicWith
+	f.mu.Unlock()
+
+	if panicWith != nil {
+		panic(panicWith)
+	}
+
+	return err
+}
+
+// Frame stands in for a real receiver's frame. Nothing in these tests reads
+// it; it exists so fakeBiasSource can be handed to WithSource, which wants a
+// full source.Source rather than the two bias-tee methods alone.
+func (*fakeBiasSource) Frame() source.Frame { return source.Frame{} }
+
+// Close is a no-op: nothing here holds a real device.
+func (*fakeBiasSource) Close() error { return nil }
+
+// callCount reports how many times SetBiasTee has run so far.
+func (f *fakeBiasSource) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.calls
+}
+
+// lastEnable reports the enable value SetBiasTee was last called with.
+func (f *fakeBiasSource) lastEnable() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.lastArg
+}
+
+// TestBiasTogglerToggle checks the read-modify-write at the centre of a
+// press: the target state comes from the cached read BiasTee returns, not a
+// live poll, so a source reporting itself off is asked to turn on and one
+// reporting itself on is asked to turn off.
+func TestBiasTogglerToggle(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		enabled    bool
+		wantEnable bool
+	}{
+		{name: "off asks to turn on", enabled: false, wantEnable: true},
+		{name: "on asks to turn off", enabled: true, wantEnable: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			src := &fakeBiasSource{supported: true, enabled: testCase.enabled}
+			toggler := newBiasToggler(src, io.Discard)
+
+			toggler.Toggle()
+			toggler.wait()
+
+			if got := src.callCount(); got != 1 {
+				t.Fatalf("SetBiasTee called %d times, want 1", got)
+			}
+
+			if got := src.lastEnable(); got != testCase.wantEnable {
+				t.Errorf("SetBiasTee called with %v, want %v", got, testCase.wantEnable)
+			}
+		})
+	}
+}
+
+// blockingBiasSource is a biasTeeSource, and a full source.Source besides,
+// whose SetBiasTee blocks until the test releases it. It backs two tests:
+// that a second press while one is in flight is dropped, and that Run waits
+// for an outstanding flip before it returns.
+type blockingBiasSource struct {
+	mu    sync.Mutex
+	calls int
+
+	// started closes the moment SetBiasTee begins, which is how a test
+	// knows the flip has actually reached the device call rather than
+	// merely been requested.
+	started   chan struct{}
+	startOnce sync.Once
+	release   <-chan struct{}
+}
+
+// newBlockingBiasSource returns a source whose SetBiasTee call blocks until
+// release is closed.
+func newBlockingBiasSource(release <-chan struct{}) *blockingBiasSource {
+	return &blockingBiasSource{started: make(chan struct{}), release: release}
+}
+
+//nolint:nonamedreturns // mirrors the interface it satisfies.
+func (*blockingBiasSource) BiasTee() (supported, enabled bool) { return true, false }
+
+func (b *blockingBiasSource) SetBiasTee(bool) error {
+	b.mu.Lock()
+	b.calls++
+	b.mu.Unlock()
+
+	b.startOnce.Do(func() { close(b.started) })
+
+	<-b.release
+
+	return nil
+}
+
+// Frame reports a bias-tee-capable receiver with nothing else on it, which is
+// all TestRunWaitsForAnOutstandingBiasTeeToggle needs from a frame.
+func (*blockingBiasSource) Frame() source.Frame {
+	return source.Frame{BiasTee: source.BiasTeeState{Supported: true}}
+}
+
+// Close is a no-op: nothing here holds a real device.
+func (*blockingBiasSource) Close() error { return nil }
+
+// callCount reports how many times SetBiasTee has run so far.
+func (b *blockingBiasSource) callCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.calls
+}
+
+// TestBiasTogglerDropsAPressWhileOneIsInFlight is the case the guard exists
+// for. A bias-tee flip is a GPIO line, not a queue: a press that arrives
+// while the first one is still in the air is dropped, not run once the first
+// one finishes. A third press, after the first has completed, proves the
+// guard was cleared rather than left stuck.
+func TestBiasTogglerDropsAPressWhileOneIsInFlight(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	src := newBlockingBiasSource(release)
+	toggler := newBiasToggler(src, io.Discard)
+
+	toggler.Toggle()
+
+	select {
+	case <-src.started:
+	case <-time.After(biasTeeTestTimeout):
+		t.Fatal("timed out waiting for the first flip to start")
+	}
+
+	toggler.Toggle() // dropped: the guard is still held by the first press.
+
+	close(release)
+	toggler.wait()
+
+	if got := src.callCount(); got != 1 {
+		t.Fatalf("SetBiasTee called %d times while one was in flight, want 1", got)
+	}
+
+	toggler.Toggle()
+	toggler.wait()
+
+	if got := src.callCount(); got != 2 {
+		t.Errorf("SetBiasTee called %d times after the guard cleared, want 2", got)
+	}
+}
+
+// TestBiasTogglerUnsupportedSourceWarns checks that a source with no
+// bias-tee gets a warning on stderr and is never asked to set one.
+func TestBiasTogglerUnsupportedSourceWarns(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeBiasSource{supported: false}
+
+	var stderr biasStderr
+
+	toggler := newBiasToggler(src, &stderr)
+
+	toggler.Toggle()
+	toggler.wait()
+
+	if got := src.callCount(); got != 0 {
+		t.Errorf("SetBiasTee called %d times for an unsupported source, want 0", got)
+	}
+
+	if stderr.String() == "" {
+		t.Error("stderr is empty, want a warning about the missing bias-tee")
+	}
+}
+
+// TestBiasTogglerSetFailureIsLoggedAndSwallowed checks that a failing
+// SetBiasTee does not stop the toggler: wait returns normally, the failure
+// reaches stderr, and the guard is clear so the next press still runs.
+func TestBiasTogglerSetFailureIsLoggedAndSwallowed(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeBiasSource{supported: true, err: errBiasTeeSet}
+
+	var stderr biasStderr
+
+	toggler := newBiasToggler(src, &stderr)
+
+	toggler.Toggle()
+	toggler.wait()
+
+	if got := src.callCount(); got != 1 {
+		t.Fatalf("SetBiasTee called %d times, want 1", got)
+	}
+
+	if !strings.Contains(stderr.String(), errBiasTeeSet.Error()) {
+		t.Errorf("stderr = %q, want it to mention %q", stderr.String(), errBiasTeeSet)
+	}
+
+	toggler.Toggle()
+	toggler.wait()
+
+	if got := src.callCount(); got != 2 {
+		t.Errorf("SetBiasTee called %d times after a failing press, want 2 (the guard should have cleared)", got)
+	}
+}
+
+// TestBiasTogglerRecoversAPanickingSource checks that a source whose
+// SetBiasTee panics does not take the test down with it: the panic is
+// recovered, its message reaches stderr, and the guard clears so the next
+// press runs.
+func TestBiasTogglerRecoversAPanickingSource(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeBiasSource{supported: true, panicWith: "dongle unplugged"}
+
+	var stderr biasStderr
+
+	toggler := newBiasToggler(src, &stderr)
+
+	toggler.Toggle()
+	toggler.wait()
+
+	if got := src.callCount(); got != 1 {
+		t.Fatalf("SetBiasTee called %d times, want 1", got)
+	}
+
+	if !strings.Contains(stderr.String(), "dongle unplugged") {
+		t.Errorf("stderr = %q, want it to mention the panic value", stderr.String())
+	}
+
+	toggler.Toggle()
+	toggler.wait()
+
+	if got := src.callCount(); got != 2 {
+		t.Errorf("SetBiasTee called %d times after a panicking press, want 2 (the guard should have cleared)", got)
+	}
+}
+
+// TestNewRunnerBuildsBiasTeeOverTheAppliedOptions pins that the toggler is
+// built last: it must see the source and the stderr as WithSource and
+// WithStderr left them, not the production defaults newRunner starts from.
+func TestNewRunnerBuildsBiasTeeOverTheAppliedOptions(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeBiasSource{supported: true}
+
+	var stderr biasStderr
+
+	run := newRunner(WithSource(src), WithStderr(&stderr))
+
+	if run.biasTee == nil {
+		t.Fatal("run.biasTee = nil, want a toggler built over the replaced source and stderr")
+	}
+
+	run.biasTee.Toggle()
+	run.biasTee.wait()
+
+	if got := src.callCount(); got != 1 {
+		t.Errorf("SetBiasTee called %d times, want 1 (the toggler should be wired to the replaced source)", got)
+	}
+
+	src.supported = false
+
+	run.biasTee.Toggle()
+	run.biasTee.wait()
+
+	if stderr.String() == "" {
+		t.Error("stderr is empty, want the toggler to warn through the replaced writer")
+	}
+}
+
+// signalBlitter is a Blitter that closes ready the first time it is blitted
+// to. TestRunWaitsForAnOutstandingBiasTeeToggle needs to know a frame has
+// been drawn before it presses b, because drawing is what fills in the radar
+// scene's cached bias-tee state.
+type signalBlitter struct {
+	ready         chan struct{}
+	once          sync.Once
+	width, height int
+}
+
+func newSignalBlitter(width, height int) *signalBlitter {
+	return &signalBlitter{ready: make(chan struct{}), width: width, height: height}
+}
+
+func (s *signalBlitter) Blit(*image.RGBA, rotate.Rotation) error {
+	s.once.Do(func() { close(s.ready) })
+
+	return nil
+}
+
+func (*signalBlitter) Close() error { return nil }
+
+func (s *signalBlitter) Width() int { return s.width }
+
+func (s *signalBlitter) Height() int { return s.height }
+
+func (*signalBlitter) BitsPerPixel() int { return 16 }
+
+func (*signalBlitter) Stride() int { return 0 }
+
+func (*signalBlitter) String() string { return "signal" }
+
+// manualTicker is a frame clock the test drives by hand: sending on tick
+// makes the loop draw exactly one frame, and nothing else does.
+type manualTicker struct {
+	tick chan time.Time
+}
+
+func newManualTicker() *manualTicker {
+	return &manualTicker{tick: make(chan time.Time, 1)}
+}
+
+func (m *manualTicker) new(time.Duration) (<-chan time.Time, func()) {
+	return m.tick, func() {}
+}
+
+// biasTeeLiveLoop is the fixture TestRunWaitsForAnOutstandingBiasTeeToggle
+// drives: a live loop, built with default scenes so the real radar scene and
+// its b binding are in play, whose source blocks the bias-tee flip until the
+// test releases it. Keys arrive over a pipe standing in for the keyboard.
+type biasTeeLiveLoop struct {
+	src     *blockingBiasSource
+	blitter *signalBlitter
+	ticker  *manualTicker
+	keys    *io.PipeWriter
+	release chan struct{}
+	done    <-chan error
+}
+
+// startBiasTeeLiveLoop wires the fixture above and starts Run on it.
+func startBiasTeeLiveLoop(t *testing.T) *biasTeeLiveLoop {
+	t.Helper()
+
+	release := make(chan struct{})
+	src := newBlockingBiasSource(release)
+	blitter := newSignalBlitter(64, 48)
+	ticker := newManualTicker()
+	pipeReader, pipeWriter := io.Pipe()
+	succeed := func() (func() error, error) { return func() error { return nil }, nil }
+
+	ctx, cancel := context.WithTimeout(t.Context(), biasTeeTestTimeout)
+	t.Cleanup(cancel)
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- Run(ctx, Config{Backend: backend.Framebuffer}, io.Discard,
+			WithFramebuffer(func(string) (Blitter, error) { return blitter, nil }),
+			WithSource(src),
+			WithConsoleSwitch(succeed),
+			WithRawMode(succeed),
+			WithInput(pipeReader),
+			WithTicker(ticker.new),
+		)
+	}()
+
+	return &biasTeeLiveLoop{src: src, blitter: blitter, ticker: ticker, keys: pipeWriter, release: release, done: done}
+}
+
+// pressAndWaitForFlip draws one frame, presses b, and waits for the flip to
+// reach the source's SetBiasTee, so the caller knows the guard is held.
+func (l *biasTeeLiveLoop) pressAndWaitForFlip(t *testing.T) {
+	t.Helper()
+
+	l.ticker.tick <- time.Now()
+
+	select {
+	case <-l.blitter.ready:
+	case <-time.After(biasTeeTestTimeout):
+		t.Fatal("timed out waiting for the first frame to draw")
+	}
+
+	if _, err := l.keys.Write([]byte("b")); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+
+	select {
+	case <-l.src.started:
+	case <-time.After(biasTeeTestTimeout):
+		t.Fatal("timed out waiting for the bias-tee flip to start")
+	}
+}
+
+// quit presses q and closes the key pipe. Closing it is what makes the
+// reader goroutine see EOF and return, which live's own group.Wait needs
+// before Run can reach its own deferred wait on the bias-tee toggler.
+func (l *biasTeeLiveLoop) quit(t *testing.T) {
+	t.Helper()
+
+	if _, err := l.keys.Write([]byte("q")); err != nil {
+		t.Fatalf("write q: %v", err)
+	}
+
+	if err := l.keys.Close(); err != nil {
+		t.Fatalf("close the key pipe: %v", err)
+	}
+}
+
+// TestRunWaitsForAnOutstandingBiasTeeToggle checks the promise Run's first
+// line makes: a control transfer still in the air when the loop quits must
+// finish before Run hands the source back to its caller, because main closes
+// the source the moment Run returns.
+func TestRunWaitsForAnOutstandingBiasTeeToggle(t *testing.T) {
+	t.Parallel()
+
+	loop := startBiasTeeLiveLoop(t)
+
+	loop.pressAndWaitForFlip(t)
+	loop.quit(t)
+
+	const notYetWindow = 300 * time.Millisecond
+
+	select {
+	case err := <-loop.done:
+		t.Fatalf("Run returned (%v) with the bias-tee flip still in flight, want it to wait", err)
+	case <-time.After(notYetWindow):
+	}
+
+	close(loop.release)
+
+	select {
+	case err := <-loop.done:
+		if err != nil {
+			t.Errorf("Run: %v, want nil", err)
+		}
+	case <-time.After(biasTeeTestTimeout):
+		t.Fatal("timed out waiting for Run to return once the flip had finished")
+	}
+
+	if got := loop.src.callCount(); got != 1 {
+		t.Errorf("SetBiasTee called %d times, want 1", got)
+	}
+}
+
+// noopToggler is a Toggler that does nothing, standing in for a real
+// biasToggler wherever a test only needs a distinguishable, non-nil value.
+type noopToggler struct{}
+
+func (noopToggler) Toggle() {}
+
+// TestBuildScenesWiresBiasTeeThrough checks the other half of the stand-in
+// rule TestBuildScenesFillsInWhatItWasNotGiven covers: a caller that does
+// supply a toggler gets a radar scene built with it, rather than the nil
+// biasTee that leaves the b key unbound.
+func TestBuildScenesWiresBiasTeeThrough(t *testing.T) {
+	t.Parallel()
+
+	scenes, err := buildScenes(fonts.Small, fonts.Body, fonts.BodyBold, fonts.Large,
+		sceneDeps{source: source.Empty{}, scopeRange: scope.New(), biasTee: noopToggler{}})
+	if err != nil {
+		t.Fatalf("buildScenes with a non-nil biasTee: %v", err)
+	}
+
+	if len(scenes) != wantSceneCount {
+		t.Fatalf("buildScenes returned %d scenes, want %d", len(scenes), wantSceneCount)
+	}
+
+	canv, err := canvas.New(64, 48)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	for index, scene := range scenes {
+		if scene == nil {
+			t.Fatalf("scene %d is nil", index)
+		}
+
+		scene.Draw(canv, 0)
+	}
 }

@@ -1,6 +1,7 @@
 package radar
 
 import (
+	"image/color"
 	"math"
 
 	"github.com/hyperized/uAirwaves/pkg/coverage"
@@ -46,6 +47,44 @@ const (
 	bowlMeridians = 8
 )
 
+// How far each wireframe is mixed towards the field before it is drawn.
+//
+// Both shapes used to be drawn in their palette colour at full strength, and
+// the measured mesh in particular came out brighter than the aircraft inside
+// it: the picture read as a wireframe with some dots caught in it rather than
+// as traffic inside a measured envelope. The envelope is context, and context
+// that outshines the subject is in the way.
+//
+// They are mixed into the field rather than composited per pixel, which is
+// what Scene.fade already does for trails and for the same reason: the scope
+// is a near-uniform field, so blending once and drawing the result solid gives
+// the same picture as blending every pixel and costs one operation instead of
+// thousands.
+const (
+	// measuredFade keeps the accent recognisable as the accent while dropping
+	// it below the aircraft it surrounds.
+	measuredFade = 0.35
+
+	// bowlFade is applied to the muted colour, which is already the quietest;
+	// at 0.60 the bowl still outshone the measured mesh by luminance, so both
+	// sit at the same fade and the accent hue alone separates them.
+	// thing in the palette, because the theoretical bowl is the more
+	// speculative of the two shapes: it is an approximation from a formula,
+	// where the mesh is a record of what the antenna actually heard.
+	bowlFade = 0.35
+)
+
+// measuredInk is the colour the measured wireframe is drawn in, and bowlInk
+// the theoretical bowl's.
+//
+// Both are worked out from the palette on every call rather than cached on the
+// Scene, for the reason SetPalette takes the light flag off the palette: two
+// fields can disagree about which theme is on and one cannot. The callers
+// hoist them out of their loops, so a frame does this arithmetic twice.
+func (s *Scene) measuredInk() color.RGBA { return s.fade(s.pal.Accent, measuredFade) }
+
+func (s *Scene) bowlInk() color.RGBA { return s.fade(s.pal.Muted, bowlFade) }
+
 // horizonNm is how far an aircraft at altitudeFt can be heard by an antenna
 // antennaFt above the ground, in nautical miles. See horizonFactor.
 func horizonNm(altitudeFt float64) float64 {
@@ -67,21 +106,23 @@ func bowlRadiusNm(altitudeFt, scopeNm float64) float64 {
 // drawBowl3 draws the theoretical envelope: one dashed ring per altitude band,
 // and the meridians up the outside of them.
 func (s *Scene) drawBowl3(dst *canvas.Canvas, view scene3) {
+	ink := s.bowlInk()
+
 	for band := 1; band <= bowlBands; band++ {
 		altitudeFt := float64(band) * bowlStepFt
 
 		s.drawCircle3(dst, view,
-			bowlRadiusNm(altitudeFt, view.scopeNm), view.height(altitudeFt), s.pal.Muted, bowlDash)
+			bowlRadiusNm(altitudeFt, view.scopeNm), view.height(altitudeFt), ink, bowlDash)
 	}
 
-	s.drawMeridians3(dst, view)
+	s.drawMeridians3(dst, view, ink)
 }
 
 // drawMeridians3 draws the lines that run from the receiver up the outside of
 // the bowl, one every forty-five degrees.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawMeridians3(dst *canvas.Canvas, view scene3) {
+func (*Scene) drawMeridians3(dst *canvas.Canvas, view scene3, ink color.RGBA) {
 	for spoke := range bowlMeridians {
 		sin, cos := math.Sincos(2 * math.Pi * float64(spoke) / bowlMeridians)
 		prevX, prevY, prevOK := view.cam.at(point3{})
@@ -95,7 +136,7 @@ func (s *Scene) drawMeridians3(dst *canvas.Canvas, view scene3) {
 			})
 
 			if ok && prevOK {
-				dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), s.pal.Muted)
+				dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), ink)
 			}
 
 			prevX, prevY, prevOK = x, y, ok
@@ -197,6 +238,7 @@ func (v scene3) sectorPoint(sector, band int, radiusNm float64) point3 {
 func (s *Scene) drawMeasured3(dst *canvas.Canvas, view scene3, snapshot coverage.Snapshot) {
 	var below reachBySector
 
+	ink := s.measuredInk()
 	haveBelow := false
 
 	for band := range coverage.AltitudeBandCount {
@@ -207,10 +249,10 @@ func (s *Scene) drawMeasured3(dst *canvas.Canvas, view scene3, snapshot coverage
 			continue
 		}
 
-		s.drawMeasuredRing3(dst, view, band, reach)
+		s.drawMeasuredRing3(dst, view, band, reach, ink)
 
 		if haveBelow {
-			s.drawMeasuredEdges3(dst, view, band, reach, below)
+			s.drawMeasuredEdges3(dst, view, band, reach, below, ink)
 		}
 
 		below, haveBelow = reach, true
@@ -219,14 +261,16 @@ func (s *Scene) drawMeasured3(dst *canvas.Canvas, view scene3, snapshot coverage
 
 // drawMeasuredRing3 joins one band's vertices into a closed ring, skipping an
 // edge wherever either end of it has never been heard.
-func (s *Scene) drawMeasuredRing3(dst *canvas.Canvas, view scene3, band int, reach reachBySector) {
+func (s *Scene) drawMeasuredRing3(
+	dst *canvas.Canvas, view scene3, band int, reach reachBySector, ink color.RGBA,
+) {
 	for sector := range coverage.BearingSectorCount {
 		next := (sector + 1) % coverage.BearingSectorCount
 		if reach[sector] <= 0 || reach[next] <= 0 {
 			continue
 		}
 
-		s.drawEdge3(dst, view,
+		s.drawEdge3(dst, view, ink,
 			view.sectorPoint(sector, band, reach[sector]),
 			view.sectorPoint(next, band, reach[next]))
 	}
@@ -235,22 +279,26 @@ func (s *Scene) drawMeasuredRing3(dst *canvas.Canvas, view scene3, band int, rea
 // drawMeasuredEdges3 joins one band's vertices to the band below it, which is
 // what turns a stack of rings into a surface.
 func (s *Scene) drawMeasuredEdges3(
-	dst *canvas.Canvas, view scene3, band int, upper, lower reachBySector,
+	dst *canvas.Canvas, view scene3, band int, upper, lower reachBySector, ink color.RGBA,
 ) {
 	for sector := range coverage.BearingSectorCount {
 		if upper[sector] <= 0 || lower[sector] <= 0 {
 			continue
 		}
 
-		s.drawEdge3(dst, view,
+		s.drawEdge3(dst, view, ink,
 			view.sectorPoint(sector, band, upper[sector]),
 			view.sectorPoint(sector, band-1, lower[sector]))
 	}
 }
 
-// drawEdge3 draws one wireframe edge in the accent colour, dropping it when
-// either end is off the picture.
-func (s *Scene) drawEdge3(dst *canvas.Canvas, view scene3, from, to point3) {
+// drawEdge3 draws one wireframe edge, dropping it when either end is off the
+// picture.
+//
+// The colour is handed in rather than worked out here, so the mix happens once
+// a frame instead of once an edge. A busy snapshot draws a couple of hundred
+// of these.
+func (*Scene) drawEdge3(dst *canvas.Canvas, view scene3, ink color.RGBA, from, to point3) {
 	fromX, fromY, fromOK := view.cam.at(from)
 	toX, toY, toOK := view.cam.at(to)
 
@@ -258,5 +306,5 @@ func (s *Scene) drawEdge3(dst *canvas.Canvas, view scene3, from, to point3) {
 		return
 	}
 
-	dst.LineAA(float64(fromX), float64(fromY), float64(toX), float64(toY), s.pal.Accent)
+	dst.LineAA(float64(fromX), float64(fromY), float64(toX), float64(toY), ink)
 }

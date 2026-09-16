@@ -152,6 +152,15 @@ type config struct {
 	// same way --beast alongside --demo is not an error: the operator asked
 	// for something that only matters if a later choice makes it apply.
 	demoSector bool
+
+	// biasTee powers an LNA over the coax and autoSweep walks the gain grid
+	// once before the first frame. Both only apply when uScope is driving the
+	// radio itself, and both are inert rather than an error anywhere else,
+	// for the reason demoSector is: the operator asked for something a later
+	// choice made irrelevant. sourceFor says so once on stderr, because a
+	// silently ignored --bias-t is an LNA the operator believes is powered.
+	biasTee   bool
+	autoSweep bool
 }
 
 // rawFlags is the command line before validation: whatever the flag package
@@ -182,6 +191,8 @@ type rawFlags struct {
 	noDecay     bool
 	demo        bool
 	demoSector  bool
+	biasTee     bool
+	autoSweep   bool
 }
 
 // parseFlags turns an argument list into a validated config.
@@ -251,6 +262,10 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"fly an invented fleet instead of decoding one, for a machine with no receiver")
 	set.BoolVar(&raw.demoSector, "demo-sector", false,
 		"place the whole demo fleet in the north-west quadrant, as a directional antenna would")
+	set.BoolVar(&raw.biasTee, "bias-t", false,
+		"power an external LNA over the coax from the dongle's bias-tee; local SDR only")
+	set.BoolVar(&raw.autoSweep, "auto-sweep", false,
+		"walk the gain grid once before the first frame and keep the best cell; local SDR only")
 	set.StringVar(&raw.beast, "beast", "",
 		"consume Mode S frames from a remote demodulator at HOST:PORT")
 	set.StringVar(&raw.replay, "replay-iq", "",
@@ -432,6 +447,8 @@ func (raw rawFlags) validated() (config, error) {
 		longitude:   place.longitude,
 		hasLocation: place.given,
 		demoSector:  raw.demoSector,
+		biasTee:     raw.biasTee,
+		autoSweep:   raw.autoSweep,
 	}, nil
 }
 

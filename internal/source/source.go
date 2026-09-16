@@ -18,6 +18,12 @@
 // same Source: Live builds a fresh list every time, but Demo hands back its
 // own buffers, which is how it stays free of per-frame allocations.
 //
+// A Source also answers for the dongle's bias-tee, which is the 5 V an
+// external LNA takes up the coax. Only Live has one to answer for; Demo and
+// Empty report it unsupported and refuse to set it. The state travels on the
+// Frame like everything else, so the scene reads a cached bit and no USB
+// transfer ever happens on the goroutine that draws.
+//
 // Both implementations can also keep the trail of an aircraft that stops
 // transmitting, which is what --no-decay asks for and what ghosts.go holds.
 // It is off unless the source is built with it on, and off it costs nothing.
@@ -102,6 +108,20 @@ type Receiver struct {
 	Mode FixMode
 }
 
+// BiasTeeState is the dongle's bias-tee as the ingest last saw it.
+//
+// Supported is false for every source with no radio behind it: the demo
+// fleet, a BEAST feed and a replayed capture all have somebody else's gain
+// stage, or none at all. Enabled is only meaningful when Supported is true.
+//
+// It is a named type rather than an anonymous struct on Frame so a test can
+// write one as a literal, and so the pair travels as one value instead of two
+// fields that can drift apart.
+type BiasTeeState struct {
+	Supported bool
+	Enabled   bool
+}
+
 // Frame is everything the radar needs to draw one frame.
 //
 // Now is carried in the frame rather than read from time.Now inside the scene
@@ -119,6 +139,21 @@ type Frame struct {
 	Source   adsb.SourceInfo
 	Stats    adsb.Stats
 	Now      time.Time
+
+	// BiasTee is the dongle's LNA power as the ingest last saw it, and
+	// Sweeping whether the gain auto-sweep is walking the gain grid right now.
+	//
+	// Both ride on the frame rather than being read off the source by the
+	// scene, for the reason everything else here does: the scene draws one
+	// value copy and never reaches back through the seam mid-frame. That is
+	// what keeps a USB control transfer off the draw path, which is the rule
+	// uAirwaves settled on after a wedged dongle froze its event loop.
+	BiasTee BiasTeeState
+
+	// Sweeping is true only while the gain sweep is running. The header says
+	// so, because a sweeping receiver decodes nothing and an empty scope with
+	// no explanation reads as a broken one.
+	Sweeping bool
 
 	// Coverage is where the antenna has actually heard an aircraft, binned by
 	// distance, altitude and bearing over the whole run. It is what the 3D
@@ -141,6 +176,16 @@ type Frame struct {
 type Source interface {
 	Frame() Frame
 	Close() error
+
+	// BiasTee reports whether this source can power an LNA over the coax and
+	// whether it is doing so. It is the cached answer, never a device read:
+	// the key handler calls it between frames and must not block on USB.
+	BiasTee() (supported, enabled bool)
+
+	// SetBiasTee flips the LNA power. It talks to the device, so it is called
+	// from a worker goroutine and never from the loop that draws. A source
+	// with no radio behind it returns adsb.ErrBiasTeeUnsupported.
+	SetBiasTee(enable bool) error
 }
 
 // Empty is a Source with nothing in it. It is the default wherever a source
@@ -158,3 +203,11 @@ func (Empty) Frame() Frame { return Frame{Receiver: Receiver{Label: LabelNone}} 
 
 // Close has nothing to release.
 func (Empty) Close() error { return nil }
+
+// BiasTee reports no dongle, because there is no source at all.
+//
+//nolint:nonamedreturns // (supported, enabled) reads clearer named at this signature.
+func (Empty) BiasTee() (supported, enabled bool) { return false, false }
+
+// SetBiasTee refuses. Nothing here has a gain stage to power.
+func (Empty) SetBiasTee(bool) error { return adsb.ErrBiasTeeUnsupported }

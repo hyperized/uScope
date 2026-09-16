@@ -295,10 +295,16 @@ func start(ctx context.Context, src source.Source) {
 func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error) {
 	switch cfg.source {
 	case sourceReplay:
+		warnNoDongle(cfg, stderr, "--replay-iq")
+
 		return live(cfg, source.WithReplay(cfg.replay))
 	case sourceBeast:
+		warnNoDongle(cfg, stderr, "--beast")
+
 		return live(cfg, source.WithBeast(cfg.beast))
 	case sourceDemo:
+		warnNoDongle(cfg, stderr, "--demo")
+
 		return demo(cfg)
 	case sourceAuto:
 		fallthrough
@@ -310,8 +316,49 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 		_, _ = fmt.Fprintf(stderr,
 			"%s: no receiver on %s and no --beast or --replay-iq given; flying the demo fleet\n",
 			appName, goos)
+		warnNoDongle(cfg, stderr, "the demo fleet")
 
 		return demo(cfg)
+	}
+}
+
+// warnNoDongle says once that the radio-only flags are not going to do
+// anything on the source that was actually chosen.
+//
+// Both settings are inert rather than an error, which is what uAirwaves does
+// with the same pair: refusing to start because --bias-t was left in a shell
+// history would get in the way of a scripted run. Silence would be worse
+// though. --bias-t is the flag that powers somebody's LNA, and an operator
+// who believes it is powered when it is not spends the next hour wondering
+// why the scope is so quiet.
+//
+// One line covers both flags rather than one line each, because they are
+// ignored for the same reason and two warnings about one mistake read as two
+// mistakes.
+func warnNoDongle(cfg config, stderr io.Writer, chosen string) {
+	flags := dongleOnlyFlags(cfg)
+	if flags == "" {
+		return
+	}
+
+	// The wording carries no verb on purpose: one flag and two flags go
+	// through the same format string, and "needs"/"need" would mean either a
+	// second format or a sentence that is wrong half the time.
+	_, _ = fmt.Fprintf(stderr, "%s: %s: local SDR only, ignored under %s\n", appName, flags, chosen)
+}
+
+// dongleOnlyFlags names whichever of the two radio-only flags were given, or
+// the empty string when neither was.
+func dongleOnlyFlags(cfg config) string {
+	switch {
+	case cfg.biasTee && cfg.autoSweep:
+		return "--bias-t and --auto-sweep"
+	case cfg.biasTee:
+		return "--bias-t"
+	case cfg.autoSweep:
+		return "--auto-sweep"
+	default:
+		return ""
 	}
 }
 
@@ -326,7 +373,14 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 //
 //nolint:ireturn // every branch of sourceFor returns the interface.
 func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
-	opts = append(opts, source.WithGhosts(cfg.noDecay))
+	// Both are handed over whichever source this is. internal/source applies
+	// them on the local-SDR path only, so a --beast run carries them as far
+	// as the constructor and no further; warnNoDongle has already told the
+	// operator that is what will happen.
+	opts = append(opts,
+		source.WithGhosts(cfg.noDecay),
+		source.WithBiasTee(cfg.biasTee),
+		source.WithAutoSweep(cfg.autoSweep))
 
 	if cfg.hasLocation {
 		opts = append(opts, source.WithManualLocation(cfg.latitude, cfg.longitude))

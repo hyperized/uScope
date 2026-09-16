@@ -191,6 +191,11 @@ type session struct {
 func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) error {
 	run := newRunner(opts...)
 
+	// The b key's bias-tee flip runs on a worker, and the source it talks to
+	// is closed by main the moment Run returns. Waiting here is what stops a
+	// control transfer still being in the air when the dongle is let go.
+	defer run.biasTee.wait()
+
 	scenes, err := run.loadScenes()
 	if err != nil {
 		return err
