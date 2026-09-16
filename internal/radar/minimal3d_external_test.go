@@ -251,3 +251,34 @@ func TestMinimal3DRenderPNG(t *testing.T) {
 		View: radar.ViewMinimal3D, Recentre: radar.DefaultRecentre,
 	})
 }
+
+// TestMinimal3DDrawsNoStalks pins the user's call that the bare 3D view
+// carries no vertical under each aircraft: the trails say where it has been.
+// Stalks are Muted, and so is the receiver marker, so the check compares the
+// bare view against the 3D view of the same frame rather than demanding zero:
+// two aircraft high above the ground put hundreds of Muted pixels into the
+// full view, and the bare view must keep only the marker's few dozen.
+func TestMinimal3DDrawsNoStalks(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(
+		scenePlane("484AC1", "KLM123", 45, 12, 2400, 41),
+		scenePlane("3C6745", "DLH4EA", 200, 38, 36000, 268),
+	)
+
+	_, fullCanvas := minimal3DScene(t, frame, view3DSettings())
+	withStalks := countColour(fullCanvas, fullCanvas.Bounds(), theme.Night.Muted)
+
+	_, canv := minimal3DScene(t, frame, minimal3DSettings())
+	bare := countColour(canv, canv.Bounds(), theme.Night.Muted)
+
+	const markerBudget = 64
+
+	if withStalks <= markerBudget {
+		t.Fatalf("the 3D view drew only %d muted pixels, so it has no stalks to compare against", withStalks)
+	}
+
+	if bare > markerBudget {
+		t.Errorf("the bare 3D view drew %d muted pixels, want at most %d: only the receiver marker", bare, markerBudget)
+	}
+}

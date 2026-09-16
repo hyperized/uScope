@@ -602,9 +602,9 @@ func (s *Scene) drawPath3(
 	}
 }
 
-// drawContact3 draws one aircraft: the stalk from its shadow on the ground up
-// to where it is flying, the shape on the end of it, and the selection marker
-// when it is the one the panel is about.
+// drawContact3 draws one aircraft: in the 3D view the stalk from its shadow
+// on the ground up to where it is flying, then the shape on the end of it, and
+// the selection marker when it is the one the panel is about.
 //
 // The shape is a model rather than the flat scope's rotated bitmap. A sprite
 // is a picture of an aeroplane seen from directly above, and this camera is
@@ -621,7 +621,12 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) 
 		return
 	}
 
-	s.drawStalk3(lay.dst, view, plane, x, y)
+	// The bare 3D view draws no stalks: with nothing else on screen the trails
+	// already say where each aircraft has been, and a forest of verticals under
+	// them was the one thing the user asked to have taken away.
+	if !s.bare() {
+		s.drawStalk3(lay.dst, view, plane, x, y)
+	}
 
 	col := s.aircraftColour(plane)
 
