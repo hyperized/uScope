@@ -194,9 +194,9 @@ packed format and how to rebuild it; `make shore-data` is the one command.
 
 `v` while the radar is running strips the scene back to the aircraft sprites
 and their trails on the bare field, edge to edge. No header, no key bar, no
-right column, no rings, cardinals, range labels or home marker. A run always
-starts on the full scope; `v` is what gets you to minimal and what gets you
-back.
+right column, no rings, cardinals, range labels or home marker. A run starts on
+the full scope and `v` cycles from there: scope, minimal, 3D, scope. `--view`
+picks which one it starts on instead.
 
 The picture fills the canvas with the range mapped to half the short edge, and
 nothing is clipped to a ring, so the corners show traffic that a ring would
@@ -250,6 +250,81 @@ Turned on, the coastline and the airfield markers are drawn the way the full
 scope draws them, around minimal's own centre and range, ICAO codes included.
 There are no range labels in minimal mode for a code to collide with, so
 nothing is dropped for want of room beside one.
+
+### The 3D view
+
+Press `v` twice and the scope box becomes a perspective picture: the same
+traffic seen from a camera orbiting the receiver, with altitude drawn as height
+instead of as colour. Only that square changes. The header, the right column
+and the key bar are the same furniture they were.
+
+The ground is the range rings projected as polylines, the cardinal letters out
+at the outer ring, the coastline when `m` is on and the airfields when `a` is
+on. `+`, `-` and `r` still move the range, and everything on the ground moves
+with it. There are no range numbers on the rings: in perspective a ring is an
+ellipse, and a number pinned to one point of it would only be true from one
+side of the orbit.
+
+Every aircraft gets a thin stalk from its shadow on the ground up to where it
+is flying. The stalk is the only thing in the picture that says how high an
+aeroplane is: a sprite on its own floats at a height the eye cannot measure,
+and two aircraft on the same bearing at different levels draw at nearly the
+same place. Trails are drawn in the air at the altitude each fix was reported
+at, so a descent reads as a descent. The silhouette is turned by its heading
+less the camera's azimuth, which is an approximation rather than a projection
+of the aircraft's own axis, and at fifteen pixels a side there is nothing to
+foreshorten anyway.
+
+Altitude is stretched by `--exaggerate`, 1 to 20, and 8 unless you say. At life
+size the whole fleet lies in a film on the floor: forty thousand feet is six
+and a half nautical miles against a scope tens of miles across. At 8 an
+airliner sits about as far above the ground as the outer ring is wide, which is
+where two aircraft a flight level apart are visibly a flight level apart.
+
+The camera turns on its own, one revolution every two minutes. Left and Right
+nudge it fifteen degrees and stop it turning; `o` sets it going again from
+wherever the nudges left it. `[` and `]` tilt it between ten and eighty degrees
+of elevation, starting at thirty-five. The key cap `O ORBIT` is filled while it
+is turning.
+
+#### The envelope
+
+`e` toggles the receiving envelope, which is on when the view opens. It is two
+shapes drawn together, from two different sources.
+
+The first is the theoretical one: the radio horizon. A ring at every five
+thousand feet up to forty-five thousand, at the distance an aircraft at that
+height would come over the horizon for an antenna thirty feet up, drawn dashed
+in the quietest ink the palette has, with eight meridians running up the
+outside of it. The distance is `1.23 * (sqrt(h_antenna) + sqrt(h_aircraft))`
+nautical miles, the standard VHF and radar line-of-sight approximation, which
+folds atmospheric refraction in by pretending the earth is a third larger than
+it is.
+It is why an antenna in an attic hears an airliner two hundred and fifty miles
+away when the geometric horizon is under seven. Every ring is clamped to the
+current range, so at forty miles the bowl reads as a cylinder, which is honest:
+at that range every altitude above five thousand feet is over the horizon and
+the bowl has nothing left to say. Open the range past a hundred and the curve
+appears on its own.
+
+The second is the measured one, in the accent colour: where the antenna has
+actually heard something. uScope runs uAirwaves' coverage tracker behind every
+source, binning each decoded fix by distance, altitude band and bearing sector,
+and the wireframe is a ring through the sixteen sectors at each altitude band
+with vertical edges joining the bands. A sector nothing has ever
+been heard in is skipped, so a directional antenna, or one with a chimney on
+one side of it, comes out lopsided rather than round. `--demo-sector` shows what
+that looks like without a receiver: the invented fleet sits in one quadrant and
+so does its envelope.
+
+Two bands with an empty one between them are not bridged. An edge drawn through
+a band nothing was heard in would be claiming reception the tracker never saw.
+
+The 3D view keeps no background layer. The camera moves on every frame the
+orbit is running, so a cached picture would be rebuilt each time and cost the
+same drawing plus a copy of the canvas on top. It draws straight into the frame
+instead, clipped to the scope box so nothing lands on the flight list, and it
+still allocates nothing.
 
 ### Colour modes
 
@@ -525,7 +600,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | Key | Does |
 |---|---|
 | `q`, `Q` | quit |
-| `v`, `V` | view: flip between the scope and the minimal view |
+| `v`, `V` | view: cycle scope, minimal, 3D |
 | `n`, `N`, Down | select the next aircraft |
 | `p`, `P`, Up | select the previous one |
 | `+`, `=` | widen the range by one step, and turn auto off |
@@ -536,8 +611,18 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `m`, `M` | coastline on or off; minimal keeps its own |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `l`, `L` | cycle the colour theme |
+| `e`, `E` | 3D view only: the receiving envelope on or off |
+| `o`, `O` | 3D view only: set the camera orbiting again |
+| Left, Right | 3D view only: nudge the camera 15 degrees and stop the orbit |
+| `[`, `]` | 3D view only: tilt the camera, 10 to 80 degrees |
 | `Esc` | in the radar, hand the selection back to the nearest aircraft |
 | `Ctrl-C` | quit |
+
+The four camera keys are claimed by the 3D view and by nothing else. In the
+scope and minimal views there is no camera to move and no envelope to toggle,
+so they fall through to the run loop rather than quietly changing state nothing
+on screen could show. The key bar says the same thing from its side: `O ORBIT`
+and `E ENVELOPE` only appear while the 3D view is up.
 
 Both cases are bound because caps lock is easy to hit by accident on the
 uConsole's keyboard, and the unshifted twins of `+` and `-` are bound for the
@@ -550,7 +635,7 @@ The letters name what they do rather than where the thing lives: `r` for range,
 The radar scene gets first refusal on every key and passes on the ones it does
 not want, which is what keeps `q` working while it is on screen. `v` is one of
 the ones it takes: pressing it never reaches the run loop, because it is the
-radar's own toggle between the scope and minimal. The pattern scene binds
+radar's own cycle through its three views. The pattern scene binds
 nothing, so Esc still quits from it.
 
 Until you choose an aircraft, the selection is the nearest contact and the rows
@@ -571,6 +656,8 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
 | `--scene` | `radar` | `radar` or `pattern`; `pattern` is a flags-only diagnostic with no key back to it |
 | `--theme` | `night` | `night` or `paper` colour theme |
+| `--view` | `scope` | which view the radar starts on: `scope`, `minimal` or `3d`; `v` cycles them while it runs |
+| `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
 | `--airports` | `on` | draw the airfield markers: `on` or `off` |
 | `--shore` | `on` | draw the coastline: `on` or `off` |
@@ -717,6 +804,11 @@ Two more went with it. The paper theme is built (`--theme paper`, `l` at run
 time) and airline colouring is built (`--colour airline`, `c` at run time), and
 neither has been judged against its alternative by anyone who was holding the
 device at the time.
+
+The 3D view has been looked at on a monitor and on a live feed, and not on the
+panel. Its two open questions are whether an exaggeration of 8 still reads at a
+third the size, and whether the theoretical bowl is worth drawing at a range
+where every altitude it covers is over the horizon anyway.
 
 Nobody has looked at the radar on the panel yet. That is `make radar`. The
 battery indicator has been checked two ways, neither of them on the device: on

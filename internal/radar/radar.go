@@ -172,9 +172,10 @@ type Scene struct {
 	shoreOn  bool
 	shoreSet *shore.Set
 
-	// minimal strips the scene back to the aircraft and their trails on the
-	// whole canvas, which the v key flips.
-	minimal bool
+	// shown is which of the three views is on screen, which the v key cycles
+	// and --view picks the start of. The minimal and perspective helpers in
+	// view.go are how everything else asks.
+	shown View
 
 	// minimalShore and minimalAirports are minimal mode's own copies of the
 	// two overlay toggles, and they are what m and a flip while it is on.
@@ -218,11 +219,43 @@ type Scene struct {
 	layerKey  layerKey
 	layerRuns int
 
+	// clip is the 3D view's own window onto the frame: a canvas sharing the
+	// frame's pixels but bounded by the scope box, so a bowl taller than the
+	// box or an envelope wider than the range is cut at the edge instead of
+	// being drawn across the column beside it. clipOf and clipBox are what it
+	// was built for, so it is rebuilt when the canvas or the box moves and not
+	// once per frame.
+	clip    *canvas.Canvas
+	clipOf  *canvas.Canvas
+	clipBox image.Rectangle
+
 	// light is whether the palette draws on a light field. It is kept beside
 	// the palette rather than worked out per aircraft because an airline's
 	// colour is adapted once per draw call and the answer cannot change
 	// between two of them.
 	light bool
+
+	// The 3D view's camera. azimuth and elevation are in degrees, and
+	// azimuth is where the last keypress left it rather than where the camera
+	// is pointing now: orbiting winds it forward from azimuthAt, which is the
+	// render clock the current revolution started on. elapsed is the reading
+	// the last drawn frame was given, and it is here because a key press
+	// arrives between two frames and has to freeze the orbit where the picture
+	// actually is.
+	azimuth   float64
+	elevation float64
+	azimuthAt time.Duration
+	elapsed   time.Duration
+	orbiting  bool
+
+	// envelope is whether the receiving envelope is drawn, which the e key
+	// toggles. It starts on: the envelope is most of the reason the view
+	// exists, and a 3D scope without it is a tilted scope.
+	envelope bool
+
+	// exaggerate is how far altitude is stretched into height, which
+	// --exaggerate sets. See DefaultExaggerate for why it is not 1.
+	exaggerate float64
 
 	// counts is the legend's per-frame operator tally in airline mode. It is a
 	// field rather than a local so the table it holds outlives the frame that
@@ -346,8 +379,10 @@ func WithSprite(icon *sprite.Bitmap) Option {
 // has nothing to draw; the options are the things that have a useful default.
 // Trails, auto range, the airfield markers and the shore all start on and the
 // colour mode starts on altitude, which is the state the scope is most useful
-// in when nobody has touched a key yet. Minimal starts off: it is the view to
-// switch to, not the one to explain on first sight.
+// in when nobody has touched a key yet. The view starts on the scope: the
+// other two are views to switch to, not ones to explain on first sight. The
+// camera starts orbiting with its envelope drawn, because a 3D view arrived at
+// by pressing v twice should be doing the thing it was added for.
 func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option) *Scene {
 	scene := &Scene{
 		faces:      faces,
@@ -363,6 +398,11 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		shoreOn:    true,
 		colour:     ColourAltitude,
 		selIndex:   -1,
+		shown:      ViewScope,
+		elevation:  defaultElevation,
+		orbiting:   true,
+		envelope:   true,
+		exaggerate: DefaultExaggerate,
 	}
 
 	for _, opt := range opts {
@@ -402,6 +442,10 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 		frame.Now = s.now()
 	}
 
+	// Kept for the camera keys, which arrive between two frames and have to
+	// know where the orbit had got to when the last one was drawn.
+	s.elapsed = elapsed
+
 	s.syncSelection(frame)
 
 	// Minimal mode following the traffic fits its own range, around the
@@ -427,7 +471,7 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// Minimal is the aircraft and nothing else, edge to edge. It skips the
 	// three blocks that would take room off the canvas, so the traffic gets
 	// the whole frame rather than the square the column left behind.
-	if s.minimal {
+	if s.minimal() {
 		s.drawTraffic(&lay, frame)
 
 		return
@@ -436,8 +480,24 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	s.drawKeyBar(&lay)
 	s.drawHeader(&lay, frame)
 	lay.split()
-	s.drawTraffic(&lay, frame)
+	s.drawScope(&lay, frame, elapsed)
 	s.drawColumn(&lay, frame)
+}
+
+// drawScope paints whatever the box beside the column holds in the view on
+// screen: the flat scope, or the perspective one.
+//
+// The header, the column and the key bar are the same furniture either way,
+// which is the whole reason the 3D view slots in here rather than taking the
+// canvas the way minimal does. Only the picture changes.
+func (s *Scene) drawScope(lay *layout, frame source.Frame, elapsed time.Duration) {
+	if s.perspective() {
+		s.draw3D(lay, frame, elapsed)
+
+		return
+	}
+
+	s.drawTraffic(lay, frame)
 }
 
 // newLayout measures the frame and takes the margin out of it.

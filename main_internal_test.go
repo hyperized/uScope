@@ -47,6 +47,14 @@ const (
 	// way midDimension does for --size.
 	midFrames = (minFrames + maxFrames) / 2
 
+	// midExaggerate sits inside --exaggerate's accepted range, the same way
+	// midFrames does for --frames.
+	midExaggerate = (radar.MinExaggerate + radar.MaxExaggerate) / 2
+
+	// aboveMaxExaggerate is one step past what --exaggerate accepts, the same
+	// way aboveMaxDimension is for --size.
+	aboveMaxExaggerate = radar.MaxExaggerate + 1
+
 	// Repeated literals, named once so goconst has nothing to complain
 	// about and a typo in one table cannot silently diverge from another.
 	altFB          = "/dev/fb1"
@@ -73,6 +81,8 @@ const (
 	flagNoDecay    = "--no-decay"
 	flagRecenter   = "--recenter"
 	flagDemoSector = "--demo-sector"
+	flagView       = "--view"
+	flagExaggerate = "--exaggerate"
 
 	// patternValue is the one non-default --scene spelling, named because it
 	// turns up in several tables. specimenValue is the spelling --scene no
@@ -98,6 +108,16 @@ const (
 	caseWrongCase = "wrong case"
 	caseEmpty     = "empty"
 	caseAutoGiven = "auto explicit"
+
+	// viewMinimalValue and view3DValue are --view's other two spellings; its
+	// default, "scope", is already named as defaultView.
+	viewMinimalValue = "minimal"
+	view3DValue      = "3d"
+
+	// nanText is the flag spelling of not-a-number. strconv.ParseFloat
+	// accepts it, so every float64 flag parses it fine; each one's own range
+	// check is what turns it away.
+	nanText = "NaN"
 
 	// batteryPathWithSpace is a --battery value that is not whitespace-only
 	// despite containing some: only an all-whitespace value is refused, so a
@@ -133,6 +153,8 @@ func defaultConfig() config {
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
 		recentre:   radar.DefaultRecentre,
+		view:       radar.ViewScope,
+		exaggerate: radar.DefaultExaggerate,
 	}
 }
 
@@ -1382,7 +1404,7 @@ func TestParseFlagsLocation(t *testing.T) {
 		{name: "longitude too low", args: []string{flagLat, "0", flagLon, "-181"}, sentinel: errLongitude},
 		{name: "latitude is not a number", args: []string{flagLat, "north", flagLon, "0"}, sentinel: errLatitude},
 		{name: "longitude is not a number", args: []string{flagLat, "0", flagLon, "east"}, sentinel: errLongitude},
-		{name: "latitude is NaN", args: []string{flagLat, "NaN", flagLon, "0"}, sentinel: errLatitude},
+		{name: "latitude is NaN", args: []string{flagLat, nanText, flagLon, "0"}, sentinel: errLatitude},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -2016,7 +2038,7 @@ func TestParseFlagsRangeRejections(t *testing.T) {
 		{
 			// ParseFloat is happy to read "NaN", so the guard that refuses it
 			// is the range check rather than the parse.
-			name: "not a number the scope could show", args: []string{flagRange, "NaN"},
+			name: "not a number the scope could show", args: []string{flagRange, nanText},
 		},
 		{name: "below the closest the scope can show", args: []string{flagRange, rangeText(limits.GetMin() - 1)}},
 		{name: "past the furthest the scope can show", args: []string{flagRange, rangeText(limits.GetMax() + 1)}},
@@ -2092,6 +2114,151 @@ func TestParseFlagsRecenterRejections(t *testing.T) {
 			_, err := parseFlags(testCase.args)
 			if !errors.Is(err, errRecentre) {
 				t.Errorf("parseFlags(%v) error = %v, want errors.Is(errRecentre)", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestParseFlagsView covers --view's three accepted spellings, plus the
+// default it falls back to when nobody sets it.
+func TestParseFlagsView(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want radar.View
+	}{
+		{name: caseDefault, args: nil, want: radar.ViewScope},
+		{name: "scope explicit", args: []string{flagView, defaultView}, want: radar.ViewScope},
+		{name: "minimal", args: []string{flagView, viewMinimalValue}, want: radar.ViewMinimal},
+		{name: "3d", args: []string{flagView, view3DValue}, want: radar.View3D},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.view = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsViewRejections covers every way --view can be turned away: an
+// empty value, either of the two wrong-case near-misses, and an unknown word.
+func TestParseFlagsViewRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: caseEmpty, args: []string{flagView, ""}},
+		{
+			// --view is an allow list, not free text: the exact spelling is
+			// what is accepted, not a case-insensitive match of it.
+			name: caseWrongCase, args: []string{flagView, "Scope"},
+		},
+		{name: "wrong case for 3d", args: []string{flagView, "3D"}},
+		{name: "unknown view", args: []string{flagView, "birdseye"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errView) {
+				t.Fatalf("parseFlags(%v) error = %v, want errView", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, radar.ErrView) {
+				t.Errorf("parseFlags(%v) error = %v, want radar.ErrView wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// exaggerateText spells an --exaggerate value the way an operator would type
+// it, mirroring rangeText for the same reason: no trailing zeros.
+func exaggerateText(factor float64) string {
+	return strconv.FormatFloat(factor, 'f', -1, 64)
+}
+
+// TestParseFlagsExaggerate covers --exaggerate's default, both edges of its
+// range, and a value in between.
+func TestParseFlagsExaggerate(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want float64
+	}{
+		{name: caseDefault, args: nil, want: radar.DefaultExaggerate},
+		{
+			name: "lower edge",
+			args: []string{flagExaggerate, exaggerateText(radar.MinExaggerate)},
+			want: radar.MinExaggerate,
+		},
+		{
+			name: "a value in between",
+			args: []string{flagExaggerate, exaggerateText(midExaggerate)},
+			want: midExaggerate,
+		},
+		{
+			name: caseMaxEdge,
+			args: []string{flagExaggerate, exaggerateText(radar.MaxExaggerate)},
+			want: radar.MaxExaggerate,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.exaggerate = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsExaggerateRejections covers every way --exaggerate can be
+// turned away: below the floor, above the ceiling, and NaN.
+func TestParseFlagsExaggerateRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "zero", args: []string{flagExaggerate, "0"}},
+		{name: "a negative value", args: []string{flagExaggerate, "-1"}},
+		{name: "just above the maximum", args: []string{flagExaggerate, exaggerateText(aboveMaxExaggerate)}},
+		{
+			// strconv.ParseFloat, and therefore the flag package behind
+			// --exaggerate, accepts "NaN" outright; checkExaggerate is the
+			// check that turns it away.
+			name: "NaN", args: []string{flagExaggerate, nanText},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errExaggerate) {
+				t.Errorf("parseFlags(%v) error = %v, want errors.Is(errExaggerate)", testCase.args, err)
 			}
 		})
 	}

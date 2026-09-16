@@ -35,6 +35,7 @@ const (
 	defaultOn       = "on"
 	defaultRange    = "auto"
 	defaultRecentre = "3m"
+	defaultView     = "scope"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -106,6 +107,8 @@ var (
 	errPNGBoth    = errors.New(appName + ": --png and --backend disagree")
 	errPNGPath    = errors.New(appName + ": --backend png needs --png PATH to write to")
 	errRecentre   = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
+	errView       = errors.New(appName + ": --view must be scope, minimal or 3d")
+	errExaggerate = errors.New(appName + ": --exaggerate out of range")
 )
 
 // config is the validated command line. Everything in it has already been
@@ -128,6 +131,8 @@ type config struct {
 	rangeNm     float64
 	noDecay     bool
 	recentre    time.Duration
+	view        radar.View
+	exaggerate  float64
 
 	// battery is the power-supply file to read instead of looking one up. It
 	// is empty for the normal case, which is autodiscovery.
@@ -169,6 +174,8 @@ type rawFlags struct {
 	latitude    string
 	longitude   string
 	recentre    string
+	view        string
+	exaggerate  float64
 	fps         int
 	frames      int
 	testPattern bool
@@ -232,6 +239,10 @@ func bind(set *flag.FlagSet) *rawFlags {
 	// does. Do not "fix" either half into the other.
 	set.StringVar(&raw.recentre, "recenter", defaultRecentre,
 		"how often minimal mode recentres on the traffic, 10s to 1h, or 0 to stay on the receiver")
+	set.StringVar(&raw.view, "view", defaultView,
+		"which view the radar starts on: scope, minimal or 3d. v cycles them while it runs")
+	set.Float64Var(&raw.exaggerate, "exaggerate", radar.DefaultExaggerate,
+		"how far the 3d view stretches altitude into height, 1 to 20")
 	set.BoolVar(&raw.noDecay, "no-decay", false,
 		"draw every trail segment at full strength instead of fading the tail out")
 	set.StringVar(&raw.battery, "battery", "",
@@ -324,6 +335,15 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
+	view, err := parseView(raw.view)
+	if err != nil {
+		return display{}, err
+	}
+
+	if err := checkExaggerate(raw.exaggerate); err != nil {
+		return display{}, err
+	}
+
 	return display{
 		rotation:   rotation,
 		autoRotate: auto,
@@ -338,6 +358,9 @@ func (raw rawFlags) display() (display, error) {
 			RangeNm:  rangeNm,
 			NoDecay:  raw.noDecay,
 			Recentre: recentre,
+
+			View:       view,
+			Exaggerate: raw.exaggerate,
 		},
 	}, nil
 }
@@ -399,6 +422,8 @@ func (raw rawFlags) validated() (config, error) {
 		rangeNm:     show.radar.RangeNm,
 		noDecay:     show.radar.NoDecay,
 		recentre:    show.radar.Recentre,
+		view:        show.radar.View,
+		exaggerate:  show.radar.Exaggerate,
 		battery:     raw.battery,
 		source:      chosen,
 		beast:       raw.beast,
@@ -588,6 +613,31 @@ func parseRecentre(text string) (time.Duration, error) {
 	}
 
 	return every, nil
+}
+
+// parseView reads --view against internal/radar's allow list.
+func parseView(text string) (radar.View, error) {
+	view, err := radar.ParseView(text)
+	if err != nil {
+		return radar.ViewScope, fmt.Errorf("%w: %w", errView, err)
+	}
+
+	return view, nil
+}
+
+// checkExaggerate range-checks --exaggerate.
+//
+// It is a float64 flag rather than a string, unlike --lat and --range, because
+// there is no value it could be handed that means "nobody said": one is life
+// size and zero is a flat world, so both ends are real settings and the flag
+// simply has a default like --fps does.
+func checkExaggerate(factor float64) error {
+	if math.IsNaN(factor) || factor < radar.MinExaggerate || factor > radar.MaxExaggerate {
+		return fmt.Errorf("%w: got %g, want %g to %g",
+			errExaggerate, factor, radar.MinExaggerate, radar.MaxExaggerate)
+	}
+
+	return nil
 }
 
 // checkBattery rejects an override that was given as an empty string.

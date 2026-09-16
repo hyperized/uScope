@@ -82,6 +82,8 @@ const (
 	capShore
 	capColour
 	capTheme
+	capOrbit
+	capEnvelope
 )
 
 // The two cycling keys are labelled with the value they are on rather than
@@ -128,6 +130,20 @@ var keyCaps = [...]keyCap{
 	{key: "V", label: "VIEW"},
 }
 
+// view3DCaps are the two caps the 3D view adds to the end of the bar.
+//
+// They are appended rather than living in keyCaps because neither key does
+// anything in the other two views, and a cap for a key with no effect is
+// furniture pretending to be a control. In the 3D view the bar comes to about
+// 900 pixels of the 1248 the panel leaves between its margins, so the pair
+// fits without anything above having to give way.
+//
+//nolint:gochecknoglobals // scene content, read-only after init.
+var view3DCaps = [...]keyCap{
+	{key: "O", label: "ORBIT", state: capOrbit},
+	{key: "E", label: "ENVELOPE", state: capEnvelope},
+}
+
 // drawKeyBar puts the key legend on the bottom edge and takes the room it
 // used out of the layout, so everything above flows into what is left.
 //
@@ -135,17 +151,31 @@ var keyCaps = [...]keyCap{
 // whatever else is on it, and a bar pushed down by a block above would end up
 // somewhere in the middle.
 func (s *Scene) drawKeyBar(lay *layout) {
-	face := s.faces.Small
-
 	reserved := s.keyBarHeight(lay)
 	if reserved == 0 {
 		return
 	}
 
 	top := lay.bottom - (reserved - blockGap)
-	pen := lay.left
 
-	for _, entry := range keyCaps {
+	pen := s.drawCaps(lay, lay.left, top, keyCaps[:])
+	if s.perspective() && pen < lay.right {
+		s.drawCaps(lay, pen, top, view3DCaps[:])
+	}
+
+	lay.bottom -= reserved
+}
+
+// drawCaps draws a run of caps from pen and returns the x just past the last
+// one it drew.
+//
+// It stops after the cap that reaches the right margin rather than before it,
+// which is what the bar has always done: one cap running into the margin says
+// there was more, where stopping short of it just looks like the bar ended.
+func (s *Scene) drawCaps(lay *layout, pen, top int, caps []keyCap) int {
+	face := s.faces.Small
+
+	for _, entry := range caps {
 		pen = s.drawCap(lay.dst, pen, top, entry.key, s.capOn(entry.state))
 		pen += capGap
 		pen = text.Draw(lay.dst, face, pen, top+capPadY, s.capLabel(entry), s.pal.Muted)
@@ -156,7 +186,7 @@ func (s *Scene) drawKeyBar(lay *layout) {
 		}
 	}
 
-	lay.bottom -= reserved
+	return pen
 }
 
 // keyBarHeight is the room the key bar takes off the bottom, blockGap
@@ -218,6 +248,10 @@ func (s *Scene) capOn(which capToggle) bool {
 		return s.airports
 	case capShore:
 		return s.shoreOn
+	case capOrbit:
+		return s.orbiting
+	case capEnvelope:
+		return s.envelope
 	case capAlways, capColour, capTheme:
 		fallthrough
 	default:
@@ -244,7 +278,7 @@ func (s *Scene) capLabel(entry keyCap) string {
 		}
 
 		return labelNight
-	case capAlways, capAuto, capTrails, capAirports, capShore:
+	case capAlways, capAuto, capTrails, capAirports, capShore, capOrbit, capEnvelope:
 		fallthrough
 	default:
 		return entry.label

@@ -34,9 +34,13 @@ func (s *Scene) Handle(key input.Key) bool {
 		s.unpin()
 
 		return true
+	case input.Left:
+		return s.nudgeOrbit(-azimuthStep)
+	case input.Right:
+		return s.nudgeOrbit(azimuthStep)
 	case input.Rune:
 		return s.handleRune(key.Rune)
-	case input.Left, input.Right, input.Enter, input.CtrlC:
+	case input.Enter, input.CtrlC:
 		fallthrough
 	default:
 		return false
@@ -49,7 +53,9 @@ func (s *Scene) Handle(key input.Key) bool {
 // shift to change the range on a thumb keyboard is a nuisance.
 //
 // m and a work in minimal mode and draw there, on minimal's own pair of
-// toggles rather than on the scope's. v is how you get back out.
+// toggles rather than on the scope's. v is what cycles between the three
+// views, and anything not bound here falls through to the camera keys, which
+// only the 3D view takes.
 func (s *Scene) handleRune(value rune) bool {
 	switch value {
 	case 'n', 'N':
@@ -69,14 +75,80 @@ func (s *Scene) handleRune(value rune) bool {
 	case 'm', 'M':
 		s.toggleShore()
 	case 'v', 'V':
-		s.minimal = !s.minimal
+		s.shown = s.shown.Next()
 	case 'c', 'C':
 		s.colour = s.colour.Next()
+	default:
+		return s.handle3DRune(value)
+	}
+
+	return true
+}
+
+// handle3DRune maps the camera keys, which only the 3D view binds.
+//
+// They belong to the view rather than to the scene, so e, o and the brackets
+// fall through to the run loop in the other two, where there is no camera to
+// move and no envelope to toggle. A key that quietly changed state nothing on
+// screen could show would be a key whose effect turned up as a surprise three
+// presses later.
+func (s *Scene) handle3DRune(value rune) bool {
+	if !s.perspective() {
+		return false
+	}
+
+	switch value {
+	case 'e', 'E':
+		s.envelope = !s.envelope
+	case 'o', 'O':
+		s.startOrbit()
+	case '[':
+		s.tilt(-tiltStep)
+	case ']':
+		s.tilt(tiltStep)
 	default:
 		return false
 	}
 
 	return true
+}
+
+// nudgeOrbit turns the camera by one step and stops it turning on its own,
+// which is what Left and Right do in the 3D view.
+//
+// It reports false in the other two so the key falls through to the run loop
+// exactly as it did before the view existed. Stopping the orbit is the point
+// rather than a side effect: nudging a camera that then walks away from where
+// it was put is not what pressing an arrow meant.
+func (s *Scene) nudgeOrbit(degrees float64) bool {
+	if !s.perspective() {
+		return false
+	}
+
+	s.azimuth = wrapDegrees(s.cameraAzimuth(s.elapsed) + degrees)
+	s.orbiting = false
+
+	return true
+}
+
+// startOrbit sets the camera turning again from wherever it is now, which is
+// what o does.
+//
+// It rebases rather than resuming, so pressing it while the orbit is already
+// running changes nothing: the azimuth it starts from is the one on screen.
+func (s *Scene) startOrbit() {
+	s.azimuth = s.cameraAzimuth(s.elapsed)
+	s.azimuthAt = s.elapsed
+	s.orbiting = true
+}
+
+// tilt moves the camera's elevation by one step, clamped rather than refused.
+//
+// Clamping is right here where ParseRecentre refuses: this is a key held down
+// against the end of its travel, not a value somebody typed, and there is
+// nobody to tell.
+func (s *Scene) tilt(degrees float64) {
+	s.elevation = min(max(s.elevation+degrees, minElevation), maxElevation)
 }
 
 // toggleShore flips whichever coastline switch the view on screen reads.
@@ -85,7 +157,7 @@ func (s *Scene) handleRune(value rune) bool {
 // scope's. Pressing m in minimal is a choice about minimal, not a change to
 // the view you get back when you press v, and the same the other way round.
 func (s *Scene) toggleShore() {
-	if s.minimal {
+	if s.minimal() {
 		s.minimalShore = !s.minimalShore
 
 		return
@@ -97,7 +169,7 @@ func (s *Scene) toggleShore() {
 // toggleAirports is toggleShore for the airfield markers, on the same rule
 // and for the same reason.
 func (s *Scene) toggleAirports() {
-	if s.minimal {
+	if s.minimal() {
 		s.minimalAirports = !s.minimalAirports
 
 		return
@@ -111,7 +183,7 @@ func (s *Scene) toggleAirports() {
 // asks these rather than reading a field, so the minimal pair and the scope
 // pair cannot be mixed up between the drawing and the cache.
 func (s *Scene) shoreDrawn() bool {
-	if s.minimal {
+	if s.minimal() {
 		return s.minimalShore
 	}
 
@@ -119,7 +191,7 @@ func (s *Scene) shoreDrawn() bool {
 }
 
 func (s *Scene) airportsDrawn() bool {
-	if s.minimal {
+	if s.minimal() {
 		return s.minimalAirports
 	}
 

@@ -1022,3 +1022,133 @@ func TestCanvasRect(t *testing.T) {
 		assertPixel(t, canv, side-2, side-2, canvas.Yellow)
 	})
 }
+
+// TestSubSharesThePixels checks the point of a sub-canvas: it is a window onto
+// the parent in the parent's own coordinates, not a copy and not a translation.
+func TestSubSharesThePixels(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side    = 20
+		boxLeft = 5
+		boxTop  = 6
+		boxSide = 8
+	)
+
+	parent, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	parent.Clear(canvas.Black)
+
+	box := image.Rect(boxLeft, boxTop, boxLeft+boxSide, boxTop+boxSide)
+
+	window, ok := parent.Sub(box)
+	if !ok {
+		t.Fatalf("Sub(%v) reported no room, want a window", box)
+	}
+
+	if window.Bounds() != box {
+		t.Errorf("Sub(%v).Bounds() = %v, want the box itself", box, window.Bounds())
+	}
+
+	window.Set(boxLeft, boxTop, canvas.White)
+	assertPixel(t, parent, boxLeft, boxTop, canvas.White)
+
+	// A pixel outside the window is dropped rather than wrapped into it, which
+	// is what stops a scene drawing over the block beside its own.
+	window.Set(boxLeft-1, boxTop, canvas.Red)
+	assertPixel(t, parent, boxLeft-1, boxTop, canvas.Black)
+
+	window.Set(box.Max.X, boxTop, canvas.Red)
+	assertPixel(t, parent, box.Max.X, boxTop, canvas.Black)
+}
+
+// TestSubClearsOnlyItsOwnBox checks the trap a sub-canvas sets for Clear: the
+// stride belongs to the parent, so filling by stride would paint across whole
+// parent rows instead of the window.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestSubClearsOnlyItsOwnBox(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side    = 16
+		boxLeft = 4
+		boxTop  = 4
+		boxSide = 6
+	)
+
+	parent, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	parent.Clear(canvas.Black)
+
+	box := image.Rect(boxLeft, boxTop, boxLeft+boxSide, boxTop+boxSide)
+
+	window, ok := parent.Sub(box)
+	if !ok {
+		t.Fatalf("Sub(%v) reported no room, want a window", box)
+	}
+
+	window.Clear(canvas.White)
+
+	for y := range side {
+		for x := range side {
+			want := canvas.Black
+			if image.Pt(x, y).In(box) {
+				want = canvas.White
+			}
+
+			assertPixel(t, parent, x, y, want)
+		}
+	}
+}
+
+// TestSubTrimsAndRefuses checks the two edges of Sub's contract: a box hanging
+// off the canvas is trimmed to what overlaps, and one that overlaps nothing is
+// refused rather than handed back empty.
+func TestSubTrimsAndRefuses(t *testing.T) {
+	t.Parallel()
+
+	const side = 10
+
+	parent, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		box    image.Rectangle
+		want   image.Rectangle
+		wantOK bool
+	}{
+		{
+			name: "a box hanging off two edges is trimmed",
+			box:  image.Rect(-4, -4, 4, 4), want: image.Rect(0, 0, 4, 4), wantOK: true,
+		},
+		{name: "a box entirely outside is refused", box: image.Rect(side*2, side*2, side*3, side*3)},
+		{name: "an empty box is refused", box: image.Rectangle{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			window, ok := parent.Sub(testCase.box)
+			if ok != testCase.wantOK {
+				t.Fatalf("Sub(%v) ok = %v, want %v", testCase.box, ok, testCase.wantOK)
+			}
+
+			if !ok {
+				return
+			}
+
+			if window.Bounds() != testCase.want {
+				t.Errorf("Sub(%v).Bounds() = %v, want %v", testCase.box, window.Bounds(), testCase.want)
+			}
+		})
+	}
+}

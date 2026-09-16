@@ -8,6 +8,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
+	"github.com/hyperized/uAirwaves/pkg/coverage"
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
@@ -152,10 +153,29 @@ func ghostFleet(count, history int) []source.Trail {
 	return list
 }
 
+// benchCoverage is the coverage snapshot the 3D cases draw their measured
+// envelope from: every altitude band heard out to a different distance in
+// every bearing sector, which is the busiest wireframe the tracker can
+// produce and so the most expensive one to draw.
+func benchCoverage() coverage.Snapshot {
+	var snapshot coverage.Snapshot
+
+	for band := range coverage.AltitudeBandCount {
+		snapshot.Cells[band][band%coverage.DistanceBinCount] = 1
+	}
+
+	for sector := range coverage.BearingSectorCount {
+		snapshot.Sectors[sector] = float64(sector%6+1) * coverage.DistanceBinNm
+	}
+
+	return snapshot
+}
+
 // benchFrame is the frame the benchmark and the allocation test draw.
 func benchFrame() source.Frame {
 	return source.Frame{
-		Planes: fleet(benchPlanes, benchHistory),
+		Planes:   fleet(benchPlanes, benchHistory),
+		Coverage: benchCoverage(),
 		Receiver: source.Receiver{
 			Latitude:  receiverLat,
 			Longitude: receiverLon,
@@ -230,6 +250,11 @@ func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
 // frame in three minutes of them; internal/radar's TestFollowAllocations is
 // what prices the other one.
 //
+// The fifth case is the 3D view, which is the one that draws its furniture
+// straight into the frame rather than copying a cached layer under it: the
+// rings, the coastline, the bowl and the measured envelope are all projected
+// again on every frame, and none of that may reach the heap.
+//
 // The fourth case is a --no-decay run carrying five hundred ghosts. A ghost
 // is never freed once its aircraft goes quiet, so it is the one thing on the
 // scope that grows without bound over a long session; this is the case that
@@ -247,12 +272,18 @@ func TestDrawAllocations(t *testing.T) {
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
 		{
 			name: "minimal mode following the traffic",
-			set:  radar.Settings{Colour: radar.ColourAltitude, Minimal: true, Recentre: radar.DefaultRecentre},
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal, Recentre: radar.DefaultRecentre,
+			},
 		},
 		{
 			name:   "no-decay run with ghosts",
 			set:    radar.Settings{Colour: radar.ColourAltitude, NoDecay: true},
 			ghosts: true,
+		},
+		{
+			name: "the 3D view",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -296,8 +327,10 @@ func BenchmarkDraw(b *testing.B) {
 		{name: "airline/paper", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Paper},
 		{
 			name: "minimal-following/night",
-			set:  radar.Settings{Colour: radar.ColourAltitude, Minimal: true, Recentre: radar.DefaultRecentre},
-			pal:  theme.Night,
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal, Recentre: radar.DefaultRecentre,
+			},
+			pal: theme.Night,
 		},
 		{
 			name:   "ghosts",
@@ -305,6 +338,7 @@ func BenchmarkDraw(b *testing.B) {
 			pal:    theme.Night,
 			ghosts: true,
 		},
+		{name: "3d", set: radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D}, pal: theme.Night},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
 			scene, canv := sceneFor(b, testCase.ghosts)

@@ -16,8 +16,8 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
+	"github.com/hyperized/uAirwaves/pkg/coverage"
 	"github.com/hyperized/uAirwaves/pkg/location"
-	"github.com/hyperized/uAirwaves/pkg/selflocate"
 )
 
 // errStreamFailure stands in for whatever an ingest might fail with. Static
@@ -134,8 +134,9 @@ func TestLiveAdsbOptions(t *testing.T) {
 		beastAddress = "127.0.0.1:30005"
 		replayName   = "capture.iq"
 
-		// location + position observer, common to every branch since none of
-		// these Live instances set a manual location.
+		// location + position observer, on every branch: the observer feeds the
+		// coverage tracker as well as the self-locator, so it goes on whether
+		// or not a manual location made the locator unnecessary.
 		baseOptionCount = 2
 	)
 
@@ -230,19 +231,21 @@ func TestReplayFactory(t *testing.T) {
 	})
 }
 
-// TestObserverFeedsLocator checks that the closure observer returns forwards
-// straight into the locator's own Observe.
+// TestObserverFeedsLocator checks that the closure positionObserver returns
+// forwards straight into the locator's own Observe.
 func TestObserverFeedsLocator(t *testing.T) {
 	t.Parallel()
 
 	const observationAltitudeFt = 5000.0
 
-	locator := selflocate.New()
-	observe := observer(locator)
+	live, err := NewLive()
+	if err != nil {
+		t.Fatalf("NewLive: %v", err)
+	}
 
-	observe(52.3, 4.9, observationAltitudeFt)
+	live.positionObserver()(52.3, 4.9, observationAltitudeFt)
 
-	if got := locator.ObservationCount(); got != 1 {
+	if got := live.locator.ObservationCount(); got != 1 {
 		t.Errorf("ObservationCount() = %d, want 1", got)
 	}
 }
@@ -384,7 +387,7 @@ func TestLiveSelfLocateEstimate(t *testing.T) {
 		t.Fatal("NewLive() without a manual location built no self-locator")
 	}
 
-	observe := observer(live.locator)
+	observe := live.positionObserver()
 
 	for i := range observations {
 		altitudeFt := altitudesFt[i%len(altitudesFt)]
@@ -968,5 +971,266 @@ func TestGhostsReviveLeavesHoleWithoutShifting(t *testing.T) {
 	wantAfter := []string{"D00001", "D00003"}
 	if got := ghostICAOs(afterRevive); !slices.Equal(got, wantAfter) {
 		t.Errorf("Ghosts after D00002 revived = %v, want %v", got, wantAfter)
+	}
+}
+
+// TestBearingOf checks bearingOf against the four cardinal directions and the
+// one case that forces its negative-atan2 branch: an aircraft to the
+// north-west, which must come out between 270 and 360 degrees rather than as
+// a negative number.
+func TestBearingOf(t *testing.T) {
+	t.Parallel()
+
+	const (
+		receiverLat = 52.0
+		receiverLon = 4.0
+		offset      = 1.0
+		tolerance   = 0.5
+
+		north = 0.0
+		east  = 90.0
+		south = 180.0
+		west  = 270.0
+	)
+
+	for _, testCase := range []struct {
+		name             string
+		lat, lon         float64
+		wantMin, wantMax float64
+	}{
+		{
+			name: "due north", lat: receiverLat + offset, lon: receiverLon,
+			wantMin: north - tolerance, wantMax: north + tolerance,
+		},
+		{
+			name: "due east", lat: receiverLat, lon: receiverLon + offset,
+			wantMin: east - tolerance, wantMax: east + tolerance,
+		},
+		{
+			name: "due south", lat: receiverLat - offset, lon: receiverLon,
+			wantMin: south - tolerance, wantMax: south + tolerance,
+		},
+		{
+			name: "due west", lat: receiverLat, lon: receiverLon - offset,
+			wantMin: west - tolerance, wantMax: west + tolerance,
+		},
+		{
+			name: "north-west lands in the negative-atan2 branch",
+			lat:  receiverLat + offset, lon: receiverLon - offset,
+			wantMin: west, wantMax: degreesPerCircle,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := bearingOf(receiverLat, receiverLon, testCase.lat, testCase.lon)
+
+			if got < testCase.wantMin || got > testCase.wantMax {
+				t.Errorf("bearingOf(%v, %v, %v, %v) = %v, want between %v and %v",
+					receiverLat, receiverLon, testCase.lat, testCase.lon, got, testCase.wantMin, testCase.wantMax)
+			}
+		})
+	}
+}
+
+// TestCoverageCacheObserve checks observe's success path and its three drop
+// guards. A dropped fix must leave the tracker's Snapshot entirely at its
+// zero value, since nothing was ever folded into it.
+func TestCoverageCacheObserve(t *testing.T) {
+	t.Parallel()
+
+	const (
+		receiverLat = 52.0
+		receiverLon = 4.0
+		aircraftLat = 52.5
+		aircraftLon = 4.5
+		altitudeFt  = 10000.0
+	)
+
+	t.Run("an ordinary fix lands in the tracker", func(t *testing.T) {
+		t.Parallel()
+
+		cache := newCoverage()
+		cache.observe(receiverLat, receiverLon, aircraftLat, aircraftLon, altitudeFt)
+
+		wantDistance := airplanes.HaversineDistance(receiverLat, receiverLon, aircraftLat, aircraftLon)
+		snapshot := cache.tracker.Snapshot()
+
+		if snapshot.MaxRangeNm <= 0 {
+			t.Fatalf("MaxRangeNm = %v, want > 0", snapshot.MaxRangeNm)
+		}
+
+		matched := false
+
+		for _, sector := range snapshot.Sectors {
+			if sector == wantDistance {
+				matched = true
+
+				break
+			}
+		}
+
+		if !matched {
+			t.Errorf("Sectors = %v, want one entry at %v", snapshot.Sectors, wantDistance)
+		}
+	})
+
+	for _, testCase := range []struct {
+		name                     string
+		receiverLat, receiverLon float64
+		lat, lon                 float64
+	}{
+		{name: "receiver at (0, 0) is dropped", receiverLat: 0, receiverLon: 0, lat: aircraftLat, lon: aircraftLon},
+		{name: "aircraft at (0, 0) is dropped", receiverLat: receiverLat, receiverLon: receiverLon, lat: 0, lon: 0},
+		{
+			name:        "a NaN coordinate is dropped",
+			receiverLat: receiverLat, receiverLon: receiverLon,
+			lat: math.NaN(), lon: aircraftLon,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cache := newCoverage()
+			cache.observe(testCase.receiverLat, testCase.receiverLon, testCase.lat, testCase.lon, altitudeFt)
+
+			if snapshot := cache.tracker.Snapshot(); snapshot != (coverage.Snapshot{}) {
+				t.Errorf("Snapshot() = %+v, want the zero value (fix dropped)", snapshot)
+			}
+		})
+	}
+}
+
+// TestCoverageCacheSnapshot drives the cache's one-second throttle by hand:
+// the first call takes a copy even at the zero time, a call inside
+// coverageInterval reuses it, and a call at or past coverageInterval picks up
+// whatever has been observed since.
+func TestCoverageCacheSnapshot(t *testing.T) {
+	t.Parallel()
+
+	const (
+		receiverLat = 52.0
+		receiverLon = 4.0
+		firstLat    = 52.5
+		firstLon    = 4.5
+		secondLat   = 53.5
+		secondLon   = 5.5
+		altitudeFt  = 10000.0
+	)
+
+	var zero time.Time
+
+	cache := newCoverage()
+	cache.observe(receiverLat, receiverLon, firstLat, firstLon, altitudeFt)
+
+	first := cache.snapshot(zero)
+	if first.MaxRangeNm <= 0 {
+		t.Fatalf("first snapshot() at the zero time returned MaxRangeNm = %v, want > 0", first.MaxRangeNm)
+	}
+
+	cache.observe(receiverLat, receiverLon, secondLat, secondLon, altitudeFt)
+
+	stillWithin := cache.snapshot(zero.Add(coverageInterval - time.Nanosecond))
+	if stillWithin != first {
+		t.Errorf("snapshot() inside coverageInterval = %+v, want the cached %+v", stillWithin, first)
+	}
+
+	pastInterval := cache.snapshot(zero.Add(coverageInterval))
+	if pastInterval == first {
+		t.Error("snapshot() at coverageInterval returned the stale copy, want the refreshed one")
+	}
+}
+
+// TestLivePositionObserver checks positionObserver's two halves. With no
+// manual position the receiver is still unknown when the fix arrives, so the
+// locator is the half that is provably fed; with a manual position the
+// receiver is known up front, so coverage is the half that is provably fed
+// and the locator is nil.
+func TestLivePositionObserver(t *testing.T) {
+	t.Parallel()
+
+	const (
+		manualLat   = 52.3
+		manualLon   = 4.77
+		observedLat = 52.9
+		observedLon = 5.1
+		altitudeFt  = 15000.0
+	)
+
+	t.Run("with a locator present, the locator is fed", func(t *testing.T) {
+		t.Parallel()
+
+		live, err := NewLive()
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		if live.locator == nil {
+			t.Fatal("NewLive() without a manual location built no self-locator")
+		}
+
+		live.positionObserver()(observedLat, observedLon, altitudeFt)
+
+		if got := live.locator.ObservationCount(); got != 1 {
+			t.Errorf("ObservationCount() = %d, want 1", got)
+		}
+	})
+
+	t.Run("with a manual location, the locator is nil and coverage still runs", func(t *testing.T) {
+		t.Parallel()
+
+		live, err := NewLive(WithManualLocation(manualLat, manualLon))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		if live.locator != nil {
+			t.Fatal("NewLive() with a manual location built a self-locator, want nil")
+		}
+
+		live.positionObserver()(observedLat, observedLon, altitudeFt)
+
+		if got := live.Frame().Coverage.MaxRangeNm; got <= 0 {
+			t.Errorf("Frame().Coverage.MaxRangeNm = %v, want > 0", got)
+		}
+	})
+}
+
+// TestDemoObserveFleetSkipsQuiet checks the guard that keeps observeFleet
+// from binning a quiet aircraft. Skipping it is what stops a quiet aircraft
+// being folded into coverage for ever: once it stops transmitting its last
+// position should freeze rather than keep refreshing whichever sector it
+// happened to sit in. The quiet aircraft here sits much farther out than the
+// flying one, so if the guard were missing it would dominate MaxRangeNm
+// instead.
+func TestDemoObserveFleetSkipsQuiet(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nearOffset = 1.0
+		farOffset  = 5.0
+		altitudeFt = 10000.0
+	)
+
+	flyingLat, flyingLon := demoLatitude+nearOffset, demoLongitude+nearOffset
+	quietLat, quietLon := demoLatitude-farOffset, demoLongitude-farOffset
+
+	demo := &Demo{
+		lat:      demoLatitude,
+		lon:      demoLongitude,
+		coverage: newCoverage(),
+		fleet: []craft{
+			{spec: craftSpec{altitude: altitudeFt}, latitude: flyingLat, longitude: flyingLon},
+			{spec: craftSpec{altitude: altitudeFt}, latitude: quietLat, longitude: quietLon, quiet: true},
+		},
+	}
+
+	demo.observeFleet()
+
+	wantDistance := airplanes.HaversineDistance(demoLatitude, demoLongitude, flyingLat, flyingLon)
+
+	if got := demo.coverage.tracker.Snapshot().MaxRangeNm; got != wantDistance {
+		t.Errorf("MaxRangeNm = %v, want %v (the farther, quiet aircraft must not have been observed)",
+			got, wantDistance)
 	}
 }

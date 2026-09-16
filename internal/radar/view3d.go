@@ -1,0 +1,521 @@
+package radar
+
+import (
+	"image"
+	"image/color"
+	"math"
+	"time"
+
+	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uAirwaves/pkg/airports"
+	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/shore"
+	"github.com/hyperized/uScope/pkg/text"
+)
+
+// The 3D view's furniture.
+const (
+	// ringSegments is how many straight pieces a projected circle is drawn as.
+	// Sixty-four is smooth at the panel's resolution, and it divides by the
+	// dash period so a ring's pattern comes out even all the way round.
+	ringSegments = 64
+
+	// sectorCentre places a point in the middle of a bin rather than on its
+	// edge, for both the bearing sectors and the altitude bands of the
+	// measured envelope.
+	sectorCentre = 0.5
+
+	// bowlDashOn and bowlDashPeriod are the theoretical bowl's dash: two
+	// segments drawn out of every four, so a ring is half line and half air.
+	bowlDashOn     = 2
+	bowlDashPeriod = 4
+)
+
+// dashPattern breaks a projected circle up: on segments drawn out of every
+// period. A solid ring is one on out of every one.
+type dashPattern struct {
+	on     int
+	period int
+}
+
+// The two patterns the view draws circles with. The range rings are solid
+// because they are the floor the whole picture is measured against; the bowl
+// is dashed so a theoretical surface cannot be mistaken for a measured one.
+//
+//nolint:gochecknoglobals // scene content, read-only after init.
+var (
+	solidDash = dashPattern{on: 1, period: 1}
+	bowlDash  = dashPattern{on: bowlDashOn, period: bowlDashPeriod}
+)
+
+// cardinals3 is where the four letters go on the ground, as multiples of the
+// range along each axis.
+//
+//nolint:gochecknoglobals // scene content, read-only after init.
+var cardinals3 = [...]struct {
+	letter string
+	east   float64
+	north  float64
+}{
+	{letter: "N", north: 1},
+	{letter: "E", east: 1},
+	{letter: "S", north: -1},
+	{letter: "W", east: -1},
+}
+
+// scene3 is the 3D view measured for one frame: the camera, how a position
+// becomes a point in the world, and how far the ground furniture reaches.
+//
+// plottable is false when nothing can be plotted against the receiver, which
+// is the state before any position is known. The rings, the cardinals and the
+// envelope are still drawn then, because all four are measured from the
+// receiver rather than from a coordinate; the shore, the airfields and the
+// aircraft are not, because there is nowhere to put them.
+type scene3 struct {
+	cam     camera3
+	origin  geo
+	cosLat0 float64
+	scopeNm float64
+	azimuth float64
+
+	// upScale is how many nautical miles of world one foot of altitude is
+	// worth, which is the exaggeration divided by the feet in a mile.
+	upScale float64
+
+	// minSegNm is how far a coastline has to run on the ground, in nautical
+	// miles, before it is worth a segment. It is the scope view's pixel
+	// threshold converted at the ground's average scale: perspective makes the
+	// near ground coarser and the far ground finer than that, which for
+	// deciding whether a piece of coast is worth drawing is close enough.
+	minSegNm float64
+
+	plottable bool
+}
+
+// ground is where a position falls on the floor of the world.
+//
+// The projection is the same local equirectangular one the scope view uses,
+// for the same reason: over the tens of nautical miles a scope covers the
+// error is smaller than a pixel, and the two views have to agree about where
+// an aeroplane is or switching between them would move it.
+func (v scene3) ground(latitude, longitude float64) point3 {
+	return point3{
+		east:  (longitude - v.origin.lon) * nmPerDegree * v.cosLat0,
+		north: (latitude - v.origin.lat) * nmPerDegree,
+	}
+}
+
+// height is an altitude in feet as a height in the world, stretched by
+// whatever --exaggerate asked for.
+//
+// A zero altitude is one nobody has decoded rather than sea level, the same
+// reading bandColour gives it, so it sits on the ground and has no stalk to
+// speak of.
+func (v scene3) height(altitudeFt float64) float64 {
+	if altitudeFt <= 0 {
+		return 0
+	}
+
+	return altitudeFt * v.upScale
+}
+
+// inRange reports whether a point is inside the range the ground furniture is
+// drawn to, measured on the floor so an aircraft is judged by where it is
+// rather than by how high it is.
+func (v scene3) inRange(point point3) bool {
+	return math.Hypot(point.east, point.north) <= v.scopeNm
+}
+
+// project is where one aircraft fix lands on the canvas: refused when it has
+// no position, when it is outside the range, or when the camera cannot see it.
+func (v scene3) project(latitude, longitude, altitudeFt float64) (int, int, bool) {
+	if !positioned(latitude, longitude) {
+		return 0, 0, false
+	}
+
+	point := v.ground(latitude, longitude)
+	point.up = v.height(altitudeFt)
+
+	if !v.inRange(point) {
+		return 0, 0, false
+	}
+
+	return v.cam.at(point)
+}
+
+// measure3D works out the camera and the projection for one frame, reporting
+// false when there is no room for the view at all.
+func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration) (scene3, bool) {
+	scopeNm := s.scopeRange.GetCurrent()
+	azimuth := s.cameraAzimuth(elapsed)
+	upScale := s.exaggerate / ftPerNm
+
+	cam, drawable := newCamera3(lay.scope, scopeNm, azimuth, s.elevation, bowlTopFt*upScale)
+	if !drawable {
+		return scene3{}, false
+	}
+
+	origin := geo{lat: frame.Receiver.Latitude, lon: frame.Receiver.Longitude}
+
+	return scene3{
+		cam:       cam,
+		origin:    origin,
+		cosLat0:   math.Cos(origin.lat * math.Pi / halfCircle),
+		scopeNm:   scopeNm,
+		azimuth:   azimuth,
+		upScale:   upScale,
+		minSegNm:  2 * scopeNm * shoreMinSegment / (ringSpan * float64(lay.scope.Dx())),
+		plottable: positioned(origin.lat, origin.lon),
+	}, true
+}
+
+// draw3D paints the perspective view: the ground, the envelope around it, and
+// the traffic inside it.
+//
+// The order is back to front by a cheap rule rather than by a depth sort. The
+// ground is under everything, the envelope is a wireframe around the outside
+// of it, the trails sit behind the aircraft that made them, and the aircraft
+// are what the eye is meant to land on. A wireframe has almost nothing to hide
+// behind it, so sorting several thousand segments per frame would buy a
+// picture nobody could tell from this one.
+func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
+	view, drawable := s.measure3D(lay, frame, elapsed)
+	if !drawable {
+		return
+	}
+
+	// Everything below draws through a window onto the scope box rather than
+	// onto the whole frame. The picture is framed so the outer range ring fills
+	// most of the box, and the envelope around it is taller than the range is
+	// wide, so a good part of the scene genuinely falls outside: unclipped, the
+	// bowl's meridians run straight across the flight list.
+	clipped := *lay
+
+	window, room := s.window(lay.dst, lay.scope)
+	if !room {
+		return
+	}
+
+	clipped.dst = window
+
+	s.drawGround3(&clipped, view)
+
+	if s.envelope {
+		s.drawBowl3(window, view)
+		s.drawMeasured3(window, view, frame.Coverage)
+	}
+
+	if view.plottable {
+		s.drawTraffic3(&clipped, view, frame)
+	}
+}
+
+// window is the canvas the 3D view draws through: dst seen through the scope
+// box, kept between frames so the header it costs is paid when the canvas or
+// the box moves rather than thirty times a second.
+//
+// The parent is compared by pointer rather than by its bounds, because the run
+// loop throws a canvas away and allocates another of the same size when a
+// terminal is resized to the same shape, and the window has to follow it. The
+// old one stays reachable through clipOf until the next 3D frame replaces it,
+// which is one canvas at most and only after a resize.
+func (s *Scene) window(dst *canvas.Canvas, box image.Rectangle) (*canvas.Canvas, bool) {
+	if s.clip != nil && s.clipOf == dst && s.clipBox == box {
+		return s.clip, true
+	}
+
+	sub, room := dst.Sub(box)
+	if !room {
+		return nil, false
+	}
+
+	s.clip, s.clipOf, s.clipBox = sub, dst, box
+
+	return sub, true
+}
+
+// drawGround3 paints the floor of the world: the coastline under everything,
+// then the range rings, the cardinal letters and the airfields.
+//
+// The two overlays read the scope view's own toggles rather than minimal's
+// pair. The 3D view is a map with aircraft above it, which is what the scope
+// is; minimal is aircraft with nothing behind them, which is why it keeps a
+// pair of its own.
+func (s *Scene) drawGround3(lay *layout, view scene3) {
+	if view.plottable && s.shoreDrawn() {
+		s.drawShore3(lay.dst, view)
+	}
+
+	s.drawRings3(lay.dst, view)
+	s.drawCardinals3(lay, view)
+
+	if view.plottable && s.airportsDrawn() {
+		s.drawAirports3(lay, view, airports.All())
+	}
+}
+
+// drawRings3 draws the same range rings the scope view does, projected onto
+// the ground as polylines. There are no range numbers on them: in perspective
+// a ring is an ellipse, and a label pinned to one point of it would say what
+// the ring measures only from one side of the orbit.
+func (s *Scene) drawRings3(dst *canvas.Canvas, view scene3) {
+	for ring := 1; ring <= ringCount; ring++ {
+		radius := view.scopeNm * float64(ring) / ringCount
+		s.drawCircle3(dst, view, radius, 0, s.pal.Rule, solidDash)
+	}
+}
+
+// drawCircle3 draws a horizontal circle of radiusNm at heightNm, as
+// ringSegments straight pieces with dash applied along them.
+//
+// A segment with either end the camera cannot see is dropped rather than
+// clipped, which is the rule every other polyline in uScope follows: a dropped
+// segment leaves a gap where a clipped one would draw a line to a place
+// nothing ever was.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (*Scene) drawCircle3(
+	dst *canvas.Canvas, view scene3, radiusNm, heightNm float64, col color.RGBA, dash dashPattern,
+) {
+	if radiusNm <= 0 {
+		return
+	}
+
+	prevX, prevY, prevOK := 0, 0, false
+
+	for step := 0; step <= ringSegments; step++ {
+		sin, cos := math.Sincos(2 * math.Pi * float64(step) / ringSegments)
+
+		x, y, ok := view.cam.at(point3{east: radiusNm * sin, north: radiusNm * cos, up: heightNm})
+
+		if ok && prevOK && (step-1)%dash.period < dash.on {
+			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), col)
+		}
+
+		prevX, prevY, prevOK = x, y, ok
+	}
+}
+
+// drawCardinals3 puts N, E, S and W on the ground at the outer ring, which is
+// the only thing in the picture that says which way the camera is round.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawCardinals3(lay *layout, view scene3) {
+	face := s.faces.Body
+	if !lay.labels || face == nil {
+		return
+	}
+
+	for _, mark := range cardinals3 {
+		x, y, ok := view.cam.at(point3{east: view.scopeNm * mark.east, north: view.scopeNm * mark.north})
+		if !ok {
+			continue
+		}
+
+		text.DrawCentered(lay.dst, face, x, y-face.Height()/2, mark.letter, s.pal.Muted)
+	}
+}
+
+// drawShore3 paints the coastline on the floor of the world.
+//
+// The box handed to the shore set is the scope view's, around the receiver at
+// the current range: the 3D view never recentres, so the receiver is always
+// what the ground is drawn around.
+func (s *Scene) drawShore3(dst *canvas.Canvas, view scene3) {
+	if s.shoreSet == nil {
+		return
+	}
+
+	latSpan := view.scopeNm / nmPerDegree
+	lonSpan := latSpan / max(view.cosLat0, minCosLat)
+
+	s.shoreSet.Within(
+		view.origin.lat-latSpan, view.origin.lat+latSpan,
+		view.origin.lon-lonSpan, view.origin.lon+lonSpan,
+		func(line shore.Polyline) { s.drawShoreLine3(dst, view, line) },
+	)
+}
+
+// drawShoreLine3 projects one coastline and draws the part of it inside the
+// range.
+//
+// The thinning and the clipping are the scope view's, moved a step earlier in
+// the pipeline. Both happen in nautical miles on the ground rather than in
+// pixels on the canvas, because in perspective the range is an ellipse and a
+// circle of pixels would cut the coast in the wrong place. circle.clip does
+// not care which units it is handed, so it is the same function doing the same
+// arithmetic.
+func (s *Scene) drawShoreLine3(dst *canvas.Canvas, view scene3, line shore.Polyline) {
+	if len(line) < 2 {
+		return
+	}
+
+	ring := circle{radius: view.scopeNm}
+	from := view.ground(line[0].Lat, line[0].Lon)
+
+	for index := 1; index < len(line); index++ {
+		next := view.ground(line[index].Lat, line[index].Lon)
+
+		// The last point is always drawn, however short the run to it, so a
+		// coastline reaches its own end rather than stopping one segment early.
+		if index < len(line)-1 &&
+			math.Abs(next.east-from.east) < view.minSegNm && math.Abs(next.north-from.north) < view.minSegNm {
+			continue
+		}
+
+		s.drawShoreSegment3(dst, view, ring, from, next)
+
+		from = next
+	}
+}
+
+// drawShoreSegment3 trims one piece of coast to the range and draws whatever
+// is left of it.
+func (s *Scene) drawShoreSegment3(dst *canvas.Canvas, view scene3, ring circle, from, to point3) {
+	piece, inside := ring.clip(segment{fromX: from.east, fromY: from.north, toX: to.east, toY: to.north})
+	if !inside {
+		return
+	}
+
+	startX, startY, startOK := view.cam.at(point3{east: piece.fromX, north: piece.fromY})
+	endX, endY, endOK := view.cam.at(point3{east: piece.toX, north: piece.toY})
+
+	if startOK && endOK {
+		dst.LineAA(float64(startX), float64(startY), float64(endX), float64(endY), s.pal.Shore)
+	}
+}
+
+// drawAirports3 marks the airfields that fall inside the range, with their
+// ICAO code beside them.
+//
+// Nothing is dropped for colliding with a range label the way the scope view
+// drops it, because the 3D view draws no range labels for one to land on.
+//
+// fields is passed in rather than read from airports.All() here, so a test can
+// hand it a synthetic set instead of the whole embedded database.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airport) {
+	face := s.faces.Small
+
+	for _, field := range fields {
+		x, y, ok := view.project(field.Latitude, field.Longitude, 0)
+		if !ok {
+			continue
+		}
+
+		lay.dst.Rect(image.Rect(x-airportHalf, y-airportHalf, x+airportHalf+1, y+airportHalf+1), s.pal.Rule)
+
+		if lay.labels && face != nil {
+			text.Draw(lay.dst, face, x+airportLabelGap, y-face.Height()/2, field.ICAO, s.pal.Muted)
+		}
+	}
+}
+
+// drawTraffic3 paints the ghosts, then the live trails, then the aircraft on
+// top of them, which is the order the scope view draws them in and for the
+// same reason: live traffic is never hidden under the track of something that
+// is no longer there.
+//
+// Minimal mode's rules do not apply here. The selection keeps its ring and its
+// label, because the column beside the picture is still on screen for them to
+// refer to.
+func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
+	if s.trails {
+		for _, ghost := range frame.Ghosts {
+			s.drawPath3(lay.dst, view, ghost.Points, s.ghostColour(ghost), trailMaxAlpha)
+		}
+
+		for _, plane := range frame.Planes {
+			s.drawPath3(lay.dst, view, plane.PositionHistory, s.aircraftColour(plane), s.trailFloor())
+		}
+	}
+
+	for _, plane := range frame.Planes {
+		s.drawContact3(lay, view, plane)
+	}
+}
+
+// drawPath3 draws a run of fixes as a polyline in the air, each fix at the
+// altitude it was reported at, brightening from floor at the tail to full
+// strength at the head.
+//
+// It is drawPath with the third dimension and nothing else changed: the same
+// fade, and the same rule that a segment with either end off the picture is
+// dropped rather than clipped.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawPath3(
+	dst *canvas.Canvas, view scene3, fixes []airplane.PositionEntry, col color.RGBA, floor float64,
+) {
+	if len(fixes) < 2 {
+		return
+	}
+
+	span := float64(len(fixes) - 1)
+	prevX, prevY, prevOK := view.project(fixes[0].Latitude, fixes[0].Longitude, fixes[0].Altitude)
+
+	for index := 1; index < len(fixes); index++ {
+		x, y, ok := view.project(fixes[index].Latitude, fixes[index].Longitude, fixes[index].Altitude)
+
+		if ok && prevOK {
+			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y),
+				s.fade(col, segmentAlpha(floor, index, span)))
+		}
+
+		prevX, prevY, prevOK = x, y, ok
+	}
+}
+
+// drawContact3 draws one aircraft: the stalk from its shadow on the ground up
+// to where it is flying, the silhouette on the end of it, and the selection
+// marker when it is the one the panel is about.
+//
+// The silhouette is turned by its heading less the camera's azimuth. That is
+// an approximation and not a projection of the aircraft's own axis: a real one
+// would foreshorten the shape as it turned away from the camera, and a
+// fifteen-pixel bitmap has nothing to foreshorten with. Subtracting the
+// azimuth keeps a northbound aircraft pointing the same way as the N on the
+// ground, which is what the shape is being read for.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) {
+	x, y, ok := view.project(plane.Latitude, plane.Longitude, plane.Altitude)
+	if !ok {
+		return
+	}
+
+	s.drawStalk3(lay.dst, view, plane, x, y)
+
+	col := s.aircraftColour(plane)
+
+	if knownHeading(plane.Heading) {
+		s.icon.Draw(lay.dst, x, y, plane.Heading-view.azimuth, col)
+	} else {
+		lay.dst.Circle(x, y, noHeadingRadius, col)
+	}
+
+	if plane.ICAO == s.selICAO {
+		s.drawSelection(lay, x, y, plane)
+	}
+}
+
+// drawStalk3 draws the thin line from an aircraft's position on the ground up
+// to the aircraft itself.
+//
+// It is the one thing in the picture that says how high an aeroplane is. A
+// sprite on its own floats at a height the eye cannot measure against
+// anything, and two aircraft at different altitudes on the same bearing draw
+// at nearly the same place; with a stalk each, the ground tells you which is
+// which.
+//
+//nolint:varnamelen // topX, topY name a pixel, the idiom used throughout uScope.
+func (s *Scene) drawStalk3(dst *canvas.Canvas, view scene3, plane airplane.Snapshot, topX, topY int) {
+	baseX, baseY, ok := view.cam.at(view.ground(plane.Latitude, plane.Longitude))
+	if !ok {
+		return
+	}
+
+	dst.LineAA(float64(baseX), float64(baseY), float64(topX), float64(topY), s.pal.Muted)
+}

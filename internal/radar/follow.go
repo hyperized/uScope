@@ -79,7 +79,7 @@ type geo struct {
 // middle, range rings measured from it and a row table of bearings off it, so
 // moving the centre would make three other blocks lie.
 func (s *Scene) following() bool {
-	return s.minimal && s.recentre > 0
+	return s.minimal() && s.recentre > 0
 }
 
 // follow moves minimal mode's centre and its range onto the traffic.

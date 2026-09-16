@@ -58,9 +58,42 @@ func New(width, height int) (*Canvas, error) {
 	return &Canvas{img: image.NewRGBA(image.Rect(0, 0, width, height))}, nil
 }
 
-// Bounds returns the drawable rectangle, always anchored at (0, 0).
+// Bounds returns the drawable rectangle.
+//
+// A canvas from New is anchored at (0, 0). One from Sub is anchored wherever
+// its box is on the canvas it came from, because it addresses the same pixels
+// by the same coordinates.
 func (c *Canvas) Bounds() image.Rectangle {
 	return c.img.Rect
+}
+
+// Sub returns a canvas that draws into part of this one.
+//
+// The two share their pixels rather than copying them, so everything drawn on
+// the result appears on the parent, in the same coordinates: a sub-canvas is a
+// window, not a translation. What falls outside the box is dropped by Set the
+// same way a pixel outside the canvas is.
+//
+// That is what lets a scene draw a picture larger than the block it belongs in
+// without drawing over its neighbour. The alternative is clipping every shape
+// against the block by hand, which for a perspective scene means clipping
+// lines, sprites and type each in its own way.
+//
+// It reports false for a box that does not overlap the canvas at all. A box
+// that overlaps partly is trimmed to what does.
+//
+// The result holds a small header of its own, so a caller on the draw path
+// should build one when its box changes rather than once per frame.
+func (c *Canvas) Sub(box image.Rectangle) (*Canvas, bool) {
+	area := box.Intersect(c.img.Rect)
+	if area.Empty() {
+		return nil, false
+	}
+
+	// The type assertion cannot fail: SubImage on an *image.RGBA returns an
+	// *image.RGBA, and the empty case above is the only other thing it can
+	// return.
+	return &Canvas{img: c.img.SubImage(area).(*image.RGBA)}, true //nolint:forcetypeassert // see above.
 }
 
 // Image returns the backing image. It aliases the canvas rather than copying
@@ -74,21 +107,28 @@ func (c *Canvas) Image() *image.RGBA {
 //
 // It fills the first row and then copies that row down, which turns most of
 // the work into memmove. A per-pixel loop shows up in a profile at 1280x720.
+//
+// Every offset goes through PixOffset and every row is the canvas's own width
+// rather than its stride. On a canvas from New the two are the same number; on
+// one from Sub the stride belongs to the parent, and filling by stride would
+// paint across the whole parent row instead of the window.
 func (c *Canvas) Clear(col color.RGBA) {
-	pix := c.img.Pix
-	if len(pix) == 0 {
+	rect := c.img.Rect
+	if rect.Empty() {
 		return
 	}
 
-	stride := c.img.Stride
-	row := pix[:stride]
+	width := rect.Dx() * bytesPerPixel
+	first := c.img.PixOffset(rect.Min.X, rect.Min.Y)
+	row := c.img.Pix[first : first+width]
 
-	for x := 0; x < stride; x += bytesPerPixel {
+	for x := 0; x < width; x += bytesPerPixel {
 		row[x], row[x+1], row[x+2], row[x+3] = col.R, col.G, col.B, col.A
 	}
 
-	for y := stride; y < len(pix); y += stride {
-		copy(pix[y:y+stride], row)
+	for y := rect.Min.Y + 1; y < rect.Max.Y; y++ {
+		off := c.img.PixOffset(rect.Min.X, y)
+		copy(c.img.Pix[off:off+width], row)
 	}
 }
 

@@ -84,6 +84,13 @@ type Live struct {
 	// contact leaves its track behind. It sits under mu with the rest of the
 	// mutable state and is inert unless WithGhosts turned it on.
 	ghosts ghosts
+
+	// coverage accumulates where the antenna has heard an aircraft, which is
+	// what the 3D view's measured envelope is drawn from. It has a lock of its
+	// own rather than sitting under mu, because it is written on the ingest
+	// goroutine and read on the one that draws, and mu is already held across
+	// work neither of those should wait for.
+	coverage *coverageCache
 }
 
 // LiveOption configures a Live at construction.
@@ -182,6 +189,7 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 		now:              time.Now,
 		stderr:           os.Stderr,
 		estimateInterval: defaultEstimateInterval,
+		coverage:         newCoverage(),
 	}
 
 	for _, opt := range opts {
@@ -234,6 +242,7 @@ func (l *Live) Start(ctx context.Context) {
 func (l *Live) Frame() Frame {
 	receiver := l.receiver()
 	planes := l.planes.Sorted(receiver.Latitude, receiver.Longitude, airplanes.WithTrails())
+	now := l.now()
 
 	return Frame{
 		Planes:   planes,
@@ -241,7 +250,8 @@ func (l *Live) Frame() Frame {
 		Receiver: receiver,
 		Source:   l.in.Source(),
 		Stats:    l.in.Stats(),
-		Now:      l.now(),
+		Now:      now,
+		Coverage: l.coverage.snapshot(now),
 	}
 }
 
@@ -309,12 +319,13 @@ func (l *Live) newLocation() *location.Location {
 }
 
 // adsbOptions turns the source choice into uAirwaves' option list.
+//
+// The position observer is always installed now, where it used to go on only
+// when there was a self-locator to feed. The coverage tracker wants every fix
+// whether or not the operator typed a position in: with --lat and --lon there
+// is nothing to locate and still an antenna pattern to measure.
 func (l *Live) adsbOptions() []adsb.Option {
-	opts := []adsb.Option{adsb.WithLocation(l.loc)}
-
-	if l.locator != nil {
-		opts = append(opts, adsb.WithPositionObserver(observer(l.locator)))
-	}
+	opts := []adsb.Option{adsb.WithLocation(l.loc), adsb.WithPositionObserver(l.positionObserver())}
 
 	switch {
 	case l.replay != "":
@@ -330,13 +341,26 @@ func (l *Live) adsbOptions() []adsb.Option {
 	}
 }
 
-// observer feeds every decoded aircraft position to the self-locator.
+// positionObserver fans one decoded fix out to the self-locator and the
+// coverage tracker, which is the same pair uAirwaves' own main.go feeds.
 //
-// uAirwaves fans the same hook out to its coverage tracker as well. uScope has
-// no coverage panel, so there is one consumer and no fan-out.
-func observer(locator *selflocate.Locator) adsb.PositionObserver {
+// The locator is nil whenever the operator gave a position, because then there
+// is nothing to work out. The tracker is never nil and reads the receiver
+// position back off the shared location each time rather than closing over it:
+// a self-locate estimate lands there part way through a run, and the fixes
+// binned after it have to be measured from the position that was actually
+// known when they arrived.
+//
+// It runs on the ingest goroutine, so both halves have to stay cheap and
+// allocation-free.
+func (l *Live) positionObserver() adsb.PositionObserver {
 	return func(latitude, longitude, altitudeFt float64) {
-		locator.Observe(latitude, longitude, altitudeFt)
+		if l.locator != nil {
+			l.locator.Observe(latitude, longitude, altitudeFt)
+		}
+
+		receiverLat, receiverLon := l.loc.GetCoordinates()
+		l.coverage.observe(receiverLat, receiverLon, latitude, longitude, altitudeFt)
 	}
 }
 

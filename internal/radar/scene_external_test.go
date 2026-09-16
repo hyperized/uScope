@@ -1823,7 +1823,7 @@ func TestMinimalModeStripsChrome(t *testing.T) {
 	}
 
 	minimal, minimalCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
-	minimal.Apply(radar.Settings{Minimal: true})
+	minimal.Apply(radar.Settings{View: radar.ViewMinimal})
 	minimal.Draw(minimalCanvas, 0)
 
 	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Band); got != 0 {
@@ -1854,7 +1854,7 @@ func TestMinimalModeDropsTheColumn(t *testing.T) {
 		t.Parallel()
 
 		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame())
-		scene.Apply(radar.Settings{Minimal: true})
+		scene.Apply(radar.Settings{View: radar.ViewMinimal})
 		scene.Draw(canv, 0)
 
 		// With --recenter off the projection still sits on the receiver, so
@@ -1877,7 +1877,7 @@ func TestMinimalModeDropsTheColumn(t *testing.T) {
 		// rather than in the right third the column used to occupy.
 		frame := sceneFrame(scenePlane("484AC1", "KLM123", 180, 12, 2400, 41))
 		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
-		scene.Apply(radar.Settings{Minimal: true})
+		scene.Apply(radar.Settings{View: radar.ViewMinimal})
 		scene.Draw(canv, 0)
 
 		rightThird := image.Rect(2*panelWidth/3, 0, panelWidth, panelHeight)
@@ -1899,7 +1899,7 @@ func TestMinimalModeSelectionWithoutLabel(t *testing.T) {
 
 		frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
 		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
-		scene.Apply(radar.Settings{Minimal: true})
+		scene.Apply(radar.Settings{View: radar.ViewMinimal})
 		scene.Draw(canv, 0)
 
 		if got := countColour(canv, canv.Bounds(), theme.Night.Accent); got != 0 {
@@ -1914,11 +1914,11 @@ func TestMinimalModeSelectionWithoutLabel(t *testing.T) {
 		long := sceneFrame(scenePlane("484AC1", "KLM1234567LONG", 45, 12, 2400, 41))
 
 		shortScene, shortCanvas, _ := sceneOn(t, panelWidth, panelHeight, short)
-		shortScene.Apply(radar.Settings{Minimal: true})
+		shortScene.Apply(radar.Settings{View: radar.ViewMinimal})
 		shortScene.Draw(shortCanvas, 0)
 
 		longScene, longCanvas, _ := sceneOn(t, panelWidth, panelHeight, long)
-		longScene.Apply(radar.Settings{Minimal: true})
+		longScene.Apply(radar.Settings{View: radar.ViewMinimal})
 		longScene.Draw(longCanvas, 0)
 
 		if !identical(shortCanvas, longCanvas) {
@@ -1942,7 +1942,7 @@ func TestMinimalModeCornerTraffic(t *testing.T) {
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 60, 100, 2400, 41))
 
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
-	scene.Apply(radar.Settings{Minimal: true, RangeNm: sceneRangeNm})
+	scene.Apply(radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm})
 	scene.Draw(canv, 0)
 
 	corner := image.Rect(1100, 0, panelWidth, 150)
@@ -1952,8 +1952,9 @@ func TestMinimalModeCornerTraffic(t *testing.T) {
 }
 
 // TestMinimalModeKeyFlipsBothWays checks that v and V flip minimal mode
-// through Handle, proved by the picture changing and then changing back.
-func TestMinimalModeKeyFlipsBothWays(t *testing.T) {
+// through Handle, proved by the picture changing at every step of the cycle
+// and coming back to where it started on the third press.
+func TestViewKeyCyclesThreeWays(t *testing.T) {
 	t.Parallel()
 
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
@@ -1980,8 +1981,15 @@ func TestMinimalModeKeyFlipsBothWays(t *testing.T) {
 	press(scene, 'V')
 	scene.Draw(canv, 0)
 
+	if identical(canv, full) {
+		t.Fatal("the second v went back to the scope, want the 3D view in between")
+	}
+
+	press(scene, 'v')
+	scene.Draw(canv, 0)
+
 	if !identical(canv, full) {
-		t.Error("V did not undo v, so minimal mode does not flip back")
+		t.Error("the third v did not come back to the scope, so the cycle does not close")
 	}
 }
 
@@ -2545,7 +2553,7 @@ func followScene(tb testing.TB, src source.Source, clock *stepClock) (*radar.Sce
 
 	scene := radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(sceneRangeNm)),
 		radar.WithClock(clock.now))
-	scene.Apply(radar.Settings{Minimal: true, Recentre: followInterval, RangeNm: sceneRangeNm})
+	scene.Apply(radar.Settings{View: radar.ViewMinimal, Recentre: followInterval, RangeNm: sceneRangeNm})
 
 	return scene, canv
 }
@@ -2674,7 +2682,7 @@ func TestRecentreFitsTheRangeAroundTheCentroid(t *testing.T) {
 			clock := &stepClock{at: sceneClock}
 			ranges := scope.New(scope.WithCurrent(sceneRangeNm))
 			scene := radar.New(testFaces(t), &fakeSource{frame: frame}, ranges, radar.WithClock(clock.now))
-			scene.Apply(radar.Settings{Minimal: true, Recentre: testCase.recentre})
+			scene.Apply(radar.Settings{View: radar.ViewMinimal, Recentre: testCase.recentre})
 
 			scene.Draw(canv, 0)
 
@@ -2779,6 +2787,8 @@ func TestMinimalShoreToggle(t *testing.T) {
 		t.Error("minimal drew no shore pixels after m, want the coastline")
 	}
 
+	// Two presses, because v cycles minimal, 3D, scope.
+	press(scene, 'v')
 	press(scene, 'v')
 	scene.Draw(canv, 0)
 
@@ -2819,6 +2829,8 @@ func TestMinimalAirportsToggle(t *testing.T) {
 		t.Error("minimal drew no airfield pixels after a, want the markers")
 	}
 
+	// Two presses, because v cycles minimal, 3D, scope.
+	press(scene, 'v')
 	press(scene, 'v')
 	scene.Draw(canv, 0)
 
@@ -2848,7 +2860,7 @@ func TestMinimalOverlaysFollowTheCentre(t *testing.T) {
 		clock := &stepClock{at: sceneClock}
 		scene := radar.New(testFaces(t), &fakeSource{frame: undated(sceneFrame(plane))},
 			scope.New(scope.WithCurrent(sceneRangeNm)), radar.WithClock(clock.now), radar.WithShore(set))
-		scene.Apply(radar.Settings{Minimal: true, Recentre: every, RangeNm: sceneRangeNm})
+		scene.Apply(radar.Settings{View: radar.ViewMinimal, Recentre: every, RangeNm: sceneRangeNm})
 		press(scene, 'm')
 		scene.Draw(canv, 0)
 
@@ -2928,7 +2940,7 @@ func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
 	set := syntheticShoreSet(t, shoreLineThroughReceiver())
 
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
-	scene.Apply(radar.Settings{Minimal: true, Recentre: radar.DefaultRecentre})
+	scene.Apply(radar.Settings{View: radar.ViewMinimal, Recentre: radar.DefaultRecentre})
 	press(scene, 'm')
 	press(scene, 'a')
 	scene.Draw(canv, 0)

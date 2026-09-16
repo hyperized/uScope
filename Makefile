@@ -18,7 +18,7 @@ GOARCH_DEV ?= arm64
 #   BEAST = 192.168.1.10:30005
 BEAST ?=
 
-.PHONY: all build build-aarch64 build-macos run run-demo run-airline run-beast \
+.PHONY: all build build-aarch64 build-macos run run-demo run-airline run-3d run-beast \
         run-blocks run-pattern shore-data test \
         test-coverage lint fmt ship pattern radar test-device clean
 
@@ -53,6 +53,12 @@ run-demo:
 # fallback both have something to show. c switches back while it runs.
 run-airline:
 	go run . --demo --colour airline
+
+# The demo fleet in the perspective view, with the receiving envelope on. The
+# camera orbits on its own; v cycles back to the flat scope, e drops the
+# envelope, and --exaggerate changes how far altitude is stretched.
+run-3d:
+	go run . --demo --view 3d
 
 # Draw a real feed from a remote demodulator. Nothing here needs a radio: the
 # frames are already decoded on the other end.

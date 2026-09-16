@@ -12,6 +12,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
+	"github.com/hyperized/uAirwaves/pkg/coverage"
 	"github.com/hyperized/uScope/internal/source"
 )
 
@@ -1461,4 +1462,90 @@ func TestFrameGhostsSurvivesBeingRead(t *testing.T) {
 			t.Errorf("Ghosts[%d].ICAO is empty on a second read", index)
 		}
 	}
+}
+
+// TestDemoFrameCoverageOnFirstFrame checks that advance's first-frame branch
+// folds the fleet into coverage immediately: the very first Frame already
+// carries a measured envelope rather than an empty one waiting for a second
+// tick.
+func TestDemoFrameCoverageOnFirstFrame(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	demo, err := source.NewDemo(source.WithDemoClock(func() time.Time { return fixed }))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	if got := demo.Frame().Coverage.MaxRangeNm; got <= 0 {
+		t.Errorf("first Frame().Coverage.MaxRangeNm = %v, want > 0", got)
+	}
+}
+
+// TestDemoFrameCoverageSurvivesPastQuiet advances the clock past both
+// demoQuietAfter and the coverage snapshot interval, and checks that dropping
+// the fleet's one quiet aircraft did not erase the envelope the other eleven
+// built up.
+func TestDemoFrameCoverageSurvivesPastQuiet(t *testing.T) {
+	t.Parallel()
+
+	const pastQuietAndInterval = 90*time.Second + 2*time.Second
+
+	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := sequentialClock([]time.Time{start, start.Add(pastQuietAndInterval)})
+
+	demo, err := source.NewDemo(source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	demo.Frame()
+
+	if got := demo.Frame().Coverage.MaxRangeNm; got <= 0 {
+		t.Errorf("Coverage.MaxRangeNm past the quiet boundary = %v, want > 0", got)
+	}
+}
+
+// TestDemoSectorCoverageIsLopsided checks that WithDemoSector's crowded fleet
+// fills fewer of the sixteen bearing sectors than the default scattered
+// fleet does, which is the shape a directional antenna's coverage picture is
+// meant to have.
+func TestDemoSectorCoverageIsLopsided(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return fixed }
+
+	sector, err := source.NewDemo(source.WithDemoSector(), source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	scattered, err := source.NewDemo(source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	sectorFilled := countFilledSectors(sector.Frame().Coverage.Sectors)
+	scatteredFilled := countFilledSectors(scattered.Frame().Coverage.Sectors)
+
+	if sectorFilled >= scatteredFilled {
+		t.Errorf("WithDemoSector filled %d of the sixteen bearing sectors, want fewer than the scattered fleet's %d",
+			sectorFilled, scatteredFilled)
+	}
+}
+
+// countFilledSectors counts how many of Coverage.Sectors' bearing sectors
+// have seen at least one fix.
+func countFilledSectors(sectors [coverage.BearingSectorCount]float64) int {
+	count := 0
+
+	for _, distance := range sectors {
+		if distance > 0 {
+			count++
+		}
+	}
+
+	return count
 }

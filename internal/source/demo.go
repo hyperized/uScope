@@ -236,6 +236,13 @@ type Demo struct {
 	// ghosts keeps the trail of that aircraft once it has, so --demo shows
 	// what --no-decay does on a live feed.
 	ghosts ghosts
+
+	// coverage accumulates where the invented fleet has been heard, so the 3D
+	// view's measured envelope has a shape to draw without a receiver. The
+	// fleet flies within about forty nautical miles, so it comes out as a
+	// small bowl; --demo-sector crowds it into one quadrant and the bowl comes
+	// out lopsided, which is what a directional antenna looks like.
+	coverage *coverageCache
 }
 
 // DemoOption configures a Demo at construction.
@@ -291,10 +298,11 @@ func WithDemoSector() DemoOption {
 // already has something on it.
 func NewDemo(opts ...DemoOption) (*Demo, error) {
 	demo := &Demo{
-		now:  time.Now,
-		seed: defaultSeed,
-		lat:  demoLatitude,
-		lon:  demoLongitude,
+		now:      time.Now,
+		seed:     defaultSeed,
+		lat:      demoLatitude,
+		lon:      demoLongitude,
+		coverage: newCoverage(),
 	}
 
 	for _, opt := range opts {
@@ -329,9 +337,10 @@ func (d *Demo) Frame() Frame {
 			Latitude: d.lat, Longitude: d.lon, HasFix: true,
 			Label: LabelManual, Mode: FixManual,
 		},
-		Source: adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
-		Stats:  d.stats(),
-		Now:    now,
+		Source:   adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
+		Stats:    d.stats(),
+		Now:      now,
+		Coverage: d.coverage.snapshot(now),
 	}
 }
 
@@ -404,6 +413,7 @@ func (d *Demo) advance(now time.Time) {
 	if d.last.IsZero() {
 		d.last, d.start = now, now
 		d.seedFixTimes(now)
+		d.observeFleet()
 
 		return
 	}
@@ -427,6 +437,26 @@ func (d *Demo) advance(now time.Time) {
 		}
 
 		d.fleet[index].fly(elapsed, now)
+	}
+
+	d.observeFleet()
+}
+
+// observeFleet folds every aircraft still transmitting into the coverage
+// tracker, which is what gives --demo an envelope to draw on a machine with
+// no antenna.
+//
+// It runs once per frame rather than once per simulated fix, so the bins fill
+// far faster than a real feed's would. That is the point: the shape is meant
+// to be there on the first frame a demo draws, not three minutes in.
+func (d *Demo) observeFleet() {
+	for index := range d.fleet {
+		if d.fleet[index].quiet {
+			continue
+		}
+
+		d.coverage.observe(d.lat, d.lon,
+			d.fleet[index].latitude, d.fleet[index].longitude, d.fleet[index].spec.altitude)
 	}
 }
 

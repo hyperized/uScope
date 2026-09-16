@@ -171,12 +171,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Scene:       cfg.scene,
 		Theme:       cfg.theme,
 		Radar: radar.Settings{
-			Colour:   cfg.colour,
-			Airports: cfg.airports,
-			Shore:    cfg.shore,
-			RangeNm:  cfg.rangeNm,
-			NoDecay:  cfg.noDecay,
-			Recentre: cfg.recentre,
+			Colour:     cfg.colour,
+			Airports:   cfg.airports,
+			Shore:      cfg.shore,
+			RangeNm:    cfg.rangeNm,
+			NoDecay:    cfg.noDecay,
+			Recentre:   cfg.recentre,
+			View:       cfg.view,
+			Exaggerate: cfg.exaggerate,
 		},
 	}
 

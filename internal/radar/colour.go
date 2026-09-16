@@ -160,9 +160,13 @@ type Settings struct {
 	// itself to the fleet.
 	RangeNm float64
 
-	// Minimal starts the scene in minimal mode: the aircraft and their trails
-	// on the bare field, edge to edge. Zero is off, which is the full scope.
-	Minimal bool
+	// View is which of the three pictures the scene starts on. Zero reads as
+	// ViewScope, which is where a run begins before anyone presses v.
+	View View
+
+	// Exaggerate is how far the 3D view stretches altitude into height. Zero
+	// means nobody asked, which leaves DefaultExaggerate in place.
+	Exaggerate float64
 
 	// NoDecay draws every trail segment at full strength instead of fading the
 	// tail out. Zero is off, which is the fade: on a busy field it is what says
@@ -187,10 +191,27 @@ func (s *Scene) Apply(set Settings) {
 	s.colour = set.Colour
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
-	s.minimal = set.Minimal
+	s.shown = set.View
 	s.noDecay = set.NoDecay
 	s.applyRange(set.RangeNm)
 	s.applyRecentre(set.Recentre)
+	s.applyExaggerate(set.Exaggerate)
+}
+
+// applyExaggerate sets how far the 3D view stretches altitude.
+//
+// Zero or less is nobody asking rather than a flat world, which puts the
+// default back: every field of Settings has to read as the scene's own default
+// when it is left unset, or a config built by a caller who only cared about
+// one flag would quietly change the rest.
+func (s *Scene) applyExaggerate(factor float64) {
+	if factor <= 0 {
+		s.exaggerate = DefaultExaggerate
+
+		return
+	}
+
+	s.exaggerate = factor
 }
 
 // applyRange pins the scope to the range the command line asked for.

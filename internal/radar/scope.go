@@ -246,7 +246,7 @@ type scopeFrame struct {
 // aeroplane would sit beside its rings rather than on them, so they share this
 // function rather than a cached answer that could go stale between them.
 func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame, bool) {
-	if s.minimal {
+	if s.minimal() {
 		return s.measureMinimal(lay.dst, receiver)
 	}
 
@@ -335,7 +335,7 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 		return
 	}
 
-	if s.minimal {
+	if s.minimal() {
 		s.drawMinimalField(lay, view)
 
 		return
@@ -393,7 +393,7 @@ func (s *Scene) drawTraffic(lay *layout, frame source.Frame) {
 		return
 	}
 
-	if s.minimal {
+	if s.minimal() {
 		s.drawReceiver(lay.dst, view.proj, frame.Receiver)
 	}
 
@@ -671,7 +671,7 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 		// The ring used to survive so n and p could show they had done
 		// something, but minimal sets no type on screen at all, so the only
 		// thing the ring could refer to was a panel that is not there.
-		if !s.minimal && plane.ICAO == s.selICAO {
+		if !s.minimal() && plane.ICAO == s.selICAO {
 			s.drawSelection(lay, x, y, plane)
 		}
 	}

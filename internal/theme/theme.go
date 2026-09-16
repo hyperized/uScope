@@ -32,7 +32,10 @@ type Palette struct {
 	Muted color.RGBA
 
 	// Accent is the one colour that draws the eye. It marks the selected
-	// aircraft and nothing else, which is why there is exactly one of it.
+	// aircraft, and in the 3D view the measured half of the receiving
+	// envelope. Those are the only two, and they never look alike: one is a
+	// ring on a contact with a callsign hanging off it, the other a wireframe
+	// around the outside of the whole picture.
 	Accent color.RGBA
 
 	// Rule is for hairlines and borders, a step above the field rather than

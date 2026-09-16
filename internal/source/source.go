@@ -28,6 +28,7 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/adsb"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
+	"github.com/hyperized/uAirwaves/pkg/coverage"
 )
 
 // The receiver-position labels. They say where the coordinates came from,
@@ -118,6 +119,17 @@ type Frame struct {
 	Source   adsb.SourceInfo
 	Stats    adsb.Stats
 	Now      time.Time
+
+	// Coverage is where the antenna has actually heard an aircraft, binned by
+	// distance, altitude and bearing over the whole run. It is what the 3D
+	// view draws its measured envelope from.
+	//
+	// It is a value rather than a pointer because coverage.Snapshot copies its
+	// grids: the frame carries its own bins and cannot be changed under the
+	// scene by the ingest goroutine. A source that keeps no tracker leaves it
+	// zero, which reads as an antenna that has heard nothing and draws no
+	// envelope.
+	Coverage coverage.Snapshot
 }
 
 // Source hands out frames until it is closed.

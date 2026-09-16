@@ -44,11 +44,12 @@ type layerKey struct {
 	// without this the word would appear only once something else moved.
 	auto bool
 
-	// minimal is in the key because v changes the whole picture behind the
+	// view is in the key because v changes the whole picture behind the
 	// aircraft: the same canvas size, range and palette draw rings and a home
 	// marker in one view and two overlays around a different centre in the
-	// other.
-	minimal bool
+	// other. The 3D view never builds a key at all, for the reason layerless
+	// gives.
+	view View
 
 	// centreLat and centreLon are minimal mode's own projection centre,
 	// snapped onto the same grid the receiver's position is.
@@ -70,13 +71,7 @@ type layerKey struct {
 // most expensive thing in the frame, and none of it changes between two frames
 // that share a key.
 func (s *Scene) paintBackground(dst *canvas.Canvas, frame source.Frame) {
-	// Minimal with both its overlays off has nothing behind the aircraft but
-	// the field, so it clears straight into the frame and hands the layer's
-	// memory back rather than holding a second canvas the size of the first
-	// to keep one colour in. Turn either overlay on and it wants the layer
-	// like any other view: a few thousand shore segments are not something to
-	// draw thirty times a second.
-	if s.minimal && !s.shoreDrawn() && !s.airportsDrawn() {
+	if s.layerless() {
 		s.layer = nil
 		dst.Clear(s.pal.Field)
 
@@ -89,6 +84,25 @@ func (s *Scene) paintBackground(dst *canvas.Canvas, frame source.Frame) {
 	}
 
 	copy(dst.Image().Pix, s.layer.Image().Pix)
+}
+
+// layerless reports whether the view on screen draws straight into the frame
+// rather than over a cached background.
+//
+// Two of the three do, for two different reasons. Minimal with both its
+// overlays off has nothing behind the aircraft but the field, so holding a
+// second canvas the size of the first to keep one colour in would be waste;
+// turn either overlay on and it wants the layer like any other view, because a
+// few thousand shore segments are not something to draw thirty times a second.
+// The 3D view has plenty of furniture and can cache none of it: the camera
+// moves on every frame the orbit is running, so a layer would be rebuilt on
+// each one and cost the same drawing plus a copy of the whole canvas on top.
+func (s *Scene) layerless() bool {
+	if s.perspective() {
+		return true
+	}
+
+	return s.minimal() && !s.shoreDrawn() && !s.airportsDrawn()
 }
 
 // layerKeyFor reads the current state of everything the layer depends on.
@@ -107,7 +121,7 @@ func (s *Scene) layerKeyFor(dst *canvas.Canvas, frame source.Frame) layerKey {
 		fix:      frame.Receiver.Mode,
 		auto:     s.autoRange,
 
-		minimal:   s.minimal,
+		view:      s.shown,
 		centreLat: snap(s.centre.lat),
 		centreLon: snap(s.centre.lon),
 	}
@@ -137,7 +151,7 @@ func (s *Scene) renderLayer(dst *canvas.Canvas, key layerKey, frame source.Frame
 	// make room for and nothing to split off for a column. measureScope
 	// ignores lay.scope in that mode anyway; skipping the carving keeps it
 	// from being measured twice for an answer nothing reads.
-	if !s.minimal {
+	if !s.minimal() {
 		lay.bottom -= s.keyBarHeight(&lay)
 		lay.top += s.headerHeight(&lay)
 		lay.split()

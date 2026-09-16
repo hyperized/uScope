@@ -3695,7 +3695,7 @@ func TestGlide(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			scene := &Scene{minimal: true, recentre: time.Minute}
+			scene := &Scene{shown: ViewMinimal, recentre: time.Minute}
 			scene.aim(followStart, 0)
 			scene.aim(followTarget, 0)
 
@@ -3715,7 +3715,7 @@ func TestGlide(t *testing.T) {
 	t.Run("a scene that is not gliding is left alone", func(t *testing.T) {
 		t.Parallel()
 
-		scene := &Scene{minimal: true, recentre: time.Minute}
+		scene := &Scene{shown: ViewMinimal, recentre: time.Minute}
 		scene.aim(followStart, 0)
 		scene.glide(glideSpan)
 
@@ -3764,7 +3764,7 @@ func TestDue(t *testing.T) {
 func TestFollowLeavesAnEmptySkyAlone(t *testing.T) {
 	t.Parallel()
 
-	scene := &Scene{minimal: true, recentre: time.Minute, scopeRange: scope.New(), autoRange: true}
+	scene := &Scene{shown: ViewMinimal, recentre: time.Minute, scopeRange: scope.New(), autoRange: true}
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
 
 	scene.follow(source.Frame{Now: now}, 0)
@@ -3789,18 +3789,18 @@ func TestFollowing(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name     string
-		minimal  bool
+		view     View
 		recentre time.Duration
 		want     bool
 	}{
-		{name: "minimal with a cadence follows", minimal: true, recentre: time.Minute, want: true},
-		{name: "minimal with the cadence off does not", minimal: true},
+		{name: "minimal with a cadence follows", view: ViewMinimal, recentre: time.Minute, want: true},
+		{name: "minimal with the cadence off does not", view: ViewMinimal},
 		{name: "the full scope never does, cadence or no cadence", recentre: time.Minute},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			scene := &Scene{minimal: testCase.minimal, recentre: testCase.recentre}
+			scene := &Scene{shown: testCase.view, recentre: testCase.recentre}
 			if got := scene.following(); got != testCase.want {
 				t.Errorf("following() = %v, want %v", got, testCase.want)
 			}
@@ -3819,18 +3819,18 @@ func TestMinimalOrigin(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name       string
-		minimal    bool
+		view       View
 		recentre   time.Duration
 		haveCentre bool
 		want       geo
 	}{
 		{
-			name: "the cadence off keeps the receiver", minimal: true,
+			name: "the cadence off keeps the receiver", view: ViewMinimal,
 			haveCentre: true, want: geo{lat: receiver.Latitude, lon: receiver.Longitude},
 		},
 		{
-			name:    "the cadence on with nothing chosen yet keeps the receiver too",
-			minimal: true, recentre: time.Minute,
+			name: "the cadence on with nothing chosen yet keeps the receiver too",
+			view: ViewMinimal, recentre: time.Minute,
 			want: geo{lat: receiver.Latitude, lon: receiver.Longitude},
 		},
 		{
@@ -3838,7 +3838,7 @@ func TestMinimalOrigin(t *testing.T) {
 			haveCentre: true, want: geo{lat: receiver.Latitude, lon: receiver.Longitude},
 		},
 		{
-			name: "minimal following a chosen centre projects from it", minimal: true,
+			name: "minimal following a chosen centre projects from it", view: ViewMinimal,
 			recentre: time.Minute, haveCentre: true, want: centred,
 		},
 	} {
@@ -3846,7 +3846,7 @@ func TestMinimalOrigin(t *testing.T) {
 			t.Parallel()
 
 			scene := &Scene{
-				minimal: testCase.minimal, recentre: testCase.recentre,
+				shown: testCase.view, recentre: testCase.recentre,
 				haveCentre: testCase.haveCentre, centre: centred,
 			}
 
@@ -3864,7 +3864,7 @@ func TestMinimalOrigin(t *testing.T) {
 func TestApplyRecentreForgetsTheOldCentre(t *testing.T) {
 	t.Parallel()
 
-	scene := &Scene{minimal: true, recentre: time.Minute, scopeRange: scope.New()}
+	scene := &Scene{shown: ViewMinimal, recentre: time.Minute, scopeRange: scope.New()}
 	scene.aim(followStart, 0)
 	scene.aim(followTarget, 0)
 
@@ -3887,7 +3887,7 @@ func TestApplyRecentreForgetsTheOldCentre(t *testing.T) {
 //
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestFollowAllocations(t *testing.T) {
-	scene := &Scene{minimal: true, recentre: time.Second, scopeRange: scope.New(), autoRange: true}
+	scene := &Scene{shown: ViewMinimal, recentre: time.Second, scopeRange: scope.New(), autoRange: true}
 	frame := source.Frame{
 		Planes: airplanes.List{followPlane(52, 4), followPlane(53, 5), followPlane(0, 0)},
 	}
@@ -3921,7 +3921,7 @@ func TestOverlayToggles(t *testing.T) {
 			t.Error("the full scope started with an overlay off, want both on")
 		}
 
-		scene.minimal = true
+		scene.shown = ViewMinimal
 
 		if scene.shoreDrawn() || scene.airportsDrawn() {
 			t.Error("minimal started with an overlay on, want both off")
@@ -3932,7 +3932,7 @@ func TestOverlayToggles(t *testing.T) {
 		t.Parallel()
 
 		scene := New(Faces{}, source.Empty{}, scope.New())
-		scene.minimal = true
+		scene.shown = ViewMinimal
 
 		scene.toggleShore()
 		scene.toggleAirports()
@@ -3941,7 +3941,7 @@ func TestOverlayToggles(t *testing.T) {
 			t.Error("minimal's toggles did not turn its own overlays on")
 		}
 
-		scene.minimal = false
+		scene.shown = ViewScope
 
 		if !scene.shoreDrawn() || !scene.airportsDrawn() {
 			t.Error("a press in minimal changed the full scope's overlays, want them untouched")
@@ -3959,7 +3959,7 @@ func TestOverlayToggles(t *testing.T) {
 			t.Error("the full scope's toggles did not turn its own overlays off")
 		}
 
-		scene.minimal = true
+		scene.shown = ViewMinimal
 
 		if scene.shoreDrawn() || scene.airportsDrawn() {
 			t.Error("a press in the full scope changed minimal's overlays, want them untouched")
