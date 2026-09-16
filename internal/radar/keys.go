@@ -54,8 +54,9 @@ func (s *Scene) Handle(key input.Key) bool {
 //
 // m and a work in minimal mode and draw there, on minimal's own pair of
 // toggles rather than on the scope's. v is what cycles between the three
-// views, and anything not bound here falls through to the camera keys, which
-// only the 3D view takes.
+// views, w takes the column away from the two of them that have one, and
+// anything not bound here falls through to the camera keys, which only the 3D
+// view takes.
 //
 // c and f are one pair rather than two keys: c picks what a colour means and f
 // picks one of the colours, so c is also what puts the filter back to ALL. See
@@ -80,6 +81,8 @@ func (s *Scene) handleRune(value rune) bool {
 		s.toggleShore()
 	case 'v', 'V':
 		s.shown = s.shown.Next()
+	case 'w', 'W':
+		return s.toggleWide()
 	case 'c', 'C':
 		s.cycleColour()
 	case 'f', 'F':
@@ -89,6 +92,24 @@ func (s *Scene) handleRune(value rune) bool {
 	default:
 		return s.handle3DRune(value)
 	}
+
+	return true
+}
+
+// toggleWide hides the right column and gives the picture the whole width, or
+// puts the column back, which is what w does.
+//
+// It reports false in the two bare views, so the key falls through to the run
+// loop there exactly as the camera keys do outside the 3D views, and for the
+// same reason: a bare view has no column to hide and no key bar to say what
+// happened, so a press that quietly flipped a flag would turn up as a surprise
+// the next time v came back round to the scope.
+func (s *Scene) toggleWide() bool {
+	if s.bare() {
+		return false
+	}
+
+	s.wide = !s.wide
 
 	return true
 }
@@ -129,13 +150,14 @@ func (s *Scene) toggleBiasTee() bool {
 	return true
 }
 
-// handle3DRune maps the camera keys, which only the 3D view binds.
+// handle3DRune maps the camera keys, which only the two 3D views bind.
 //
-// They belong to the view rather than to the scene, so e, o and the brackets
-// fall through to the run loop in the other two, where there is no camera to
-// move and no envelope to toggle. A key that quietly changed state nothing on
-// screen could show would be a key whose effect turned up as a surprise three
-// presses later.
+// They belong to the picture rather than to the scene, so e, o and the
+// brackets fall through to the run loop in the flat views, where there is no
+// camera to move and no envelope to toggle. A key that quietly changed state
+// nothing on screen could show would be a key whose effect turned up as a
+// surprise three presses later. e is refused in the bare 3D view for the same
+// reason, one level further in; see toggleEnvelope.
 func (s *Scene) handle3DRune(value rune) bool {
 	if !s.perspective() {
 		return false
@@ -143,7 +165,7 @@ func (s *Scene) handle3DRune(value rune) bool {
 
 	switch value {
 	case 'e', 'E':
-		s.envelope = !s.envelope
+		return s.toggleEnvelope()
 	case 'o', 'O':
 		s.toggleOrbit()
 	case '[':
@@ -157,10 +179,28 @@ func (s *Scene) handle3DRune(value rune) bool {
 	return true
 }
 
-// nudgeOrbit turns the camera by one step and stops it turning on its own,
-// which is what Left and Right do in the 3D view.
+// toggleEnvelope draws the receiving envelope or takes it away, which is what
+// e does.
 //
-// It reports false in the other two so the key falls through to the run loop
+// It reports false in the bare 3D view, where the envelope is never drawn
+// whatever the flag says. That view exists to have no furniture, and the
+// envelope is the largest piece of it; a key that flipped a setting nothing on
+// screen could show would be a key whose effect turned up three presses later,
+// which is the rule the camera keys already follow outside the 3D views.
+func (s *Scene) toggleEnvelope() bool {
+	if s.bare() {
+		return false
+	}
+
+	s.envelope = !s.envelope
+
+	return true
+}
+
+// nudgeOrbit turns the camera by one step and stops it turning on its own,
+// which is what Left and Right do in the 3D views.
+//
+// It reports false in the flat views so the key falls through to the run loop
 // exactly as it did before the view existed. Stopping the orbit is the point
 // rather than a side effect: nudging a camera that then walks away from where
 // it was put is not what pressing an arrow meant.
@@ -223,11 +263,14 @@ func (s *Scene) tilt(degrees float64) {
 
 // toggleShore flips whichever coastline switch the view on screen reads.
 //
-// Minimal mode keeps its own, off at the start and independent of the
-// scope's. Pressing m in minimal is a choice about minimal, not a change to
-// the view you get back when you press v, and the same the other way round.
+// The two bare views keep their own, off at the start and independent of the
+// scope's. Pressing m in one of them is a choice about the bare pair, not a
+// change to the view you get back when you press v, and the same the other way
+// round. The pair is shared between flat and tilted because it is one choice
+// about how much furniture a bare picture carries, and the two are a single
+// press apart.
 func (s *Scene) toggleShore() {
-	if s.minimal() {
+	if s.bare() {
 		s.minimalShore = !s.minimalShore
 
 		return
@@ -239,7 +282,7 @@ func (s *Scene) toggleShore() {
 // toggleAirports is toggleShore for the airfield markers, on the same rule
 // and for the same reason.
 func (s *Scene) toggleAirports() {
-	if s.minimal() {
+	if s.bare() {
 		s.minimalAirports = !s.minimalAirports
 
 		return
@@ -250,10 +293,10 @@ func (s *Scene) toggleAirports() {
 
 // shoreDrawn and airportsDrawn are the two toggles that apply to whatever is
 // on screen. Everything that draws an overlay or keys the background layer
-// asks these rather than reading a field, so the minimal pair and the scope
-// pair cannot be mixed up between the drawing and the cache.
+// asks these rather than reading a field, so the bare pair and the scope pair
+// cannot be mixed up between the drawing and the cache.
 func (s *Scene) shoreDrawn() bool {
-	if s.minimal() {
+	if s.bare() {
 		return s.minimalShore
 	}
 
@@ -261,7 +304,7 @@ func (s *Scene) shoreDrawn() bool {
 }
 
 func (s *Scene) airportsDrawn() bool {
-	if s.minimal() {
+	if s.bare() {
 		return s.minimalAirports
 	}
 

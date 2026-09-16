@@ -14,7 +14,15 @@ import (
 
 // The header band's fixed strings and spacing.
 const (
-	appTitle    = "USCOPE"
+	// appTitle is the wordmark on the left of the header band.
+	//
+	// It is the project's own spelling, lower-case u and capital S, rather than
+	// the all-caps every other label in the scene is set in. A wordmark is a
+	// name and not a label: setting it USCOPE made the band disagree with the
+	// binary, the repository and the README about what the thing is called.
+	// Terminus carries the lower case at every size, which was checked before
+	// this was written rather than assumed.
+	appTitle    = "uScope"
 	clockFormat = "15:04"
 
 	// sourceGap is the air between the wordmark and the source dot, dotRadius
@@ -41,8 +49,9 @@ const (
 
 	// noFixText is the receiver line when nothing is known. It is set in caps
 	// like every other label in the scene rather than in the sentence case
-	// uAirwaves uses, because next to USCOPE and EST a lower-case line reads
-	// as a different kind of thing.
+	// uAirwaves uses, because next to EST and MANUAL a lower-case line reads
+	// as a different kind of thing. The wordmark is the one exception, and it
+	// is a name rather than a label; see appTitle.
 	noFixText = "NO FIX"
 
 	// The mode words the receiver line opens with when there are coordinates
@@ -110,6 +119,7 @@ const (
 	capOrbit
 	capEnvelope
 	capBiasTee
+	capWide
 )
 
 // The cycling keys are labelled with the value they are on rather than with
@@ -142,11 +152,12 @@ type keyCap struct {
 // leaving, then moving through the list, then the five things that change what
 // is on the field, then the two that change how it looks.
 //
-// Eleven caps and their labels come to 812 pixels of the 1248 the panel leaves
-// between its margins, so nothing here has to be shortened to fit. The trail
-// cap's longest word, SHORT, is a character shorter than the TRAILS it
-// replaced, so the bar did not grow when the four modes arrived; the filter
-// cap's longest, 10-25K, added 76 pixels when it did.
+// Twelve caps and their labels come to 858 pixels of the 1248 the panel leaves
+// between its margins, with every cycling key on its longest word, so nothing
+// here has to be shortened to fit. The trail cap's longest word, SHORT, is a
+// character shorter than the TRAILS it replaced, so the bar did not grow when
+// the four modes arrived; the filter cap's longest, 10-25K, added 76 pixels
+// when it did, and W WIDE another 64.
 //
 // F sits next to C rather than at the end of the row, because the filter is
 // the colour mode's own legend with one entry picked out of it and the two
@@ -170,13 +181,15 @@ var keyCaps = [...]keyCap{
 	{key: "F", label: filterBarLabel, state: capFilter},
 	{key: "L", label: "THEME", state: capTheme},
 	{key: "V", label: "VIEW"},
+	{key: "W", label: "WIDE", state: capWide},
 }
 
 // view3DCaps are the caps the 3D view adds to the end of the bar.
 //
 // They are appended rather than living in keyCaps because none of these keys
-// does anything in the other two views, and a cap for a key with no effect is
-// furniture pretending to be a control.
+// does anything in the two flat views, and a cap for a key with no effect is
+// furniture pretending to be a control. The bare 3D view draws no bar at all,
+// so the question does not arise there.
 //
 // All four of the view's keys are listed, not just the two toggles. The camera
 // keys were bound and undocumented on screen, so the only way to find out the
@@ -188,11 +201,13 @@ var keyCaps = [...]keyCap{
 // That was checked before this was written rather than assumed, the same way
 // the up and down pair was.
 //
-// Fifteen caps and their labels come to about 1116 pixels of the 1248 the
-// panel leaves between its margins, or about 1192 with the bias-tee cap as
+// Sixteen caps and their labels come to about 1162 pixels of the 1248 the
+// panel leaves between its margins, or about 1238 with the bias-tee cap as
 // well, so nothing here has to be shortened. That is the whole bar at its
-// longest and it clears the right margin by about fifty pixels. See the note
-// on keyCaps before adding another.
+// longest and it clears the right margin by ten pixels. W WIDE took fifty of
+// the fifty-eight that used to be spare, so there is no room left for another
+// cap at the panel's own resolution: anything else on this bar has to replace
+// something. See the note on keyCaps.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
@@ -341,6 +356,8 @@ func (s *Scene) capOn(which capToggle) bool {
 		return s.envelope
 	case capBiasTee:
 		return s.biasEnabled
+	case capWide:
+		return s.wide
 	case capFilter:
 		return s.filter.active()
 	case capAlways, capColour, capTheme:
@@ -373,7 +390,7 @@ func (s *Scene) capLabel(entry keyCap) string {
 		return s.trail.label()
 	case capFilter:
 		return s.filter.label()
-	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee:
+	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee, capWide:
 		fallthrough
 	default:
 		return entry.label
@@ -410,13 +427,30 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 
 	lay.dst.FillRect(image.Rect(bounds.Min.X, bounds.Min.Y, bounds.Max.X, rule), s.pal.Band)
 
-	top := lay.top + headerPadY
+	// The type is centred in what the band covers rather than in the band the
+	// layout reserved. The two differ by the whole margin, because the fill
+	// bleeds up to the canvas edge and the reserved band starts below the
+	// margin, and the type used to be placed against the second: twenty-two
+	// pixels of air over the wordmark against six under the receiver line, on
+	// a band that reads as a masthead and so has to look level.
+	//
+	// Centring the two line boxes centres the ink in them. Terminus leaves two
+	// blank rows over a capital and two under a baseline with no descender, in
+	// the bold face and the small one alike, so the ink sits the same distance
+	// inside the stack at both ends. TestHeaderTypeIsCentredInTheBand measures
+	// the ink rather than the boxes, which is what would catch a face whose
+	// metrics are not so even.
+	stack := markHeight + rowLead + lineHeight(s.faces.Small)
+	top := bounds.Min.Y + (rule-bounds.Min.Y-stack)/2
 
 	// The right of the band is drawn first because it is the only thing that
 	// can say where the left of it has to stop. Its width depends on whether
 	// there is a battery and on how wide the two clocks set, so measuring it
 	// any other way would mean measuring it twice.
-	edge := s.drawHeaderRight(lay, lay.top+band/2, frame.Now)
+	//
+	// It is centred on the same middle the type is, which is the middle of
+	// what the fill covers.
+	edge := s.drawHeaderRight(lay, (bounds.Min.Y+rule)/2, frame.Now)
 
 	s.drawWordmark(lay, top, frame, edge-sourceLabelGap)
 	s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
@@ -452,8 +486,8 @@ func (s *Scene) headerHeight(lay *layout) int {
 	return total
 }
 
-// drawWordmark sets USCOPE, then the ingest source beside it behind a dot,
-// and SWEEP after that while the gain sweep is running.
+// drawWordmark sets the wordmark, then the ingest source beside it behind a
+// dot, and SWEEP after that while the gain sweep is running.
 //
 // The dot is filled when the source is connected and hollow when it is not,
 // which is one glance rather than a word to read. It is the low-altitude

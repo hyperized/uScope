@@ -100,6 +100,11 @@ type legendEntry struct {
 // legend. The stats line under the legend is gone: it said how many aircraft
 // there were and where they came from, and the header already carries the
 // source, so the count moved onto the rows' own title line and the line went.
+//
+// An empty column is the answer on a canvas too narrow to hold one and on a
+// scope the w key has widened, and there is nothing to draw either way. The
+// count goes with the rows in the second case: it sits on their title line,
+// and a filter is still legible from the F cap in the bar.
 func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	if lay.column.Empty() {
 		return

@@ -47,9 +47,18 @@ type layerKey struct {
 	// view is in the key because v changes the whole picture behind the
 	// aircraft: the same canvas size, range and palette draw rings and a home
 	// marker in one view and two overlays around a different centre in the
-	// other. The 3D view never builds a key at all, for the reason layerless
+	// other. Neither 3D view builds a key at all, for the reason layerless
 	// gives.
 	view View
+
+	// wide is in the key because w moves the rings. The scope box grows from a
+	// square beside the column to the whole width, and geometry centres the
+	// rings in whatever box it is handed, so the same canvas size, range and
+	// palette draw the same circle around a different point. Without this the
+	// layer would keep the old centre until something else moved and the
+	// aircraft, which are measured afresh every frame, would sit beside their
+	// own rings.
+	wide bool
 
 	// centreLat and centreLon are minimal mode's own projection centre,
 	// snapped onto the same grid the receiver's position is.
@@ -89,14 +98,14 @@ func (s *Scene) paintBackground(dst *canvas.Canvas, frame source.Frame) {
 // layerless reports whether the view on screen draws straight into the frame
 // rather than over a cached background.
 //
-// Two of the three do, for two different reasons. Minimal with both its
+// Three of the four do, for two different reasons. Minimal with both its
 // overlays off has nothing behind the aircraft but the field, so holding a
 // second canvas the size of the first to keep one colour in would be waste;
 // turn either overlay on and it wants the layer like any other view, because a
 // few thousand shore segments are not something to draw thirty times a second.
-// The 3D view has plenty of furniture and can cache none of it: the camera
-// moves on every frame the orbit is running, so a layer would be rebuilt on
-// each one and cost the same drawing plus a copy of the whole canvas on top.
+// Neither 3D view can cache anything at all: the camera moves on every frame
+// the orbit is running, so a layer would be rebuilt on each one and cost the
+// same drawing plus a copy of the whole canvas on top.
 func (s *Scene) layerless() bool {
 	if s.perspective() {
 		return true
@@ -122,6 +131,7 @@ func (s *Scene) layerKeyFor(dst *canvas.Canvas, frame source.Frame) layerKey {
 		auto:     s.autoRange,
 
 		view:      s.shown,
+		wide:      s.wide,
 		centreLat: snap(s.centre.lat),
 		centreLon: snap(s.centre.lon),
 	}
@@ -147,11 +157,12 @@ func (s *Scene) renderLayer(dst *canvas.Canvas, key layerKey, frame source.Frame
 
 	lay := s.newLayout(s.layer)
 
-	// Minimal takes the whole canvas, so there is no key bar or header to
+	// A bare view takes the whole canvas, so there is no key bar or header to
 	// make room for and nothing to split off for a column. measureScope
 	// ignores lay.scope in that mode anyway; skipping the carving keeps it
-	// from being measured twice for an answer nothing reads.
-	if !s.minimal() {
+	// from being measured twice for an answer nothing reads. Only the flat
+	// bare view gets this far: the tilted one is layerless.
+	if !s.bare() {
 		lay.bottom -= s.keyBarHeight(&lay)
 		lay.top += s.headerHeight(&lay)
 		lay.split()

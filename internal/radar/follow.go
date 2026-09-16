@@ -71,18 +71,19 @@ type geo struct {
 	lon float64
 }
 
-// following reports whether minimal mode is chasing the traffic rather than
+// following reports whether a bare view is chasing the traffic rather than
 // sitting on the receiver.
 //
 // Both halves have to be true. --recenter 0 keeps the old behaviour, and the
-// ordinary scope is never recentred at all: it has a home marker in the
-// middle, range rings measured from it and a row table of bearings off it, so
-// moving the centre would make three other blocks lie.
+// two views with chrome are never recentred at all: the scope has a home
+// marker in the middle, range rings measured from it and a row table of
+// bearings off it, and the 3D view draws the antenna's own envelope around the
+// same point, so moving the centre would make all of it lie.
 func (s *Scene) following() bool {
-	return s.minimal() && s.recentre > 0
+	return s.bare() && s.recentre > 0
 }
 
-// follow moves minimal mode's centre and its range onto the traffic.
+// follow moves a bare view's centre and its range onto the traffic.
 //
 // Two clocks drive it and they are deliberately not the same clock. The
 // cadence is measured on the frame's own timestamp, because a refit is about
@@ -234,12 +235,16 @@ func positioned(latitude, longitude float64) bool {
 	return !math.IsNaN(latitude) && !math.IsNaN(longitude)
 }
 
-// minimalOrigin is the point minimal mode projects from: the traffic's own
+// minimalOrigin is the point a bare view projects from: the traffic's own
 // centre while the cadence is on and has chosen one, the receiver otherwise.
 //
 // Falling back rather than refusing is what makes --recenter 0 exactly the
 // behaviour minimal mode had before the flag existed, and it is also the
 // first frame of every run, before anything with a position has arrived.
+//
+// Both bare views ask it. The flat one hands the answer to newProjector and
+// the tilted one to the camera's world origin, which is what keeps the two a
+// press apart rather than two pictures of different places.
 func (s *Scene) minimalOrigin(receiver source.Receiver) geo {
 	if s.following() && s.haveCentre {
 		return s.centre

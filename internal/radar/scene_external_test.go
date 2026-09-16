@@ -251,6 +251,51 @@ func pressTrails(tb testing.TB, scene *radar.Scene, times int) {
 	}
 }
 
+// How many presses of v it takes to reach each view from the scope, which is
+// where a scene starts.
+//
+// --view carries every one of them, so a Settings block would get there in one
+// step. The tests below that use these are about the key rather than about the
+// view, and walking the cycle is what an operator does.
+const (
+	pressView3D        = 1
+	pressViewMinimal   = 2
+	pressViewMinimal3D = 3
+	pressViewRound     = 4
+)
+
+// pressWide hides the right column with the w key when a case asks for it, and
+// fails the test if the scene declines the key.
+//
+// It takes the flag rather than a count because there is nothing to cycle: one
+// press hides the column and the next puts it back, so a case either wants it
+// gone or does not.
+//
+//nolint:revive // flag-parameter: hidden is a case's own answer, not a mode to branch deeper on.
+func pressWide(tb testing.TB, scene *radar.Scene, hidden bool) {
+	tb.Helper()
+
+	if !hidden {
+		return
+	}
+
+	if !press(scene, 'w') {
+		tb.Fatal("the w key was not handled, want the view to take it")
+	}
+}
+
+// pressView cycles the view with the v key and fails the test if the scene
+// ever declines the key.
+func pressView(tb testing.TB, scene *radar.Scene, times int) {
+	tb.Helper()
+
+	for step := range times {
+		if !press(scene, 'v') {
+			tb.Fatalf("press %d of v was not handled, want the view key to take it", step+1)
+		}
+	}
+}
+
 func TestDrawAtEverySize(t *testing.T) {
 	t.Parallel()
 
@@ -2067,10 +2112,16 @@ func TestMinimalModeCornerTraffic(t *testing.T) {
 	}
 }
 
-// TestMinimalModeKeyFlipsBothWays checks that v and V flip minimal mode
-// through Handle, proved by the picture changing at every step of the cycle
-// and coming back to where it started on the third press.
-func TestViewKeyCyclesThreeWays(t *testing.T) {
+// TestViewKeyCyclesFourWays checks that v and V walk the whole cycle through
+// Handle, proved by the picture changing at every step and coming back to
+// where it started on the fourth press.
+//
+// Every intermediate picture is compared against the scope rather than against
+// its predecessor, which is the weaker of the two claims but the one that
+// matters: a cycle that closed early would put the scope back on screen before
+// the fourth press. TestViewKeyReachesEveryPicture is what proves the three
+// in between are all different from each other as well.
+func TestViewKeyCyclesFourWays(t *testing.T) {
 	t.Parallel()
 
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
@@ -2084,28 +2135,63 @@ func TestViewKeyCyclesThreeWays(t *testing.T) {
 
 	scene.Draw(full, 0)
 
-	if !press(scene, 'v') {
-		t.Fatal("Handle('v') = false, want the scene to take it")
-	}
+	for step, key := range []rune{'v', 'V', 'v'} {
+		if !press(scene, key) {
+			t.Fatalf("Handle(%q) = false on press %d, want the scene to take it", key, step+1)
+		}
 
-	scene.Draw(canv, 0)
+		scene.Draw(canv, 0)
 
-	if identical(canv, full) {
-		t.Fatal("v did not change the picture, so minimal mode did not engage")
-	}
-
-	press(scene, 'V')
-	scene.Draw(canv, 0)
-
-	if identical(canv, full) {
-		t.Fatal("the second v went back to the scope, want the 3D view in between")
+		if identical(canv, full) {
+			t.Fatalf("press %d of v came back to the scope, want three other pictures first", step+1)
+		}
 	}
 
 	press(scene, 'v')
 	scene.Draw(canv, 0)
 
 	if !identical(canv, full) {
-		t.Error("the third v did not come back to the scope, so the cycle does not close")
+		t.Error("the fourth v did not come back to the scope, so the cycle does not close")
+	}
+}
+
+// TestViewKeyReachesEveryPicture checks that the four views really are four
+// pictures and not three and a repeat.
+//
+// It is the other half of TestViewKeyCyclesFourWays, which only ever compares
+// against the scope. Two views that drew the same canvas would pass that and
+// fail this.
+func TestViewKeyReachesEveryPicture(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(
+		scenePlane("484AC1", "KLM123", 45, 12, 2400, 41),
+		scenePlane("3C6745", "DLH4EA", 200, 38, 36000, 268),
+	)
+
+	shots := make([]*canvas.Canvas, 0, 4)
+	scene, _, _ := sceneOn(t, panelWidth, panelHeight, frame)
+
+	for step := range 4 {
+		shot, err := canvas.New(panelWidth, panelHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		scene.Draw(shot, 0)
+		shots = append(shots, shot)
+
+		if step < 3 && !press(scene, 'v') {
+			t.Fatalf("Handle('v') = false on press %d, want the scene to take it", step+1)
+		}
+	}
+
+	for first := range shots {
+		for second := first + 1; second < len(shots); second++ {
+			if identical(shots[first], shots[second]) {
+				t.Errorf("views %d and %d drew the same picture, want four different ones", first, second)
+			}
+		}
 	}
 }
 
@@ -2223,11 +2309,19 @@ const (
 
 // headerBand is the row of the header the source label and the clocks are set
 // on, from just past the connection dot to the frame's right margin.
+//
+// The rows stop above the receiver line rather than at the bottom of the
+// band. The line runs from the left margin well past the dot, so a band that
+// reached it would report the receiver's own coordinates as the leftmost thing
+// drawn and every caller below measures the clocks by exactly that.
+//
+// It moved up eight pixels when the header's type was centred in the fill
+// rather than in the band the layout reserves under the margin.
 func headerBand(width int) image.Rectangle {
 	const (
 		pastDot   = 98
-		bandTop   = 18
-		bandUnder = 42
+		bandTop   = 16
+		bandUnder = 36
 	)
 
 	return image.Rect(pastDot, bandTop, width-16, bandUnder)
@@ -2351,7 +2445,7 @@ var (
 	keyBarBox  = image.Rect(0, 686, 1280, 704)
 
 	// biasCapBox is the B cap the bar draws once a frame says the source has
-	// a bias-tee, at the panel's resolution. It sits right after the ten
+	// a bias-tee, at the panel's resolution. It sits right after the twelve
 	// fixed caps in keyCaps, so its left edge is where the bar's painted
 	// extent ends when the cap is not there at all, and its width is one
 	// small glyph plus the cap's own padding on both sides. Verified against
@@ -2363,8 +2457,9 @@ var (
 	// started naming the trail mode: LONG is two characters shorter, and the
 	// bar is laid out left to right, so everything after T came with it. It
 	// moved fifty-eight pixels right again when the F cap arrived between C
-	// and L, which is what an F cap reading ALL takes.
-	biasCapBox = image.Rect(780, 686, 796, 704)
+	// and L, which is what an F cap reading ALL takes, and another sixty-four
+	// when W WIDE went on the end of keyCaps.
+	biasCapBox = image.Rect(844, 686, 860, 704)
 )
 
 // TestKeyCapsShowToggleState checks the one thing the bar could not say
@@ -3045,7 +3140,7 @@ func TestMinimalShoreToggle(t *testing.T) {
 		t.Fatal("the full scope drew no coastline, so this comparison proves nothing")
 	}
 
-	press(scene, 'v')
+	pressView(t, scene, pressViewMinimal)
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Shore); got != 0 {
@@ -3059,9 +3154,7 @@ func TestMinimalShoreToggle(t *testing.T) {
 		t.Error("minimal drew no shore pixels after m, want the coastline")
 	}
 
-	// Two presses, because v cycles minimal, 3D, scope.
-	press(scene, 'v')
-	press(scene, 'v')
+	pressView(t, scene, pressViewRound-pressViewMinimal)
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Shore); got != fullScope {
@@ -3087,7 +3180,7 @@ func TestMinimalAirportsToggle(t *testing.T) {
 		t.Fatal("the full scope drew no rule-coloured pixels, so this comparison proves nothing")
 	}
 
-	press(scene, 'v')
+	pressView(t, scene, pressViewMinimal)
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != 0 {
@@ -3101,9 +3194,7 @@ func TestMinimalAirportsToggle(t *testing.T) {
 		t.Error("minimal drew no airfield pixels after a, want the markers")
 	}
 
-	// Two presses, because v cycles minimal, 3D, scope.
-	press(scene, 'v')
-	press(scene, 'v')
+	pressView(t, scene, pressViewRound-pressViewMinimal)
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != fullScope {

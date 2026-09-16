@@ -5,6 +5,10 @@
 // column holding the selected-flight panel, the compact rows and the legend,
 // and a key bar along the bottom.
 //
+// There are four views, which are two pictures times two amounts of
+// furniture: flat or in perspective, with the chrome or with none of it. v
+// cycles them and view.go is where the two questions are asked.
+//
 // Aircraft are coloured by altitude band or by operator, which is what the c
 // key and --colour pick between. Airline colours come from pkg/airlines and
 // are adapted to whichever field the palette draws on.
@@ -28,13 +32,16 @@
 // Minimal mode is the aircraft and their trails on the bare field, edge to
 // edge, with no header, no key bar, no column and no furniture at all. The
 // keys keep working: the airfield and shore toggles still change state while
-// it is on, they simply have nothing to draw.
+// it is on, they simply have nothing to draw. The bare 3D view is the same
+// idea tilted, and the two share one pair of overlay toggles.
 //
 // Every size comes from the canvas bounds and the metrics of the face it is
 // set in. A block that does not fit is dropped rather than drawn over its
 // neighbour, so the same scene renders at 1280x720 on the panel and on a
 // canvas of a few dozen pixels. Below 640 pixels wide the right column goes;
-// below 320 pixels tall the labels go.
+// below 320 pixels tall the labels go. The w key takes the column away at any
+// width, which gives the scope and the 3D view the whole frame between the
+// header and the key bar.
 //
 // A Scene carries the selection, the range mode and the trail toggle, so it
 // is not safe for concurrent use. The run loop calls Draw and Handle from one
@@ -198,10 +205,24 @@ type Scene struct {
 	shoreOn  bool
 	shoreSet *shore.Set
 
-	// shown is which of the three views is on screen, which the v key cycles
-	// and --view picks the start of. The minimal and perspective helpers in
-	// view.go are how everything else asks.
+	// shown is which of the four views is on screen, which the v key cycles
+	// and --view picks the start of. The minimal, perspective and bare helpers
+	// in view.go are how everything else asks.
 	shown View
+
+	// wide is whether the right column is off the frame and the picture has
+	// the whole width between the header and the key bar, which the w key
+	// toggles.
+	//
+	// It starts off. The column is where the selected flight, the rows and the
+	// legend are read, and a scope that opened without them would be one whose
+	// numbers an operator had to go looking for. No flag carries it either:
+	// hiding the figures is something you do while looking at the scope,
+	// not something you decide before the program starts.
+	//
+	// Minimal has no column, so the flag changes nothing there and the w key
+	// is not bound while it is on screen. See toggleWide.
+	wide bool
 
 	// minimalShore and minimalAirports are minimal mode's own copies of the
 	// two overlay toggles, and they are what m and a flip while it is on.
@@ -453,9 +474,9 @@ func WithSprite(icon *sprite.Bitmap) Option {
 // Auto range, the airfield markers and the shore all start on, the trails
 // start on trailLong and the colour mode on altitude, which is the state the
 // scope is most useful in when nobody has touched a key yet. The view starts on the scope: the
-// other two are views to switch to, not ones to explain on first sight. The
+// other three are views to switch to, not ones to explain on first sight. The
 // camera starts orbiting with its envelope drawn, because a 3D view arrived at
-// by pressing v twice should be doing the thing it was added for.
+// by pressing v once should be doing the thing it was added for.
 func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option) *Scene {
 	scene := &Scene{
 		faces:      faces,
@@ -499,6 +520,12 @@ type layout struct {
 	top    int
 	bottom int
 	labels bool
+
+	// wide is the w key's answer, copied out of the scene so split can carve
+	// the frame without reaching back for it. The background layer measures
+	// through the same function, which is what keeps the rings it draws under
+	// the aircraft Draw puts on top of them.
+	wide bool
 }
 
 // Draw paints one frame.
@@ -549,11 +576,14 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// to the heap and that is the one allocation a frame would otherwise make.
 	lay := s.newLayout(dst)
 
-	// Minimal is the aircraft and nothing else, edge to edge. It skips the
+	// A bare view is the aircraft and nothing else, edge to edge. It skips the
 	// three blocks that would take room off the canvas, so the traffic gets
-	// the whole frame rather than the square the column left behind.
-	if s.minimal() {
-		s.drawTraffic(&lay, frame)
+	// the whole frame rather than the square the column left behind. The scope
+	// box is the canvas itself, which is what the tilted one frames its camera
+	// against; the flat one measures its own projection and never reads it.
+	if s.bare() {
+		lay.scope = lay.dst.Bounds()
+		s.drawScope(&lay, frame, elapsed)
 
 		return
 	}
@@ -565,12 +595,12 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	s.drawColumn(&lay, frame)
 }
 
-// drawScope paints whatever the box beside the column holds in the view on
-// screen: the flat scope, or the perspective one.
+// drawScope paints whatever the scope box holds in the view on screen: the
+// flat picture, or the perspective one.
 //
-// The header, the column and the key bar are the same furniture either way,
-// which is the whole reason the 3D view slots in here rather than taking the
-// canvas the way minimal does. Only the picture changes.
+// It is the seam the four views meet at. Which picture is drawn is one
+// question and how much furniture surrounds it is another, so the two bare
+// views come through here as well, with the box set to the whole canvas.
 func (s *Scene) drawScope(lay *layout, frame source.Frame, elapsed time.Duration) {
 	if s.perspective() {
 		s.draw3D(lay, frame, elapsed)
@@ -587,7 +617,7 @@ func (s *Scene) drawScope(lay *layout, frame source.Frame, elapsed time.Duration
 // is not all border. Taking an eighth also means two margins can never take
 // more than a quarter of the width, so the box left over is always at least a
 // pixel wide and there is nothing to guard against.
-func (*Scene) newLayout(dst *canvas.Canvas) layout {
+func (s *Scene) newLayout(dst *canvas.Canvas) layout {
 	bounds := dst.Bounds()
 	margin := min(baseMargin, min(bounds.Dx(), bounds.Dy())/marginDivisor)
 
@@ -598,6 +628,7 @@ func (*Scene) newLayout(dst *canvas.Canvas) layout {
 		top:    bounds.Min.Y + margin,
 		bottom: bounds.Max.Y - margin,
 		labels: bounds.Dy() >= minLabelHeight,
+		wide:   s.wide,
 	}
 }
 
@@ -607,9 +638,26 @@ func (*Scene) newLayout(dst *canvas.Canvas) layout {
 // The scope is square because a range ring has to be a circle; a scope
 // stretched to fill an oblong box would put the same number of nautical miles
 // at different pixel distances depending on the bearing.
+//
+// The w key is the one case where the box is not square. There is no column
+// beside it to leave room for, so the box is everything and the two views make
+// their own use of it: the flat scope puts the same circle in the middle of
+// it, the perspective one fills it.
 func (l *layout) split() {
 	width, height := l.right-l.left, l.bottom-l.top
 	if width <= 0 || height <= 0 {
+		return
+	}
+
+	// A wide scope takes the whole box and leaves no column, which is what the
+	// w key asks for. The flat view draws the same rings in it: geometry sizes
+	// them by the box's short edge, which is still the height, and centres
+	// them in it, so the ring keeps the radius it had and moves to the middle
+	// of the frame. The 3D view frames its camera on the box's width and
+	// genuinely grows with it.
+	if l.wide {
+		l.scope = image.Rect(l.left, l.top, l.right, l.bottom)
+
 		return
 	}
 

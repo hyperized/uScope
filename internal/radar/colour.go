@@ -160,7 +160,7 @@ type Settings struct {
 	// itself to the fleet.
 	RangeNm float64
 
-	// View is which of the three pictures the scene starts on. Zero reads as
+	// View is which of the four pictures the scene starts on. Zero reads as
 	// ViewScope, which is where a run begins before anyone presses v.
 	View View
 
@@ -168,9 +168,9 @@ type Settings struct {
 	// means nobody asked, which leaves DefaultExaggerate in place.
 	Exaggerate float64
 
-	// Recentre is how often minimal mode refits itself on the traffic. Zero is
-	// off, which is the scene's own default and keeps minimal mode centred on
-	// the receiver.
+	// Recentre is how often a bare view refits itself on the traffic. Zero is
+	// off, which is the scene's own default and keeps both bare views centred
+	// on the receiver.
 	//
 	// --recenter holds DefaultRecentre instead, because a directional antenna
 	// puts every contact in one half of the canvas and following them is what

@@ -289,12 +289,18 @@ func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
 // would catch a per-ghost allocation in drawGhost or ghostColour if one crept
 // in.
 //
-// The last two are the aircraft models. Every scope frame draws one in the
-// row table's attitude cell and every 3D frame draws one per contact, each of
-// them fourteen vertices rotated, projected and filled. All of that runs
+// The two model cases are the aircraft shapes. Every scope frame draws one in
+// the row table's attitude cell and every 3D frame draws one per contact, each
+// of them fourteen vertices rotated, projected and filled. All of that runs
 // through fixed arrays on the Scene, and this is what says so: a model that
 // reached for a slice would show up here as one allocation per aircraft per
 // frame.
+//
+// The last three are the views and the column the w key hides. The bare 3D
+// view walks the fleet again for a centroid and projects the traffic through
+// the same camera; the two wide cases draw into a sub-canvas half again as
+// large, which is where a per-frame canvas allocation would show up if the
+// window were ever rebuilt on a frame that had not resized.
 //
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
@@ -303,6 +309,7 @@ func TestDrawAllocations(t *testing.T) {
 		set     radar.Settings
 		presses int
 		ghosts  bool
+		wide    bool
 	}{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
@@ -332,11 +339,24 @@ func TestDrawAllocations(t *testing.T) {
 			set:     radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
 			presses: pressOff,
 		},
+		{
+			name: "the bare 3D view following the traffic",
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Recentre: radar.DefaultRecentre,
+			},
+		},
+		{name: "the scope with the column hidden", set: radar.Settings{Colour: radar.ColourAltitude}, wide: true},
+		{
+			name: "the 3D view with the column hidden",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			wide: true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := sceneFor(t, testCase.ghosts)
 			scene.Apply(testCase.set)
 			pressTrails(t, scene, testCase.presses)
+			pressWide(t, scene, testCase.wide)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.
@@ -368,6 +388,10 @@ func TestDrawAllocations(t *testing.T) {
 // difference between the two is what a frame's worth of models costs on its
 // own. The flat cases price the fortieth of that the row table's attitude
 // cells come to.
+//
+// The last three price the views the four-way cycle added and the wider box
+// the w key gives the picture. Against their narrow twins, the two wide cases
+// are what a scope with the whole frame to itself costs.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range []struct {
 		name    string
@@ -375,6 +399,7 @@ func BenchmarkDraw(b *testing.B) {
 		pal     theme.Palette
 		presses int
 		ghosts  bool
+		wide    bool
 	}{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
 		{name: "altitude/paper", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Paper},
@@ -401,12 +426,27 @@ func BenchmarkDraw(b *testing.B) {
 			pal:     theme.Night,
 			presses: pressOff,
 		},
+		{
+			name: "minimal3d-following/night",
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Recentre: radar.DefaultRecentre,
+			},
+			pal: theme.Night,
+		},
+		{name: "wide/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night, wide: true},
+		{
+			name: "3d-wide/night",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			pal:  theme.Night,
+			wide: true,
+		},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
 			scene, canv := sceneFor(b, testCase.ghosts)
 			scene.Apply(testCase.set)
 			scene.SetPalette(testCase.pal)
 			pressTrails(b, scene, testCase.presses)
+			pressWide(b, scene, testCase.wide)
 
 			b.ReportAllocs()
 			b.ResetTimer()

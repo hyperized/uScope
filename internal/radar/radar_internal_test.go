@@ -3441,9 +3441,9 @@ func TestPlanCardDropsTheValueLineWhenNarrow(t *testing.T) {
 	}
 }
 
-// TestCapOn checks which key caps are drawn filled: the four toggles follow
-// their own setting, and everything else is always on, because a key with no
-// off state has nothing to say by being hollow.
+// TestCapOn checks which key caps are drawn filled: every toggle follows its
+// own setting, and everything else is always on, because a key with no off
+// state has nothing to say by being hollow.
 func TestCapOn(t *testing.T) {
 	t.Parallel()
 
@@ -3474,6 +3474,8 @@ func TestCapOn(t *testing.T) {
 		{name: "quit is always on", scene: Scene{}, toggle: capAlways, want: true},
 		{name: "the colour cap is always on", scene: Scene{}, toggle: capColour, want: true},
 		{name: "the theme cap is always on", scene: Scene{}, toggle: capTheme, want: true},
+		{name: "wide on", scene: Scene{wide: true}, toggle: capWide, want: true},
+		{name: "wide off", scene: Scene{}, toggle: capWide, want: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3668,6 +3670,11 @@ func TestCapLabel(t *testing.T) {
 		{
 			name: "so does a key that is not a toggle", scene: Scene{},
 			entry: keyCap{key: "Q", label: "QUIT"}, want: "QUIT",
+		},
+		{
+			name:  "the wide cap keeps its own label whichever way it is set",
+			scene: Scene{wide: true},
+			entry: keyCaps[11], want: "WIDE",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

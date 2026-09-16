@@ -414,7 +414,7 @@ func TestSectorReach(t *testing.T) {
 		cappedSect = 9
 	)
 
-	view := scene3{scopeNm: cameraRangeNm}
+	view := scene3{scopeNm: cameraRangeNm, reachNm: cameraRangeNm}
 
 	t.Run("an empty band draws nothing", func(t *testing.T) {
 		t.Parallel()
@@ -488,7 +488,7 @@ func TestSectorPoint(t *testing.T) {
 		tolerance = 1e-9
 	)
 
-	view := scene3{scopeNm: cameraRangeNm, upScale: DefaultExaggerate / ftPerNm}
+	view := scene3{scopeNm: cameraRangeNm, reachNm: cameraRangeNm, upScale: DefaultExaggerate / ftPerNm}
 
 	// Sector 0 spans 0 to 22.5 degrees, so its centre bearing is 11.25.
 	point := view.sectorPoint(0, 0, radiusNm)
@@ -539,6 +539,7 @@ func TestProjectRefusals(t *testing.T) {
 		origin:  geo{lat: layerBaseLat, lon: layerBaseLon},
 		cosLat0: math.Cos(layerBaseLat * math.Pi / halfCircle),
 		scopeNm: cameraRangeNm,
+		reachNm: cameraRangeNm,
 		upScale: DefaultExaggerate / ftPerNm,
 	}
 
@@ -738,6 +739,7 @@ func envelopeFixture() (*Scene, scene3) {
 		origin:   geo{lat: layerBaseLat, lon: layerBaseLon},
 		cosLat0:  math.Cos(layerBaseLat * math.Pi / halfCircle),
 		scopeNm:  cameraRangeNm,
+		reachNm:  cameraRangeNm,
 		upScale:  DefaultExaggerate / ftPerNm,
 		minSegNm: fixtureMinSegNm,
 	}

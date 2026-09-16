@@ -30,6 +30,22 @@ const (
 	// segments drawn out of every four, so a ring is half line and half air.
 	bowlDashOn     = 2
 	bowlDashPeriod = 4
+
+	// minimalReach3 is how far past the range the bare 3D view draws, as a
+	// multiple of it.
+	//
+	// The flat bare view works its own cut-off out from the canvas corner,
+	// because there a position either lands on a pixel or it does not, and the
+	// corners are meant to show traffic a ring would have cut off. Perspective
+	// has no such answer: how far the picture reaches depends on the tilt, and
+	// a point behind the camera is not far away at all. So it is a multiple of
+	// the range, and the camera's own guard drops whatever still lands off the
+	// picture. Two radii is past anything the camera frames at any tilt.
+	//
+	// The full 3D view keeps the range itself, because there the outer ring is
+	// the edge of the world and an aeroplane drawn outside it would sit beyond
+	// the only thing that says how far the picture goes.
+	minimalReach3 = 2.0
 )
 
 // dashPattern breaks a projected circle up: on segments drawn out of every
@@ -79,6 +95,11 @@ type scene3 struct {
 	scopeNm float64
 	azimuth float64
 
+	// reachNm is how far from the origin the ground furniture and the traffic
+	// are drawn, which is the range in the full view and further out in the
+	// bare one. See minimalReach3.
+	reachNm float64
+
 	// upScale is how many nautical miles of world one foot of altitude is
 	// worth, which is the exaggeration divided by the feet in a mile.
 	upScale float64
@@ -120,11 +141,11 @@ func (v scene3) height(altitudeFt float64) float64 {
 	return altitudeFt * v.upScale
 }
 
-// inRange reports whether a point is inside the range the ground furniture is
+// inRange reports whether a point is inside the reach the ground furniture is
 // drawn to, measured on the floor so an aircraft is judged by where it is
 // rather than by how high it is.
 func (v scene3) inRange(point point3) bool {
-	return math.Hypot(point.east, point.north) <= v.scopeNm
+	return math.Hypot(point.east, point.north) <= v.reachNm
 }
 
 // world is where one aircraft fix sits in the 3D view's world: its shadow on
@@ -164,18 +185,52 @@ func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration
 		return scene3{}, false
 	}
 
-	origin := geo{lat: frame.Receiver.Latitude, lon: frame.Receiver.Longitude}
+	origin := s.origin3(frame.Receiver)
 
 	return scene3{
 		cam:       cam,
 		origin:    origin,
 		cosLat0:   math.Cos(origin.lat * math.Pi / halfCircle),
 		scopeNm:   scopeNm,
+		reachNm:   s.reach3(scopeNm),
 		azimuth:   azimuth,
 		upScale:   upScale,
 		minSegNm:  2 * scopeNm * shoreMinSegment / (ringSpan * float64(lay.scope.Dx())),
 		plottable: positioned(origin.lat, origin.lon),
 	}, true
+}
+
+// origin3 is the point the 3D picture is projected from.
+//
+// The bare view follows the traffic the way the flat bare one does, so its
+// origin is the same centre minimal projects around. The full view never
+// recentres: its range rings are measured from the receiver and its envelope
+// is drawn around the antenna, so a centre that moved would make both lie.
+func (s *Scene) origin3(receiver source.Receiver) geo {
+	if s.bare() {
+		return s.minimalOrigin(receiver)
+	}
+
+	return geo{lat: receiver.Latitude, lon: receiver.Longitude}
+}
+
+// reach3 is how far from the origin the picture is drawn. See minimalReach3.
+func (s *Scene) reach3(scopeNm float64) float64 {
+	if s.bare() {
+		return scopeNm * minimalReach3
+	}
+
+	return scopeNm
+}
+
+// envelopeDrawn reports whether the receiving envelope is on screen.
+//
+// The bare 3D view never draws it, whatever the e key has the flag set to. The
+// envelope is the largest piece of furniture in the picture and that view
+// exists to have none; the key is refused there rather than silently ignored,
+// for the reason toggleEnvelope gives.
+func (s *Scene) envelopeDrawn() bool {
+	return s.envelope && !s.bare()
 }
 
 // draw3D paints the perspective view: the ground, the envelope around it, and
@@ -207,9 +262,9 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 
 	clipped.dst = window
 
-	s.drawGround3(&clipped, view)
+	s.drawGround3(&clipped, view, frame.Receiver)
 
-	if s.envelope {
+	if s.envelopeDrawn() {
 		s.drawBowl3(window, view)
 		s.drawMeasured3(window, view, frame.Coverage)
 	}
@@ -244,23 +299,67 @@ func (s *Scene) window(dst *canvas.Canvas, box image.Rectangle) (*canvas.Canvas,
 }
 
 // drawGround3 paints the floor of the world: the coastline under everything,
-// then the range rings, the cardinal letters and the airfields.
+// then the centre marks and the airfields.
 //
-// The two overlays read the scope view's own toggles rather than minimal's
-// pair. The 3D view is a map with aircraft above it, which is what the scope
-// is; minimal is aircraft with nothing behind them, which is why it keeps a
-// pair of its own.
-func (s *Scene) drawGround3(lay *layout, view scene3) {
+// The two overlays ask shoreDrawn and airportsDrawn rather than reading a
+// field, so the full view gets the scope's pair and the bare one gets the pair
+// the bare views keep between them, which starts off.
+func (s *Scene) drawGround3(lay *layout, view scene3, receiver source.Receiver) {
 	if view.plottable && s.shoreDrawn() {
 		s.drawShore3(lay.dst, view)
 	}
 
-	s.drawRings3(lay.dst, view)
-	s.drawCardinals3(lay, view)
+	s.drawGroundMarks3(lay, view, receiver)
 
 	if view.plottable && s.airportsDrawn() {
 		s.drawAirports3(lay, view, airports.All())
 	}
+}
+
+// drawGroundMarks3 puts down whichever mark the view on screen keeps at the
+// middle of the world.
+//
+// The full view has the range rings and the four cardinal letters, which are
+// what say how far the picture reaches and which way round it is. The bare one
+// has neither and carries the receiver's own marker instead, for the reason
+// the flat bare view carries one: it follows the traffic, so the antenna ends
+// up wherever it happens to fall on a field with nothing else to find it
+// against.
+func (s *Scene) drawGroundMarks3(lay *layout, view scene3, receiver source.Receiver) {
+	if s.bare() {
+		s.drawReceiver3(lay.dst, view, receiver)
+
+		return
+	}
+
+	s.drawRings3(lay.dst, view)
+	s.drawCardinals3(lay, view)
+}
+
+// drawReceiver3 marks the receiver's own position on the ground of a picture
+// that is no longer centred on it.
+//
+// It is drawReceiver's rule in perspective, down to the radius and the muted
+// ring coloured by the fix mode, so the antenna reads the same in both bare
+// views and never reads as a contact.
+//
+// There is no bounding test of its own. The camera refuses a point behind the
+// lens or far outside the box, which is exactly the case the flat version has
+// to check for by hand.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawReceiver3(dst *canvas.Canvas, view scene3, receiver source.Receiver) {
+	if !positioned(receiver.Latitude, receiver.Longitude) {
+		return
+	}
+
+	x, y, ok := view.cam.at(view.ground(receiver.Latitude, receiver.Longitude))
+	if !ok {
+		return
+	}
+
+	dst.Circle(x, y, receiverRadius, s.fixColour(receiver.Mode, s.pal.Muted))
+	dst.FillCircle(x, y, 1, s.pal.Muted)
 }
 
 // drawRings3 draws the same range rings the scope view does, projected onto
@@ -335,7 +434,7 @@ func (s *Scene) drawShore3(dst *canvas.Canvas, view scene3) {
 		return
 	}
 
-	latSpan := view.scopeNm / nmPerDegree
+	latSpan := view.reachNm / nmPerDegree
 	lonSpan := latSpan / max(view.cosLat0, minCosLat)
 
 	s.shoreSet.Within(
@@ -359,7 +458,7 @@ func (s *Scene) drawShoreLine3(dst *canvas.Canvas, view scene3, line shore.Polyl
 		return
 	}
 
-	ring := circle{radius: view.scopeNm}
+	ring := circle{radius: view.reachNm}
 	from := view.ground(line[0].Lat, line[0].Lon)
 
 	for index := 1; index < len(line); index++ {
@@ -426,9 +525,10 @@ func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airpor
 // same reason: live traffic is never hidden under the track of something that
 // is no longer there.
 //
-// Minimal mode's rules do not apply here. The selection keeps its ring and its
-// label, because the column beside the picture is still on screen for them to
-// refer to.
+// The selection keeps its ring and its label in the full view, because the
+// column beside the picture is still on screen for them to refer to, and loses
+// both in the bare one for the reason the flat bare view drops them: there is
+// no type anywhere for a ring to point at.
 //
 // The filter's do apply, and they take the whole aircraft with them: no trail,
 // no stalk, no model and no label. It asks the same predicate the flat scope
@@ -528,7 +628,7 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) 
 	centre := view.world(plane.Latitude, plane.Longitude, plane.Altitude)
 	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col)
 
-	if plane.ICAO == s.selICAO {
+	if !s.bare() && plane.ICAO == s.selICAO {
 		s.drawSelection(lay, x, y, plane)
 	}
 }

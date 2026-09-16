@@ -70,6 +70,7 @@ func TestParseView(t *testing.T) {
 		{name: "the scope", in: "scope", want: radar.ViewScope},
 		{name: "minimal", in: "minimal", want: radar.ViewMinimal},
 		{name: "the 3D view", in: "3d", want: radar.View3D},
+		{name: "the bare 3D view", in: "minimal3d", want: radar.ViewMinimal3D},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -87,7 +88,7 @@ func TestParseView(t *testing.T) {
 }
 
 // TestParseViewRejections checks that ParseView refuses everything that is not
-// one of the three exact spellings, the default included.
+// one of the four exact spellings, the default included.
 func TestParseViewRejections(t *testing.T) {
 	t.Parallel()
 
@@ -130,10 +131,11 @@ func TestViewNext(t *testing.T) {
 		in   radar.View
 		want radar.View
 	}{
-		{name: "the scope goes to minimal", in: radar.ViewScope, want: radar.ViewMinimal},
-		{name: "minimal goes to 3D", in: radar.ViewMinimal, want: radar.View3D},
-		{name: "3D comes back to the scope", in: radar.View3D, want: radar.ViewScope},
-		{name: "the zero value moves like the scope", in: "", want: radar.ViewMinimal},
+		{name: "the scope goes to 3D", in: radar.ViewScope, want: radar.View3D},
+		{name: "3D goes to minimal", in: radar.View3D, want: radar.ViewMinimal},
+		{name: "minimal goes to the bare 3D view", in: radar.ViewMinimal, want: radar.ViewMinimal3D},
+		{name: "the bare 3D view comes back to the scope", in: radar.ViewMinimal3D, want: radar.ViewScope},
+		{name: "the zero value moves like the scope", in: "", want: radar.View3D},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -570,14 +572,18 @@ func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	orbitCapBox    = image.Rect(780, 686, 796, 704)
-	envelopeCapBox = image.Rect(850, 686, 866, 704)
-	turnCapBox     = image.Rect(938, 686, 960, 704)
-	tiltCapBox     = image.Rect(1008, 686, 1036, 704)
+	orbitCapBox    = image.Rect(844, 686, 860, 704)
+	envelopeCapBox = image.Rect(914, 686, 930, 704)
+	turnCapBox     = image.Rect(1002, 686, 1024, 704)
+	tiltCapBox     = image.Rect(1072, 686, 1100, 704)
 
-	// scopeBarTail is the part of the bar row the eleven shared caps never
+	// scopeBarTail is the part of the bar row the twelve shared caps never
 	// reach, which is where all four of the boxes above sit.
-	scopeBarTail = image.Rect(782, 686, 1280, 704)
+	//
+	// All five moved 64 pixels right when W WIDE joined keyCaps: the bar is
+	// laid out left to right, so a cap added before these takes everything
+	// after it along.
+	scopeBarTail = image.Rect(846, 686, 1280, 704)
 )
 
 // TestView3DKeyBarListsTheCameraKeys checks that all four of the view's keys
@@ -632,7 +638,7 @@ func TestView3DKeyBarListsTheCameraKeys(t *testing.T) {
 	}
 }
 
-// TestView3DKeyBarFitsAtPanelWidth checks that fourteen caps and their labels
+// TestView3DKeyBarFitsAtPanelWidth checks that sixteen caps and their labels
 // still stop short of the right margin.
 //
 // The bar has no wrapping and no eliding: drawCaps stops after the cap that

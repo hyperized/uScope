@@ -115,7 +115,7 @@ var (
 	errPNGBoth    = errors.New(appName + ": --png and --backend disagree")
 	errPNGPath    = errors.New(appName + ": --backend png needs --png PATH to write to")
 	errRecentre   = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
-	errView       = errors.New(appName + ": --view must be scope, minimal or 3d")
+	errView       = errors.New(appName + ": --view must be scope, 3d, minimal or minimal3d")
 	errExaggerate = errors.New(appName + ": --exaggerate out of range")
 	errGPSD       = errors.New(appName + ": --gpsd must be off or HOST:PORT")
 )
@@ -264,7 +264,7 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.recentre, "recenter", defaultRecentre,
 		"how often minimal mode recentres on the traffic, 10s to 1h, or 0 to stay on the receiver")
 	set.StringVar(&raw.view, "view", defaultView,
-		"which view the radar starts on: scope, minimal or 3d. v cycles them while it runs")
+		"which view the radar starts on: scope, 3d, minimal or minimal3d. v cycles them while it runs")
 	set.Float64Var(&raw.exaggerate, "exaggerate", radar.DefaultExaggerate,
 		"how far the 3d view stretches altitude into height, 1 to 20")
 	set.StringVar(&raw.battery, "battery", "",

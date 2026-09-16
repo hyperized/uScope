@@ -232,8 +232,13 @@ packed format and how to rebuild it; `make shore-data` is the one command.
 `v` while the radar is running strips the scene back to the aircraft sprites
 and their trails on the bare field, edge to edge. No header, no key bar, no
 right column, no rings, cardinals, range labels or home marker. A run starts on
-the full scope and `v` cycles from there: scope, minimal, 3D, scope. `--view`
-picks which one it starts on instead.
+the full scope and `v` cycles from there: scope, 3D, minimal, bare 3D, scope.
+`--view` picks which one it starts on instead.
+
+The order changes one thing at a time. The first press tilts the picture, the
+second takes the furniture away, the third tilts it again and the fourth puts
+everything back, so the two flat views and the two perspective ones are each a
+single press apart.
 
 The picture fills the canvas with the range mapped to half the short edge, and
 nothing is clipped to a ring, so the corners show traffic that a ring would
@@ -283,6 +288,9 @@ aircraft on it and minimal is aircraft with nothing behind them: one shared
 pair would have meant two key presses on the way in and two more on the way
 back out.
 
+The bare 3D view reads the same pair. It is one choice about how much furniture
+a bare picture carries, and the two bare views are a single press apart.
+
 Turned on, the coastline and the airfield markers are drawn the way the full
 scope draws them, around minimal's own centre and range, ICAO codes included.
 There are no range labels in minimal mode for a code to collide with, so
@@ -290,7 +298,7 @@ nothing is dropped for want of room beside one.
 
 ### The 3D view
 
-Press `v` twice and the scope box becomes a perspective picture: the same
+Press `v` once and the scope box becomes a perspective picture: the same
 traffic seen from a camera orbiting the receiver, with altitude drawn as height
 instead of as colour. Only that square changes. The header, the right column
 and the key bar are the same furniture they were.
@@ -356,7 +364,7 @@ elevation, starting at thirty-five.
 The bar lists all four while the view is up: `O ORBIT`, `E ENVELOPE`, a cap
 with the two arrows labelled `TURN`, and `[ ]` for `TILT`. The orbit and
 envelope caps are filled while their setting is on and hollow when it is off.
-None of the four appears in the other two views, where the keys do nothing.
+None of the four appears in the two flat views, where the keys do nothing.
 
 #### The envelope
 
@@ -404,6 +412,49 @@ orbit is running, so a cached picture would be rebuilt each time and cost the
 same drawing plus a copy of the canvas on top. It draws straight into the frame
 instead, clipped to the scope box so nothing lands on the flight list, and it
 still allocates nothing.
+
+#### The bare 3D view
+
+`--view minimal3d`, or the third press of `v`, is what minimal is to the scope,
+done to the perspective picture. The models on their stalks, their trails in
+the air and the receiver's own marker, across the whole canvas. No header, no
+key bar, no column, and on the ground no rings, no cardinal letters, no range
+labels and no envelope.
+
+It follows the traffic the way minimal does, on the same `--recenter` cadence
+and the same two-second glide, and it refits the range around the same centre.
+The camera keys are the ones the full view uses: the orbit runs, Left and Right
+nudge it, `[` and `]` tilt it. `e` is the one that does not, because there is no
+envelope to toggle; like the camera keys outside the 3D views, it falls through
+rather than changing a setting nothing on screen could show.
+
+`a` and `m` reach the bare pair of overlay toggles, so the coastline and the
+airfields can be put back on the ground a piece at a time. The selection keys
+still move the selection and nothing is drawn for it, which is minimal's rule:
+there is no card and no row table anywhere for a ring to refer to.
+
+### Hiding the column
+
+`w` takes the right column off the frame, and the picture gets the whole width
+between the header band and the key bar. The card, the compact rows and the
+legend go together; the header and the key bar stay exactly where they are, and
+`W WIDE` in the bar is filled while the column is away.
+
+The two views behave differently under it, because they measure the box
+differently. The flat scope keeps the ring it had, sized by the height, and
+moves it to the middle of the frame: the same picture with air either side
+instead of a flight list. The perspective view genuinely grows, because its
+lens is the box's own width, so the outer ring still spans about 85 percent of
+whatever it is given and everything on the ground comes out proportionally
+larger.
+
+The selection keys keep working with the column away, and so does the filter.
+The scope still shows which aircraft is selected; what is gone is the block
+that said anything about it, and the count that went with the rows.
+
+There is no flag for it. Hiding the figures is something you do while looking
+at the scope rather than something you decide before the program starts. The
+two bare views have no column, so `w` falls through there.
 
 ### Colour modes
 
@@ -496,8 +547,20 @@ The band bleeds to the top, left and right edges rather than sitting inside the
 page margin, and the hairline under it runs the full width. Inside the margin
 it reads as a navy rectangle on a page rather than as a masthead, which is
 visible only on the paper theme: night's band is the field colour. The type
-keeps its inset, so the margin is the band's inner padding and nothing else on
-the frame moves for it.
+keeps its horizontal inset, so the margin is the band's inner padding on the
+left and nothing else on the frame moves for it.
+
+Vertically the type is centred in what the fill covers rather than in the room
+the layout reserves under the margin. The two are a whole margin apart, and
+measured against the second the band sat with twenty-two pixels of air over the
+wordmark and six under the receiver line, which on something that reads as a
+masthead is the first thing anyone notices. The clocks and the battery share
+the same centre, so the band reads level right across.
+
+The wordmark reads `uScope`, in the project's own spelling rather than in the
+all-caps every label in the scene uses. A wordmark is a name and not a label.
+Set `USCOPE`, it made the band the one place in the project that disagreed with
+the binary, the repository and this file about what the thing is called.
 
 The wordmark and the ingest source on the left, with a filled dot when the
 source is connected and a hollow one when it is not. The receiver's position
@@ -838,7 +901,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | Key | Does |
 |---|---|
 | `q`, `Q` | quit |
-| `v`, `V` | view: cycle scope, minimal, 3D |
+| `v`, `V` | view: cycle scope, 3D, minimal, bare 3D |
 | `n`, `N`, Down | select the next aircraft |
 | `p`, `P`, Up | select the previous one |
 | `+`, `=` | widen the range by one step, and turn auto off |
@@ -850,19 +913,25 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `f`, `F` | cycle the filter to one entry of the current legend, then back to all |
 | `l`, `L` | cycle the colour theme |
+| `w`, `W` | hide the right column and give the picture the whole width |
 | `b`, `B` | bias-tee on or off; only bound when the source has one |
-| `e`, `E` | 3D view only: the receiving envelope on or off |
-| `o`, `O` | 3D view only: the camera orbit on or off |
-| Left, Right | 3D view only: nudge the camera 15 degrees and stop the orbit |
-| `[`, `]` | 3D view only: tilt the camera, 10 to 80 degrees |
+| `e`, `E` | full 3D view only: the receiving envelope on or off |
+| `o`, `O` | either 3D view: the camera orbit on or off |
+| Left, Right | either 3D view: nudge the camera 15 degrees and stop the orbit |
+| `[`, `]` | either 3D view: tilt the camera, 10 to 80 degrees |
 | `Esc` | in the radar, hand the selection back to the nearest aircraft |
 | `Ctrl-C` | quit |
 
-The four camera keys are claimed by the 3D view and by nothing else. In the
-scope and minimal views there is no camera to move and no envelope to toggle,
-so they fall through to the run loop rather than quietly changing state nothing
-on screen could show. The key bar says the same thing from its side: `O ORBIT`,
-`E ENVELOPE`, `TURN` and `TILT` only appear while the 3D view is up.
+The four camera keys are claimed by the two perspective views and by nothing
+else. In the scope and minimal views there is no camera to move and no envelope
+to toggle, so they fall through to the run loop rather than quietly changing
+state nothing on screen could show. The key bar says the same thing from its
+side: `O ORBIT`, `E ENVELOPE`, `TURN` and `TILT` only appear while the full 3D
+view is up. `e` follows the same rule one level further in: the bare 3D view
+draws no envelope, so it does not take the key either.
+
+`w` is the mirror image. It is claimed by the two views that have a column and
+falls through in the two that do not.
 
 Both cases are bound because caps lock is easy to hit by accident on the
 uConsole's keyboard, and the unshifted twins of `+` and `-` are bound for the
@@ -870,7 +939,7 @@ same reason.
 
 The letters name what they do rather than where the thing lives: `r` for range,
 `a` for airports, `m` for map, `t` for trails, `c` for colour, `l` for look,
-`v` for view, `b` for bias-tee.
+`v` for view, `w` for wide, `b` for bias-tee.
 
 `b` behaves like the camera keys: it does nothing and falls through to the run
 loop on a source with no dongle behind it, and the `B BIAS-T` cap stays off the
@@ -884,7 +953,7 @@ nothing on the draw path can block on the bus.
 The radar scene gets first refusal on every key and passes on the ones it does
 not want, which is what keeps `q` working while it is on screen. `v` is one of
 the ones it takes: pressing it never reaches the run loop, because it is the
-radar's own cycle through its three views. The pattern scene binds
+radar's own cycle through its four views. The pattern scene binds
 nothing, so Esc still quits from it.
 
 Until you choose an aircraft, the selection is the nearest contact and the rows
@@ -905,7 +974,7 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
 | `--scene` | `radar` | `radar` or `pattern`; `pattern` is a flags-only diagnostic with no key back to it |
 | `--theme` | `night` | `night` or `paper` colour theme |
-| `--view` | `scope` | which view the radar starts on: `scope`, `minimal` or `3d`; `v` cycles them while it runs |
+| `--view` | `scope` | which view the radar starts on: `scope`, `3d`, `minimal` or `minimal3d`; `v` cycles them while it runs |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
 | `--airports` | `on` | draw the airfield markers: `on` or `off` |
