@@ -70,6 +70,7 @@ const (
 	flagDemo       = "--demo"
 	flagBeast      = "--beast"
 	flagReplay     = "--replay-iq"
+	flagGPSD       = "--gpsd"
 	flagLat        = "--lat"
 	flagLon        = "--lon"
 	flagColour     = "--colour"
@@ -140,6 +141,18 @@ func checkConfig(t *testing.T, got, want config) {
 	}
 }
 
+// wantDefaultGPSD is what parseFlags(nil) puts in config.gpsd. It has to be
+// worked out rather than written as a literal because bind's own default is
+// defaultGPSD(runtime.GOOS): a Linux box gets a real address to try and
+// everything else gets "off", which parseGPSD turns into the empty string.
+func wantDefaultGPSD() string {
+	if runtime.GOOS == linuxGOOS {
+		return defaultGPSDAddress
+	}
+
+	return ""
+}
+
 // defaultConfig is what parseFlags(nil) should produce. Individual tests
 // copy it and override the one field they are exercising.
 func defaultConfig() config {
@@ -156,6 +169,7 @@ func defaultConfig() config {
 		recentre:   radar.DefaultRecentre,
 		view:       radar.ViewScope,
 		exaggerate: radar.DefaultExaggerate,
+		gpsd:       wantDefaultGPSD(),
 	}
 }
 
@@ -752,6 +766,75 @@ func TestDimension(t *testing.T) {
 	}
 }
 
+// TestDefaultGPSD pins which platforms get a real gpsd address to try and
+// which get told to leave it off.
+func TestDefaultGPSD(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		goos string
+		want string
+	}{
+		{name: "linux gets the address", goos: linuxGOOS, want: defaultGPSDAddress},
+		{name: "darwin gets off", goos: "darwin", want: gpsdOff},
+		{name: "windows gets off", goos: "windows", want: gpsdOff},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := defaultGPSD(testCase.goos); got != testCase.want {
+				t.Errorf("defaultGPSD(%q) = %q, want %q", testCase.goos, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestParseGPSD covers parseGPSD directly: the off spelling, a good address
+// passed through unchanged, and every way hostPort can turn one away.
+func TestParseGPSD(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		text    string
+		want    string
+		wantErr bool
+	}{
+		{name: offValue, text: gpsdOff, want: ""},
+		{name: "a good host and port", text: gpsdHostPort, want: gpsdHostPort},
+		{name: "no colon at all", text: "nonsense", wantErr: true},
+		{name: "no host", text: ":2947", wantErr: true},
+		{name: "no port", text: "localhost:", wantErr: true},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseGPSD(testCase.text)
+
+			if testCase.wantErr {
+				if !errors.Is(err, errGPSD) {
+					t.Errorf("parseGPSD(%q) error = %v, want errors.Is(errGPSD)", testCase.text, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseGPSD(%q) unexpected error: %v", testCase.text, err)
+			}
+
+			if got != testCase.want {
+				t.Errorf("parseGPSD(%q) = %q, want %q", testCase.text, got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestBind pins the documented defaults by reading them back off a fresh
 // flag set, the same one an operator would see from --help.
 func TestBind(t *testing.T) {
@@ -774,6 +857,7 @@ func TestBind(t *testing.T) {
 		{name: "backend", flagName: "backend", wantDef: defaultBackend},
 		{name: "frames", flagName: "frames", wantDef: strconv.Itoa(minFrames)},
 		{name: "theme", flagName: "theme", wantDef: defaultTheme},
+		{name: "gpsd", flagName: "gpsd", wantDef: defaultGPSD(runtime.GOOS)},
 	}
 
 	for _, testCase := range tests {
@@ -1382,6 +1466,54 @@ func TestParseFlagsBeastRejections(t *testing.T) {
 	}
 }
 
+// gpsdHostPort is a syntactically valid gpsd address distinct from
+// defaultGPSDAddress, so a test asserting it landed in config.gpsd cannot be
+// fooled by a default that was never overridden.
+const gpsdHostPort = "10.0.0.1:2947"
+
+// TestParseFlagsGPSD covers --gpsd end to end: the off spelling, a good
+// address in both flag forms, and the platform-dependent default.
+func TestParseFlagsGPSD(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: caseDefault, args: nil, want: wantDefaultGPSD()},
+		{name: offValue, args: []string{flagGPSD, gpsdOff}, want: ""},
+		{name: "a host and port", args: []string{flagGPSD, gpsdHostPort}, want: gpsdHostPort},
+		{name: "dash form", args: []string{"-gpsd", gpsdHostPort}, want: gpsdHostPort},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.gpsd = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsGPSDRejections covers the one way --gpsd fails end to end;
+// hostPort's other rejection shapes are already exercised by
+// TestParseFlagsBeastRejections against the same function.
+func TestParseFlagsGPSDRejections(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseFlags([]string{flagGPSD, "nonsense"})
+	if !errors.Is(err, errGPSD) {
+		t.Errorf("parseFlags(--gpsd nonsense) error = %v, want errGPSD", err)
+	}
+}
+
 func TestParseFlagsLocation(t *testing.T) {
 	t.Parallel()
 
@@ -1425,6 +1557,91 @@ func TestParseFlagsLocation(t *testing.T) {
 	}
 }
 
+// TestLocationOptions covers where locationOptions sends the receiver's own
+// position: the operator's coordinates first, a gpsd address second,
+// self-locate last with no option at all to show for it. The first row also
+// carries a gpsd address, to prove the manual branch wins outright rather
+// than adding to it.
+func TestLocationOptions(t *testing.T) {
+	t.Parallel()
+
+	const (
+		manualLat = 51.5
+		manualLon = -0.45
+	)
+
+	t.Run("branches", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name      string
+			cfg       config
+			wantOpts  int
+			wantLines int
+		}{
+			{
+				name: "lat and lon win over gpsd and self-locate",
+				cfg: config{
+					hasLocation: true, latitude: manualLat, longitude: manualLon,
+					gpsd: defaultGPSDAddress,
+				},
+				wantOpts:  1,
+				wantLines: 1,
+			},
+			{name: "a gpsd address with no manual position", cfg: config{gpsd: defaultGPSDAddress}, wantOpts: 1},
+			{name: "neither given falls back to self-locate", cfg: config{}},
+		}
+
+		for _, testCase := range tests {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				var stderr bytes.Buffer
+
+				opts := locationOptions(testCase.cfg, &stderr)
+
+				if len(opts) != testCase.wantOpts {
+					t.Errorf("locationOptions() returned %d options, want %d", len(opts), testCase.wantOpts)
+				}
+
+				if got := strings.Count(stderr.String(), "\n"); got != testCase.wantLines {
+					t.Errorf("locationOptions() wrote %d lines (%q), want %d", got, stderr.String(), testCase.wantLines)
+				}
+			})
+		}
+	})
+
+	// The table above only counts options. This proves the manual one is
+	// wired to the coordinates it was given, by feeding it into a real Live
+	// source and reading the receiver back off a frame, rather than trusting
+	// that the right constructor function was called.
+	t.Run("manual position reaches the receiver", func(t *testing.T) {
+		t.Parallel()
+
+		var stderr bytes.Buffer
+
+		opts := locationOptions(config{hasLocation: true, latitude: manualLat, longitude: manualLon}, &stderr)
+
+		src, err := source.NewLive(opts...)
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		defer func() { _ = src.Close() }()
+
+		receiver := src.Frame().Receiver
+
+		if receiver.Label != source.LabelManual {
+			t.Errorf("Receiver.Label = %q, want %q", receiver.Label, source.LabelManual)
+		}
+
+		if receiver.Latitude != manualLat || receiver.Longitude != manualLon {
+			t.Errorf("Receiver coordinates = (%g, %g), want (%g, %g)",
+				receiver.Latitude, receiver.Longitude, manualLat, manualLon)
+		}
+	})
+}
+
 func TestSourceFor(t *testing.T) {
 	t.Parallel()
 
@@ -1435,6 +1652,7 @@ func TestSourceFor(t *testing.T) {
 		wantLabel  string
 		wantWarn   bool
 		wantSector bool
+		wantNote   string
 	}{
 		{
 			name:      "replay",
@@ -1474,6 +1692,8 @@ func TestSourceFor(t *testing.T) {
 			wantLabel: demoLabel,
 		},
 		{
+			// A position from the operator also turns gpsd and the self-locator
+			// off, and locationOptions says so on stderr, so this case warns.
 			name: "a position is passed through to the live source",
 			cfg: config{
 				source: sourceBeast, beast: beastAddr,
@@ -1481,6 +1701,8 @@ func TestSourceFor(t *testing.T) {
 			},
 			goos:      linuxGOOS,
 			wantLabel: "BEAST " + beastAddr,
+			wantWarn:  true,
+			wantNote:  appName + ": --lat and --lon given: gpsd and self-locate are both off",
 		},
 		{
 			name:       "demo sector crowds the fleet into the north-west quadrant",
@@ -1510,6 +1732,10 @@ func TestSourceFor(t *testing.T) {
 
 			if warned := stderr.Len() > 0; warned != testCase.wantWarn {
 				t.Errorf("warned = %v (%q), want %v", warned, stderr.String(), testCase.wantWarn)
+			}
+
+			if testCase.wantNote != "" && !strings.Contains(stderr.String(), testCase.wantNote) {
+				t.Errorf("sourceFor stderr = %q, want it to contain %q", stderr.String(), testCase.wantNote)
 			}
 
 			if testCase.wantSector {

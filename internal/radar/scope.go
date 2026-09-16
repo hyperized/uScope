@@ -549,11 +549,11 @@ func (s *Scene) drawHome(lay *layout, geom scopeGeometry, mode source.FixMode) {
 //
 // Muted for nothing known, the reading colour for a position the operator
 // typed in, the accent for an estimate with a radius on it, and the altitude
-// ramp for a GPS: red while it is searching, amber for a fix without altitude,
-// green for a full one. The altitude bands are reused rather than given three
-// colours of their own, because they are already the palette's "getting
-// better" ramp and a second set would be three more colours to keep in step
-// across two themes.
+// ramp for a GPS: red for a fix that has gone and is being held on its last
+// position, amber for a fix without altitude, green for a full one. The
+// altitude bands are reused rather than given three colours of their own,
+// because they are already the palette's "getting better" ramp and a second
+// set would be three more colours to keep in step across two themes.
 //
 // The reading colour is passed in rather than taken from the palette, because
 // the header band has its own. The palette's Ink is a dark navy and paper's

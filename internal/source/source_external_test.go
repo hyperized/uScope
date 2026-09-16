@@ -1714,3 +1714,79 @@ func TestLiveSetBiasTee(t *testing.T) {
 		}
 	})
 }
+
+// TestReceiverLastFixAndViolatedZeroWithoutGPS checks that a Receiver never
+// derived from gpsd reports LastFix and Violated at their zero values: a
+// Demo frame and a manually positioned Live frame are neither one, so
+// neither has anything of its own to disagree with.
+func TestReceiverLastFixAndViolatedZeroWithoutGPS(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Demo", func(t *testing.T) {
+		t.Parallel()
+
+		demo, err := source.NewDemo()
+		if err != nil {
+			t.Fatalf("NewDemo: %v", err)
+		}
+
+		receiver := demo.Frame().Receiver
+		if !receiver.LastFix.IsZero() || receiver.Violated != 0 {
+			t.Errorf("Demo Receiver = %+v, want zero LastFix and zero Violated", receiver)
+		}
+	})
+
+	t.Run("manual Live", func(t *testing.T) {
+		t.Parallel()
+
+		const manualLat, manualLon = 52.3, 4.9
+
+		live, err := source.NewLive(source.WithManualLocation(manualLat, manualLon))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		receiver := live.Frame().Receiver
+		if !receiver.LastFix.IsZero() || receiver.Violated != 0 {
+			t.Errorf("manual Live Receiver = %+v, want zero LastFix and zero Violated", receiver)
+		}
+	})
+}
+
+// TestLiveWithGPSDEmptyStartsNoWatcher checks that a Live with nothing to
+// watch starts no gpsd goroutine at all: Start followed by Close returns
+// without hanging, whether WithGPSD was given the empty string or never
+// called.
+func TestLiveWithGPSDEmptyStartsNoWatcher(t *testing.T) {
+	t.Parallel()
+
+	t.Run("WithGPSD given the empty string", func(t *testing.T) {
+		t.Parallel()
+
+		live, err := source.NewLive(source.WithGPSD(""), source.WithIngest(&fakeIngest{}))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		live.Start(context.Background())
+
+		if err := live.Close(); err != nil {
+			t.Errorf("Close() = %v, want nil", err)
+		}
+	})
+
+	t.Run("WithGPSD never called", func(t *testing.T) {
+		t.Parallel()
+
+		live, err := source.NewLive(source.WithIngest(&fakeIngest{}))
+		if err != nil {
+			t.Fatalf("NewLive: %v", err)
+		}
+
+		live.Start(context.Background())
+
+		if err := live.Close(); err != nil {
+			t.Errorf("Close() = %v, want nil", err)
+		}
+	})
+}

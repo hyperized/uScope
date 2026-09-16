@@ -6,5 +6,7 @@ github.com/hyperized/rtl2832u v0.2.0 h1:xOxzMex2XrBwtbCZb71HbWIQurG86pab+w75/4aO
 github.com/hyperized/rtl2832u v0.2.0/go.mod h1:E6CsfYxZE3qX6WYbk7WTiykTbr8JpKNpsUCzg1g45UM=
 github.com/hyperized/uAirwaves v0.1.1-0.20260916150856-9f7dfee2f73e h1:a4fCfQsEEJowwSeRwYIXhMYt5oGAq+KcMA51tYbM8Es=
 github.com/hyperized/uAirwaves v0.1.1-0.20260916150856-9f7dfee2f73e/go.mod h1:LMmfbcT0TV3cGVFurPwUIeArBAn53AQzqn6HoWJXdYE=
+github.com/stratoberry/go-gpsd v1.3.0 h1:JxJOEC4SgD0QY65AE7B1CtJtweP73nqJghZeLNU9J+c=
+github.com/stratoberry/go-gpsd v1.3.0/go.mod h1:nVf/vTgfYxOMxiQdy9BtJjojbFRtG8H3wNula++VgkU=
 golang.org/x/sys v0.45.0 h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=
 golang.org/x/sys v0.45.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=

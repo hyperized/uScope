@@ -2006,7 +2006,7 @@ func TestFixColour(t *testing.T) {
 		{name: "no fix reads as muted", mode: source.FixNone, want: pal.Muted},
 		{name: "a manual position takes the ink handed in", mode: source.FixManual, want: ink},
 		{name: "an estimate takes the accent", mode: source.FixEstimated, want: pal.Accent},
-		{name: "a GPS still searching is critical", mode: source.FixGPSNoFix, want: pal.AltHigh},
+		{name: "a GPS fix that has gone is critical", mode: source.FixGPSNoFix, want: pal.AltHigh},
 		{name: "a 2D GPS fix is the mid band", mode: source.FixGPS2D, want: pal.AltMid},
 		{name: "a full 3D GPS fix is the low band", mode: source.FixGPS3D, want: pal.AltLow},
 		{name: "an out-of-range mode reads as muted", mode: source.FixMode(99), want: pal.Muted},
@@ -2037,7 +2037,7 @@ func TestModeWord(t *testing.T) {
 		{name: "manual", mode: source.FixManual, want: manualText},
 		{name: "GPS 2D", mode: source.FixGPS2D, want: gps2DText},
 		{name: "GPS 3D", mode: source.FixGPS3D, want: gps3DText},
-		{name: "GPS still searching", mode: source.FixGPSNoFix, want: gpsNoFixText},
+		{name: "GPS lost, holding its last position", mode: source.FixGPSNoFix, want: gpsNoFixText},
 		{name: "no fix reads as unknown here", mode: source.FixNone, want: unknownFixText},
 		{name: "an estimate reads as unknown here", mode: source.FixEstimated, want: unknownFixText},
 	} {
@@ -4404,4 +4404,223 @@ func samePixels(got, want *canvas.Canvas, box image.Rectangle) bool {
 	}
 
 	return true
+}
+
+// TestReceiverLineGPSStates checks the word each GPS state renders as on the
+// receiver line, pixel for pixel against a reference built the same way the
+// line itself is, which is what TestReceiverLineOpensWithLoc also does and
+// for the same reason: it reads what is on screen rather than the constant
+// behind it.
+//
+// FixGPSNoFix is the case that matters here. Its word changed from the three
+// dashes it used to be to GPS LOST, because the state itself changed meaning:
+// it used to be unreachable, and now it is what a gpsd that had a fix and
+// lost it reports for the half minute its last position is still good enough
+// to centre a scope on.
+func TestReceiverLineGPSStates(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side = 240
+		top  = 8
+		left = 4
+	)
+
+	for _, testCase := range []struct {
+		name string
+		mode source.FixMode
+		word string
+	}{
+		{name: "a full fix", mode: source.FixGPS3D, word: gps3DText},
+		{name: "a fix without altitude", mode: source.FixGPS2D, word: gps2DText},
+		{name: "a fix lost and held", mode: source.FixGPSNoFix, word: gpsNoFixText},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			faces := Faces{Small: rowPlanSmall(t)}
+			scene := &Scene{faces: faces}
+			scene.SetPalette(theme.Night)
+
+			receiver := source.Receiver{
+				Latitude: 52.31, Longitude: 4.77,
+				Label: source.LabelGPS, Mode: testCase.mode,
+			}
+
+			canv, err := canvas.New(side, side)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			canv.Clear(theme.Night.Field)
+			scene.drawReceiverLine(&layout{dst: canv, left: left}, top, receiver)
+
+			reference, err := canvas.New(side, side)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			reference.Clear(theme.Night.Field)
+
+			pen := text.Draw(reference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
+			ink := scene.fixColour(testCase.mode, theme.Night.BandInk)
+			text.Draw(reference, faces.Small, pen, top, testCase.word, ink)
+
+			prefixWidth, height := text.Measure(faces.Small, locPrefix)
+			wordWidth, _ := text.Measure(faces.Small, testCase.word)
+			box := image.Rect(left, top, left+prefixWidth+wordWidth, top+height)
+
+			if !samePixels(canv, reference, box) {
+				t.Errorf("the line does not read %q after %q for %s", testCase.word, locPrefix, testCase.name)
+			}
+		})
+	}
+}
+
+// TestReceiverLineDoubtMarker checks that an estimate the self-locator does
+// not fully believe grows a doubt marker after its radius, set in the same
+// accent the rest of the estimate line already carries.
+//
+// Violated counts the self-locator's own observations whose radio horizon
+// does not reach the estimate it produced, so the marker is what says the
+// confidence radius already had to be widened to cover a disagreement rather
+// than being loose for no stated reason.
+func TestReceiverLineDoubtMarker(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side = 240
+		top  = 8
+		left = 4
+	)
+
+	faces := Faces{Small: rowPlanSmall(t)}
+	scene := &Scene{faces: faces}
+	scene.SetPalette(theme.Night)
+
+	receiverAgrees := source.Receiver{
+		Latitude: 52.31, Longitude: 4.77, ConfidenceNm: 22,
+		Label: source.LabelEstimate, Mode: source.FixEstimated,
+	}
+	receiverDoubts := receiverAgrees
+	receiverDoubts.Violated = 3
+
+	canvAgrees, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	canvAgrees.Clear(theme.Night.Field)
+	scene.drawReceiverLine(&layout{dst: canvAgrees, left: left}, top, receiverAgrees)
+
+	canvDoubts, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	canvDoubts.Clear(theme.Night.Field)
+	scene.drawReceiverLine(&layout{dst: canvDoubts, left: left}, top, receiverDoubts)
+
+	if samePixels(canvAgrees, canvDoubts, canvAgrees.Bounds()) {
+		t.Error("an estimate under doubt drew the same line as one nothing disagrees with")
+	}
+
+	// The reference is built from the same calls drawReceiverLine makes for
+	// the estimate branch, so the test follows the layout instead of a pixel
+	// offset worked out by hand.
+	reference, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	reference.Clear(theme.Night.Field)
+
+	ink := scene.fixColour(source.FixEstimated, theme.Night.BandInk)
+	pen := text.Draw(reference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
+	pen = text.Draw(reference, faces.Small, pen, top, estimatePrefix, ink)
+	pen = drawBytes(reference, faces.Small, pen, top, scene.whole(receiverDoubts.ConfidenceNm), ink)
+	pen = text.Draw(reference, faces.Small, pen, top, rangeUnit, ink)
+
+	markerWidth, markerHeight := text.Measure(faces.Small, doubtMarker)
+	markerBox := image.Rect(pen, top, pen+markerWidth, top+markerHeight)
+
+	text.Draw(reference, faces.Small, pen, top, doubtMarker, theme.Night.Accent)
+
+	if !samePixels(canvDoubts, reference, reference.Bounds()) {
+		t.Error("the doubted estimate does not match the reference line with its marker")
+	}
+
+	if colourCount(canvAgrees, markerBox, theme.Night.Field) != markerBox.Dx()*markerBox.Dy() {
+		t.Error("an estimate nothing disagrees with carries something past its radius, want only field")
+	}
+
+	if colourCount(canvDoubts, markerBox, theme.Night.Accent) == 0 {
+		t.Error("a doubted estimate carries no accent pixels past its radius")
+	}
+}
+
+// TestDrawDoubt checks both of drawDoubt's branches directly: nothing drawn
+// when nothing disagrees with the estimate, and the marker drawn in the
+// accent when something does.
+func TestDrawDoubt(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side = 64
+		top  = 8
+		pen  = 4
+	)
+
+	face := rowPlanSmall(t)
+	scene := &Scene{}
+	scene.SetPalette(theme.Night)
+
+	t.Run("nothing to doubt leaves the canvas untouched", func(t *testing.T) {
+		t.Parallel()
+
+		canv, err := canvas.New(side, side)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+		scene.drawDoubt(canv, face, pen, top, 0)
+
+		clean, err := canvas.New(side, side)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		clean.Clear(theme.Night.Field)
+
+		if !samePixels(canv, clean, canv.Bounds()) {
+			t.Error("drawDoubt changed the canvas with nothing to doubt")
+		}
+	})
+
+	t.Run("a violation draws the marker in the accent", func(t *testing.T) {
+		t.Parallel()
+
+		const violated = 1
+
+		canv, err := canvas.New(side, side)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+		scene.drawDoubt(canv, face, pen, top, violated)
+
+		reference, err := canvas.New(side, side)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		reference.Clear(theme.Night.Field)
+		text.Draw(reference, face, pen, top, doubtMarker, theme.Night.Accent)
+
+		if !samePixels(canv, reference, canv.Bounds()) {
+			t.Error("drawDoubt did not draw the marker in the accent")
+		}
+	})
 }

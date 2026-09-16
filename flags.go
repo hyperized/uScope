@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,13 @@ const (
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
+
+	// defaultGPSDAddress is where gpsd listens, and gpsdOff the one
+	// non-address value --gpsd accepts. The address is spelled with a hostname
+	// rather than 127.0.0.1 so a run against a daemon on the other end of a
+	// tunnel only needs the host swapped.
+	defaultGPSDAddress = "localhost:2947"
+	gpsdOff            = "off"
 
 	minFPS, maxFPS = 1, 120
 
@@ -109,6 +117,7 @@ var (
 	errRecentre   = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
 	errView       = errors.New(appName + ": --view must be scope, minimal or 3d")
 	errExaggerate = errors.New(appName + ": --exaggerate out of range")
+	errGPSD       = errors.New(appName + ": --gpsd must be off or HOST:PORT")
 )
 
 // config is the validated command line. Everything in it has already been
@@ -147,6 +156,11 @@ type config struct {
 	longitude   float64
 	hasLocation bool
 
+	// gpsd is where to watch for a real fix, already validated, and empty when
+	// there is to be no watcher at all. Empty covers both --gpsd off and the
+	// default on a platform that has no gpsd on it.
+	gpsd string
+
 	// demoSector is inert unless the demo fleet is what ends up running, the
 	// same way --beast alongside --demo is not an error: the operator asked
 	// for something that only matters if a later choice makes it apply.
@@ -179,6 +193,7 @@ type rawFlags struct {
 	battery     string
 	beast       string
 	replay      string
+	gpsd        string
 	latitude    string
 	longitude   string
 	recentre    string
@@ -264,6 +279,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"walk the gain grid once before the first frame and keep the best cell; local SDR only")
 	set.StringVar(&raw.beast, "beast", "",
 		"consume Mode S frames from a remote demodulator at HOST:PORT")
+	set.StringVar(&raw.gpsd, "gpsd", defaultGPSD(runtime.GOOS),
+		"watch a gpsd daemon at HOST:PORT for the receiver's own position, or off to work it out from the aircraft")
 	set.StringVar(&raw.replay, "replay-iq", "",
 		"replay a captured IQ file through the demodulator")
 	set.StringVar(&raw.latitude, "lat", "",
@@ -414,6 +431,11 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, err
 	}
 
+	gpsd, err := parseGPSD(raw.gpsd)
+	if err != nil {
+		return config{}, err
+	}
+
 	return config{
 		fbPath:      raw.fb,
 		rotation:    show.rotation,
@@ -437,6 +459,7 @@ func (raw rawFlags) validated() (config, error) {
 		source:      chosen,
 		beast:       raw.beast,
 		replay:      raw.replay,
+		gpsd:        gpsd,
 		latitude:    place.latitude,
 		longitude:   place.longitude,
 		hasLocation: place.given,
@@ -511,7 +534,7 @@ func (raw rawFlags) sourceChoice() (sourceKind, error) {
 	}
 
 	if raw.beast != "" {
-		if err := checkBeastAddress(raw.beast); err != nil {
+		if err := hostPort(raw.beast, errBeastAddr); err != nil {
 			return sourceAuto, err
 		}
 
@@ -525,22 +548,53 @@ func (raw rawFlags) sourceChoice() (sourceKind, error) {
 	return sourceAuto, nil
 }
 
-// checkBeastAddress makes sure --beast is something that could be dialled.
+// hostPort makes sure an address is something that could be dialled.
 //
 // SplitHostPort alone is not enough: it is happy with ":" and with a bare
 // port, and a half-written address is more likely a typo than an intent to
-// dial localhost on port nothing.
-func checkBeastAddress(address string) error {
+// dial localhost on port nothing. --beast and --gpsd share the check and
+// differ only in which sentinel comes back, because they want the same shape
+// and two copies of it would drift.
+func hostPort(address string, sentinel error) error {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return fmt.Errorf("%w: %q: %w", errBeastAddr, address, err)
+		return fmt.Errorf("%w: %q: %w", sentinel, address, err)
 	}
 
 	if host == "" || port == "" {
-		return fmt.Errorf("%w: %q has no %s", errBeastAddr, address, missingPart(host))
+		return fmt.Errorf("%w: %q has no %s", sentinel, address, missingPart(host))
 	}
 
 	return nil
+}
+
+// defaultGPSD is where --gpsd points when nobody says.
+//
+// Linux is the only platform uScope decodes on and the only one the uConsole's
+// gpsd runs on, so it is the only one where looking for a daemon is worth the
+// connection attempt. Everywhere else the default is off: a Mac developing the
+// layout has no gpsd, and a watcher retrying a refused connection would put a
+// warning on stderr that answers a question nobody asked.
+func defaultGPSD(goos string) string {
+	if goos == linuxGOOS {
+		return defaultGPSDAddress
+	}
+
+	return gpsdOff
+}
+
+// parseGPSD reads --gpsd. It hands back the empty string for a run with no
+// watcher, which is what internal/source reads as off.
+func parseGPSD(text string) (string, error) {
+	if text == gpsdOff {
+		return "", nil
+	}
+
+	if err := hostPort(text, errGPSD); err != nil {
+		return "", err
+	}
+
+	return text, nil
 }
 
 // missingPart names whichever half of a host:port pair is empty.

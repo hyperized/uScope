@@ -296,11 +296,11 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 	case sourceReplay:
 		warnNoDongle(cfg, stderr, "--replay-iq")
 
-		return live(cfg, source.WithReplay(cfg.replay))
+		return live(cfg, stderr, source.WithReplay(cfg.replay))
 	case sourceBeast:
 		warnNoDongle(cfg, stderr, "--beast")
 
-		return live(cfg, source.WithBeast(cfg.beast))
+		return live(cfg, stderr, source.WithBeast(cfg.beast))
 	case sourceDemo:
 		warnNoDongle(cfg, stderr, "--demo")
 
@@ -309,7 +309,7 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 		fallthrough
 	default:
 		if goos == linuxGOOS {
-			return live(cfg)
+			return live(cfg, stderr)
 		}
 
 		_, _ = fmt.Fprintf(stderr,
@@ -361,11 +361,11 @@ func dongleOnlyFlags(cfg config) string {
 	}
 }
 
-// live builds the real ingest, adding the operator's position when there is
-// one.
+// live builds the real ingest, adding whatever the flags said about where the
+// receiver itself is.
 //
 //nolint:ireturn // every branch of sourceFor returns the interface.
-func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
+func live(cfg config, stderr io.Writer, opts ...source.LiveOption) (source.Source, error) {
 	// Both are handed over whichever source this is. internal/source applies
 	// them on the local-SDR path only, so a --beast run carries them as far
 	// as the constructor and no further; warnNoDongle has already told the
@@ -373,10 +373,7 @@ func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
 	opts = append(opts,
 		source.WithBiasTee(cfg.biasTee),
 		source.WithAutoSweep(cfg.autoSweep))
-
-	if cfg.hasLocation {
-		opts = append(opts, source.WithManualLocation(cfg.latitude, cfg.longitude))
-	}
+	opts = append(opts, locationOptions(cfg, stderr)...)
 
 	src, err := source.NewLive(opts...)
 	if err != nil {
@@ -384,6 +381,32 @@ func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
 	}
 
 	return src, nil
+}
+
+// locationOptions settles where the receiver's own position comes from.
+//
+// Three ways of knowing, and they are exclusive in this order: coordinates the
+// operator typed in, a gpsd fix, the self-locate estimate worked out from the
+// aircraft. Nothing has to be passed for the third; it is what internal/source
+// does when it is given neither of the others.
+//
+// --lat and --lon turning gpsd off gets a line on stderr, for the reason an
+// ignored --bias-t does: an operator who has just plugged a GPS in and pinned
+// the position in a shell alias would otherwise spend a while wondering why
+// the header never says GPS.
+func locationOptions(cfg config, stderr io.Writer) []source.LiveOption {
+	if cfg.hasLocation {
+		_, _ = fmt.Fprintf(stderr,
+			"%s: --lat and --lon given: gpsd and self-locate are both off\n", appName)
+
+		return []source.LiveOption{source.WithManualLocation(cfg.latitude, cfg.longitude)}
+	}
+
+	if cfg.gpsd == "" {
+		return nil
+	}
+
+	return []source.LiveOption{source.WithGPSD(cfg.gpsd)}
 }
 
 // demo builds the invented fleet.

@@ -51,8 +51,13 @@ const (
 	manualText     = "MANUAL"
 	gps2DText      = "GPS 2D"
 	gps3DText      = "GPS 3D"
-	gpsNoFixText   = "GPS ---"
+	gpsNoFixText   = "GPS LOST"
 	unknownFixText = "???"
+
+	// doubtMarker follows the estimate's radius when the self-locator's own
+	// observations disagree with the answer it produced. A question mark says
+	// that in one glyph, in a line that has no room for a sentence.
+	doubtMarker = " ?"
 
 	// modeGap is the air between the mode word and the coordinates.
 	modeGap = 8
@@ -541,6 +546,10 @@ func cutMarker(face *psf.Font) string {
 // The three are deliberately different lengths and shapes so they cannot be
 // confused at a glance.
 //
+// A GPS that has lost its lock is still the first form: the coordinates are
+// real and were sensed, so they are drawn like any other fix, and GPS LOST is
+// what says they are a memory rather than a reading.
+//
 // The mode takes the same colour the home marker's ring does, so the word in
 // the header and the ring on the field are one signal read twice rather than
 // two facts to reconcile. The LOC before it and the coordinates after it stay
@@ -558,7 +567,8 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 	case source.LabelEstimate:
 		pen := text.Draw(lay.dst, face, left, top, estimatePrefix, ink)
 		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.ConfidenceNm), ink)
-		text.Draw(lay.dst, face, pen, top, rangeUnit, ink)
+		pen = text.Draw(lay.dst, face, pen, top, rangeUnit, ink)
+		s.drawDoubt(lay.dst, face, pen, top, receiver.Violated)
 	case source.LabelNone:
 		text.Draw(lay.dst, face, left, top, noFixText, ink)
 	default:
@@ -567,6 +577,26 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.BandInk)
 		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.BandInk)
 	}
+}
+
+// drawDoubt marks an estimate the self-locator does not fully believe.
+//
+// Violated counts the aircraft whose radio horizon does not reach the position
+// that was worked out from it, which means the circles are mutually
+// inconsistent and the radius has already been widened to cover the
+// disagreement. The wider radius alone reads as "loose but sound"; the marker
+// is what says the answer is a compromise between constraints that cannot all
+// be true.
+//
+// It is drawn in the accent, which is the colour the whole estimate line
+// already carries, so it reads as part of the same doubt rather than as a
+// second thing to decode.
+func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated int) {
+	if violated == 0 {
+		return
+	}
+
+	text.Draw(dst, face, pen, top, doubtMarker, s.pal.Accent)
 }
 
 // modeWord opens the receiver line when there are coordinates after it.

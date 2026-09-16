@@ -10,5 +10,6 @@ require (
 require (
 	github.com/hyperized/demod1090 v0.1.0 // indirect
 	github.com/hyperized/modes v0.2.0 // indirect
+	github.com/stratoberry/go-gpsd v1.3.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )

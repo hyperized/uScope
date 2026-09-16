@@ -76,12 +76,14 @@ const (
 	// a scope on, and tens of nautical miles wide.
 	FixEstimated
 
-	// FixGPSNoFix is a GPS that is connected and has not locked yet.
+	// FixGPSNoFix is a gpsd that had a fix and has lost it, with its last
+	// position still being reported.
 	//
-	// Nothing produces it today. uScope has no GPS, so every position that
-	// reaches it either has a fix or is not from a GPS at all. It is mapped
-	// and coloured so that wiring gpsd in later is a change in one function
-	// rather than a change in the scene as well.
+	// It is deliberately better than an estimate and worse than a fix. The
+	// coordinates are real and were sensed, they are just not current, which
+	// is the right answer for the half minute a receiver spends under a roof
+	// or a gantry. Past that window the position stops being reported at all
+	// and the estimate takes over: see gpsHold.
 	FixGPSNoFix
 
 	// FixGPS2D is a fix without altitude.
@@ -95,7 +97,10 @@ const (
 //
 // ConfidenceNm is the self-locate radius in nautical miles and is zero for
 // every other label. HasFix is false for an estimate: an estimate is a guess
-// good enough to centre a scope on, not a fix.
+// good enough to centre a scope on, not a fix. It is also false while a lost
+// GPS fix is being held, where the coordinates are real and the lock is not:
+// the question HasFix answers is whether the position is current, and Mode is
+// what says where it came from.
 type Receiver struct {
 	Latitude     float64
 	Longitude    float64
@@ -106,6 +111,24 @@ type Receiver struct {
 	// Mode is Label's machine-readable half, which is what the scope colours
 	// the home marker by.
 	Mode FixMode
+
+	// LastFix is when gpsd last delivered a position with a lock on it, and
+	// the zero time when it never has, which is every run with no GPS in it.
+	// It is what the FixGPSNoFix hold is measured against, and it is carried
+	// on the frame rather than being read back off the source for the reason
+	// everything else here is: the scene draws one value copy.
+	LastFix time.Time
+
+	// Violated counts the self-locator's own observations whose radio horizon
+	// does not reach the estimate it produced. Zero means every circle agrees.
+	// Anything higher means the constraints are mutually inconsistent, the
+	// answer is a compromise, and ConfidenceNm has already been widened to
+	// cover the disagreement, which is a thing the header says out loud rather
+	// than hides.
+	//
+	// It is zero for a GPS fix and for a position the operator typed in:
+	// neither is derived from anything that could disagree with it.
+	Violated int
 }
 
 // BiasTeeState is the dongle's bias-tee as the ingest last saw it.

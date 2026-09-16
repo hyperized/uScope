@@ -95,6 +95,13 @@ type Live struct {
 	manualLat, manualLon float64
 	manual               bool
 
+	// gpsd is where the gpsd daemon listens, or the empty string for a run
+	// with no GPS to watch. newGPS builds the watcher Start runs, and fix
+	// holds the last position that watcher reported with a lock on it.
+	gpsd   string
+	newGPS gpsFactory
+	fix    lastFix
+
 	// biasTee powers an LNA over the coax from the moment the dongle opens,
 	// and autoSweep walks the gain grid before the first frame. Both only
 	// mean something on the local-SDR path: a BEAST feed's gain belongs to
@@ -119,6 +126,12 @@ type Live struct {
 	cancel       context.CancelFunc
 	group        sync.WaitGroup
 	lastEstimate time.Time
+
+	// violated is how many of the self-locator's horizon circles missed the
+	// estimate it last handed over. The header turns anything above zero into
+	// a question mark after the radius, because a widened radius on its own
+	// reads as "far away but sound" rather than as "these circles disagree".
+	violated int
 
 	// ghosts keeps the trail of an aircraft the store has pruned, so a lost
 	// contact leaves its track behind. It sits under mu with the rest of the
@@ -162,6 +175,30 @@ func WithManualLocation(latitude, longitude float64) LiveOption {
 	return func(l *Live) {
 		l.manualLat, l.manualLon = latitude, longitude
 		l.manual = true
+	}
+}
+
+// WithGPSD watches a gpsd daemon at address for the receiver's own position.
+//
+// The empty string, which is the default, watches nothing and leaves the
+// self-locate estimate to do the work on its own. A position from
+// WithManualLocation turns this off: see NewLive.
+//
+// The daemon is not contacted here. Start launches the watcher, and it
+// reconnects on its own, so a gpsd that is not up yet is not a failure.
+func WithGPSD(address string) LiveOption {
+	return func(l *Live) { l.gpsd = address }
+}
+
+// withGPSFactory replaces how the gpsd watcher is built.
+//
+// Unexported on purpose, the same way withDongleOpener is: it is a test seam
+// and not API. A nil factory leaves the real gpsd client in place.
+func withGPSFactory(build gpsFactory) LiveOption {
+	return func(l *Live) {
+		if build != nil {
+			l.newGPS = build
+		}
 	}
 }
 
@@ -254,6 +291,7 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 		estimateInterval: defaultEstimateInterval,
 		coverage:         newCoverage(),
 		openDongle:       rtl2832u.Open,
+		newGPS:           newGPSWatcher,
 	}
 
 	for _, opt := range opts {
@@ -267,8 +305,14 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 	live.loc = live.newLocation()
 
 	// Without a position from the operator there is nothing to centre on, so
-	// the self-locator earns its keep. With one, it would only ever disagree.
-	if !live.manual {
+	// the self-locator earns its keep. With one, both ways of working a
+	// position out are off rather than being further opinions to reconcile:
+	// the locator would only ever disagree, and a gpsd watcher would write its
+	// own fix over the operator's in the shared location, which is what the
+	// decoder resolves CPR frames against.
+	if live.manual {
+		live.gpsd = ""
+	} else {
 		live.locator = selflocate.New()
 	}
 
@@ -300,6 +344,7 @@ func (l *Live) Start(ctx context.Context) {
 	l.cancel = cancel
 
 	l.group.Go(func() { l.stream(streamCtx) })
+	l.startGPS(streamCtx)
 }
 
 // Frame takes one snapshot of the whole ingest.
@@ -528,27 +573,50 @@ func (l *Live) receiver() Receiver {
 		}
 	}
 
+	// gpsd first, and only then the estimate. The order is also what keeps the
+	// two out of each other's way in the shared location: applyEstimate writes
+	// the estimate's coordinates there, so it must not run while a GPS fix, or
+	// a fix inside its hold window, is the thing being reported.
+	if fix, ok := l.gpsReceiver(); ok {
+		return fix
+	}
+
 	l.applyEstimate()
+
+	if l.loc.Source() != location.SourceInferred {
+		return Receiver{Label: LabelNone, Mode: FixNone}
+	}
 
 	latitude, longitude := l.loc.GetCoordinates()
 
-	switch {
-	case l.loc.HasFix():
-		return Receiver{
-			Latitude: latitude, Longitude: longitude, HasFix: true,
-			Label: LabelGPS, Mode: fixMode(l.loc.Mode()),
-		}
-	case l.loc.Source() == location.SourceInferred:
-		return Receiver{
-			Latitude:     latitude,
-			Longitude:    longitude,
-			ConfidenceNm: l.loc.ConfidenceRadiusNm(),
-			Label:        LabelEstimate,
-			Mode:         FixEstimated,
-		}
-	default:
-		return Receiver{Label: LabelNone, Mode: FixNone}
+	return Receiver{
+		Latitude:     latitude,
+		Longitude:    longitude,
+		ConfidenceNm: l.loc.ConfidenceRadiusNm(),
+		Label:        LabelEstimate,
+		Mode:         FixEstimated,
+		Violated:     l.violatedCount(),
 	}
+}
+
+// violatedCount is how many of the self-locator's own observations disagreed
+// with the estimate it last handed over.
+func (l *Live) violatedCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.violated
+}
+
+// rememberViolated keeps the disagreement count off the estimate just applied.
+//
+// It takes mu in a section of its own rather than being folded into
+// estimateDue, which holds the same lock on its own way past.
+func (l *Live) rememberViolated(count int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.violated = count
 }
 
 // gpsMode2D is uAirwaves' description of a fix without altitude. Its other
@@ -573,11 +641,12 @@ func fixMode(mode string) FixMode {
 // applyEstimate folds the self-locator's answer into the shared location once
 // it has one.
 //
-// uAirwaves runs this on a ticker next to a GPS watcher, and the tick decides
-// which of the two wins. uScope has no GPS, so there is nothing to defer to
-// and no reason for a second goroutine: pulling the estimate on the frame
-// that is about to be drawn keeps the source on one goroutine and makes the
-// whole path testable with a clock.
+// uAirwaves runs this on a ticker next to its GPS watcher, and the tick
+// decides which of the two wins. uScope pulls the estimate on the frame that
+// is about to be drawn instead, which keeps the decision on one goroutine and
+// the whole path testable with a clock. receiver is what defers to the GPS: it
+// only gets this far with no fix and no held one, so the estimate never writes
+// over a GPS position in the shared location.
 func (l *Live) applyEstimate() {
 	if l.locator == nil {
 		return
@@ -591,6 +660,8 @@ func (l *Live) applyEstimate() {
 	if !ok {
 		return
 	}
+
+	l.rememberViolated(fix.Violated)
 
 	l.loc.Update(
 		location.WithSource(location.SourceInferred),

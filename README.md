@@ -80,16 +80,16 @@ the fix state is one glance rather than a line to read:
 | muted grey | nothing known, so nothing can be plotted |
 | ink | a position given with `--lat` and `--lon` |
 | accent | a self-locate estimate, with its radius in the header |
-| red | a GPS that is connected and has not locked yet |
+| red | a GPS fix that has gone, with its last position still on screen |
 | amber | a GPS fix without altitude |
 | green | a full GPS fix |
 
 The centre dot stays ink whatever the ring is doing, so the marker is the same
 size and in the same place at any fix state. The header's mode word takes the
 same colour as the ring, so the two are one signal read twice rather than two
-facts to reconcile. Only the first three happen today: uScope has no GPS, and
-the three GPS colours are mapped so that wiring gpsd in later is a change in
-one function rather than a change in the scene as well.
+facts to reconcile. Red is deliberately better than the accent and worse than
+amber: the coordinates under it were sensed rather than guessed, they are just
+not current any more.
 
 Aircraft are 15 pixel silhouettes rotated to their heading. An aircraft whose
 heading nobody has decoded is drawn as a bare circle, because a silhouette
@@ -501,12 +501,16 @@ the frame moves for it.
 
 The wordmark and the ingest source on the left, with a filled dot when the
 source is connected and a hollow one when it is not. The receiver's position
-under them, opening with `LOC`: `LOC MANUAL 52.3100 N / 4.7700 E`, or
-`LOC EST ±22 NM` when it was worked out from the aircraft, or `LOC NO FIX`.
-Without the prefix the line was a mode word and two numbers with nothing saying
-what they were of, and next to the aircraft position on the card it read as
-another aeroplane. `LOC` is drawn in the band's own ink whatever the fix mode
-is; only the mode word after it carries the fix colour.
+under them, opening with `LOC`: `LOC GPS 3D 52.3100 N / 4.7700 E` for a fix,
+`LOC GPS 2D` for one with no altitude in it, `LOC GPS LOST` while the last fix
+is being held after the lock went, `LOC MANUAL` for coordinates you typed in,
+`LOC EST ±22 NM` when it was worked out from the aircraft, and `LOC NO FIX`
+when none of that has happened yet. An estimate the self-locator does not
+fully believe gets a `?` after the radius. Without the prefix the line was a
+mode word and two numbers with nothing saying what they were of, and next to
+the aircraft position on the card it read as another aeroplane. `LOC` is drawn
+in the band's own ink whatever the fix mode is; only the mode word after it
+carries the fix colour.
 
 While `--auto-sweep` is walking the gain grid the source label picks up a
 `SWEEP` suffix in the accent colour. A sweep decodes nothing for the few
@@ -561,17 +565,57 @@ on the uConsole. The flag exists for a machine with more than one, or for
 pointing at a fixture. The macOS reader takes its figures from `pmset` and
 ignores the flag.
 
-`--lat` and `--lon` pin the receiver's own position. Both or neither: a
-latitude with no longitude is half an answer. Without them uScope works its
-own position out from the aircraft it can hear, by intersecting their radio
-horizons, which takes about thirty position reports and lands within tens of
-nautical miles. The header says which of the three it is showing:
-`LOC MANUAL` or `LOC GPS 3D` and the coordinates for a known position,
-`LOC EST ±22 NM` for an estimate, `LOC NO FIX` for neither.
+Where the receiver itself is has its own section, below.
 
-A known position is worth giving if you have one. With a reference nearby a
-single CPR frame resolves to a position; without one the decoder waits for the
-matching half of the pair, which takes up to ten seconds per aircraft.
+### Where the receiver is
+
+Three ways of knowing, and they beat each other in this order:
+
+| Flag | Position |
+|---|---|
+| `--lat` and `--lon` | what you typed, and nothing argues with it |
+| `--gpsd HOST:PORT` | a real fix from a gpsd daemon |
+| neither | worked out from the aircraft you can hear |
+
+`--lat` and `--lon` are both or neither: a latitude with no longitude is half
+an answer. They also turn the other two off rather than leaving three opinions
+to reconcile, and one line on stderr says so, because an operator who has just
+plugged a GPS in would otherwise spend a while wondering why the header never
+says GPS.
+
+`--gpsd` defaults to `localhost:2947` on Linux and to `off` everywhere else. A
+Mac has no gpsd on it, and a watcher retrying a refused connection would put a
+warning on stderr answering a question nobody asked. The daemon is not uScope's
+to set up: on the uConsole that is uAirwaves' `make ship`, which installs gpsd,
+points `/etc/default/gpsd` at the AIO board's GNSS on `/dev/ttyS0` and enables
+the units. `make gps-check` in that repo says what it is seeing right now.
+
+uScope does not wait for the daemon. The watcher reconnects on its own, so a
+gpsd that is not up yet, or a receiver that has not locked, leaves the scope on
+the estimate until a fix arrives and then switches over without a restart. A
+gpsd that stays down warns once rather than once per retry.
+
+When the fix goes, the last one is kept for thirty seconds and the header says
+`LOC GPS LOST`. A receiver under a roof or a gantry loses lock for a few
+seconds and gets it back, and dropping straight to the estimate would move the
+scope's centre by tens of nautical miles and then move it back, which reads as
+a fault. Past thirty seconds the dropout is not a dropout any more and the
+estimate takes over. Thirty is also how long uAirwaves' own client waits before
+it decides a silent socket is dead and reconnects.
+
+With no GPS at all, uScope works its position out from the aircraft it can hear
+by intersecting their radio horizons, which takes about thirty position reports
+and lands within tens of nautical miles. When those circles cannot all be true
+at once the answer is a compromise between them, and the header puts a `?`
+after the radius: `LOC EST ±22 NM ?`. The radius is widened to cover that
+disagreement already, but a wide radius on its own reads as an estimate that is
+merely vague, which is a different and more comfortable thing than an estimate
+its own observations argue with.
+
+A known position is worth giving if you have one, whichever way it arrives.
+With a reference nearby a single CPR frame resolves to a position; without one
+the decoder waits for the matching half of the pair, which takes up to ten
+seconds per aircraft.
 
 ### The bias-tee and the gain sweep
 
@@ -734,6 +778,11 @@ If the pattern is on the wrong edge, run it again with `--rotate 3`.
 `--test-pattern` changes no console or terminal state, so it is safe over ssh
 and the pattern stays on screen until something else repaints.
 
+The uConsole's GNSS is not uScope's to install. uAirwaves' `make ship` is what
+sets gpsd up on the device, and once it is running uScope finds it on
+`localhost:2947` with no flag at all. There is nothing to add to this Makefile
+for it.
+
 ### On a Mac
 
 Ghostty implements the Kitty graphics protocol, so the live scene runs in a
@@ -870,8 +919,9 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--demo-sector` | off | put the whole invented fleet in the north-west quadrant, as a directional antenna would |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
 | `--replay-iq` | | replay a captured IQ file through the demodulator |
-| `--lat` | | receiver latitude in degrees, needs `--lon` |
-| `--lon` | | receiver longitude in degrees, needs `--lat` |
+| `--gpsd` | `localhost:2947` on Linux, `off` elsewhere | watch a gpsd daemon at `HOST:PORT` for the receiver's own position, or `off` |
+| `--lat` | | receiver latitude in degrees, needs `--lon`; turns gpsd and self-locate off |
+| `--lon` | | receiver longitude in degrees, needs `--lat`; turns gpsd and self-locate off |
 | `--fb` | `/dev/fb0` | framebuffer device |
 | `--rotate` | `auto` | `auto` reads sysfs, or force `0`, `1`, `2`, `3` |
 | `--fps` | `30` | frames per second in live mode, 1 to 120 |
@@ -973,9 +1023,18 @@ where the receiver is from what it can hear, and reads the battery. Rewriting th
 it would have taken longer than the rest of the slice and would have been
 wrong in different ways.
 
-Eight packages are imported: `pkg/adsb`, `pkg/airplane`, `pkg/airplanes`,
-`pkg/airports`, `pkg/battery`, `pkg/location`, `pkg/scope` and
-`pkg/selflocate`. All of them are data, decoding or one poll loop.
+Ten packages are imported: `pkg/adsb`, `pkg/airplane`, `pkg/airplanes`,
+`pkg/airports`, `pkg/battery`, `pkg/coverage`, `pkg/gps`, `pkg/location`,
+`pkg/scope` and `pkg/selflocate`. All of them are data, decoding or one poll
+loop.
+
+`pkg/gps` is the gpsd client, with the reconnect and the stall watchdog already
+in it, and it writes into the same `pkg/location` the self-locator does. That
+shared location is the whole reason the two fit together without a coordinator:
+`internal/source` decides which of them is allowed to write on the frame it is
+about to draw. It brings `github.com/stratoberry/go-gpsd` along as the only
+third-party package under uScope at all, which is how uAirwaves talks to gpsd
+and not a choice made here.
 
 `pkg/battery` is the one that is not about aeroplanes. It polls
 `/sys/class/power_supply` on Linux and `pmset` on macOS behind one interface,
@@ -988,8 +1047,8 @@ own instead of a poller.
 written against tview and tcell in character cells, which is the thing uScope
 exists to do differently. Importing it would drag a terminal UI toolkit into a
 program that writes pixels into `/dev/fb0`. `internal/ui` is out for the same
-reason, and `pkg/gps`, `pkg/coverage` and `pkg/battery` are out because
-nothing here uses them yet.
+reason: it is where uAirwaves keeps its notification bar and its tview widgets,
+and both are answers to a problem a pixel radar does not have.
 
 The dependency is pinned to an exact commit rather than a tag. uAirwaves is a
 moving target and its own local work is ahead of what is published; a pin is

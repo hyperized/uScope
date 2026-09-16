@@ -18,6 +18,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/coverage"
+	"github.com/hyperized/uAirwaves/pkg/gps"
 	"github.com/hyperized/uAirwaves/pkg/location"
 )
 
@@ -1411,4 +1412,634 @@ func TestBiasTeeFactory(t *testing.T) {
 			t.Errorf("biasTeeFactory()() error = %v, want it to wrap %v", err, errDongleOpenFailure)
 		}
 	})
+}
+
+// gpsdTestAddress is a syntactically valid gpsd address shared by the gpsd
+// tests below. None of them dial it: every gpsWatcher here is a fake reached
+// through the factory seam, and the one test that touches the real factory
+// only builds a watcher, never calls Watch on it.
+const gpsdTestAddress = "127.0.0.1:2947"
+
+// errGPSWatchFailure stands in for whatever a gpsd watcher might fail with.
+// Static so err113 is satisfied; watchGPS's test only checks whether
+// something was reported, never the text.
+//
+//nolint:gochecknoglobals // error sentinel, not state.
+var errGPSWatchFailure = errors.New("test gpsd watcher: watch failed")
+
+// stubGPSWatcher is a gpsWatcher that returns immediately with whatever
+// error it was built with, which is enough to drive startGPS and watchGPS
+// without leaving a goroutine running past the test.
+type stubGPSWatcher struct {
+	err error
+}
+
+func (s stubGPSWatcher) Watch(context.Context, *location.Location) error { return s.err }
+
+// markedWatcher is a gpsWatcher carrying a name, so a test can tell which
+// factory built the watcher live.newGPS hands back without comparing the
+// factories themselves, which Go does not allow.
+type markedWatcher struct {
+	mark string
+}
+
+func (markedWatcher) Watch(context.Context, *location.Location) error { return nil }
+
+// blockingGPSWatcher blocks until its context is cancelled and then closes
+// done, so a test can prove Close waited for it rather than returning as
+// soon as the ingest half finished.
+type blockingGPSWatcher struct {
+	done chan struct{}
+}
+
+func (b blockingGPSWatcher) Watch(ctx context.Context, _ *location.Location) error {
+	<-ctx.Done()
+	close(b.done)
+
+	return nil
+}
+
+// seedLocatorEstimate feeds a Live's self-locator enough real observations
+// to clear Estimate's readiness gates: uAirwaves' selflocate package wants
+// at least 30, with one of them under its altitude ceiling. The geometry
+// does not matter here the way it does in TestLiveSelfLocateEstimate: these
+// tests only need Estimate to succeed, never to converge on a particular
+// position.
+func seedLocatorEstimate(live *Live) {
+	const (
+		observations = 40
+		altitudeFt   = 5000.0
+		step         = 0.01
+		baseLat      = 52.0
+		baseLon      = 4.0
+	)
+
+	for i := range observations {
+		live.locator.Observe(baseLat+float64(i)*step, baseLon+float64(i)*step, altitudeFt)
+	}
+}
+
+// TestLastFixSnapshot covers lastFix's zero value and the round trip through
+// stamp.
+func TestLastFixSnapshot(t *testing.T) {
+	t.Parallel()
+
+	var fix lastFix
+
+	lat, lon, when := fix.snapshot()
+	if lat != 0 || lon != 0 || !when.IsZero() {
+		t.Fatalf("snapshot() of a zero lastFix = (%v, %v, %v), want (0, 0, zero time)", lat, lon, when)
+	}
+
+	const wantLat, wantLon = 51.5, -0.1
+
+	wantWhen := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	fix.stamp(wantLat, wantLon, wantWhen)
+
+	gotLat, gotLon, gotWhen := fix.snapshot()
+	if gotLat != wantLat || gotLon != wantLon || !gotWhen.Equal(wantWhen) {
+		t.Errorf("snapshot() after stamp = (%v, %v, %v), want (%v, %v, %v)",
+			gotLat, gotLon, gotWhen, wantLat, wantLon, wantWhen)
+	}
+}
+
+// TestWithGPSDOption checks that WithGPSD sets the address plainly.
+func TestWithGPSDOption(t *testing.T) {
+	t.Parallel()
+
+	live := &Live{}
+	WithGPSD(gpsdTestAddress)(live)
+
+	if live.gpsd != gpsdTestAddress {
+		t.Errorf("gpsd after WithGPSD(%q) = %q, want %q", gpsdTestAddress, live.gpsd, gpsdTestAddress)
+	}
+}
+
+// TestWithGPSFactoryOption covers withGPSFactory's nil guard: a non-nil
+// factory replaces whatever built the watcher, a nil one leaves it alone.
+// Functions cannot be compared, so each case proves which factory is in
+// place by the mark on the watcher it hands back.
+func TestWithGPSFactoryOption(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a non-nil factory replaces the default", func(t *testing.T) {
+		t.Parallel()
+
+		//nolint:ireturn // gpsFactory is the seam under test, so it has to hand back the interface.
+		custom := func(string, gps.FixCallback) gpsWatcher { return markedWatcher{mark: "custom"} }
+
+		live := &Live{}
+		withGPSFactory(custom)(live)
+
+		watcher, ok := live.newGPS(gpsdTestAddress, nil).(markedWatcher)
+		if !ok || watcher.mark != "custom" {
+			t.Errorf("newGPS() = %#v, want the custom factory's watcher", watcher)
+		}
+	})
+
+	t.Run("nil leaves the existing factory in place", func(t *testing.T) {
+		t.Parallel()
+
+		//nolint:ireturn // gpsFactory is the seam under test, so it has to hand back the interface.
+		preset := func(string, gps.FixCallback) gpsWatcher { return markedWatcher{mark: "preset"} }
+
+		live := &Live{newGPS: preset}
+		withGPSFactory(nil)(live)
+
+		watcher, ok := live.newGPS(gpsdTestAddress, nil).(markedWatcher)
+		if !ok || watcher.mark != "preset" {
+			t.Errorf("newGPS() after withGPSFactory(nil) = %#v, want the preset factory's watcher", watcher)
+		}
+	})
+}
+
+// TestNewLiveGPSDManualClears covers NewLive's rule that a manual position
+// turns gpsd off entirely, and that gpsd alone keeps the address and builds
+// a locator.
+func TestNewLiveGPSDManualClears(t *testing.T) {
+	t.Parallel()
+
+	const manualLat, manualLon = 52.0, 4.0
+
+	t.Run("a manual location clears gpsd and the locator", func(t *testing.T) {
+		t.Parallel()
+
+		live := newTestLive(t, WithManualLocation(manualLat, manualLon), WithGPSD(gpsdTestAddress))
+
+		if live.gpsd != "" {
+			t.Errorf("gpsd = %q, want empty (manual location wins)", live.gpsd)
+		}
+
+		if live.locator != nil {
+			t.Error("locator = non-nil, want nil (manual location wins)")
+		}
+	})
+
+	t.Run("gpsd alone keeps the address and builds a locator", func(t *testing.T) {
+		t.Parallel()
+
+		live := newTestLive(t, WithGPSD(gpsdTestAddress))
+
+		if live.gpsd != gpsdTestAddress {
+			t.Errorf("gpsd = %q, want %q", live.gpsd, gpsdTestAddress)
+		}
+
+		if live.locator == nil {
+			t.Error("locator = nil, want a self-locator built")
+		}
+	})
+}
+
+// TestNewLiveDefaultGPSFactoryIsReal checks that a Live built without
+// withGPSFactory keeps newGPSWatcher: calling it builds a real watcher and
+// opens nothing, since gps.New only assembles a struct. Watch is never
+// called on what comes back, so this dials no socket.
+func TestNewLiveDefaultGPSFactoryIsReal(t *testing.T) {
+	t.Parallel()
+
+	live := newTestLive(t)
+
+	if watcher := live.newGPS(gpsdTestAddress, nil); watcher == nil {
+		t.Error("newGPS() = nil, want the real gpsd watcher")
+	}
+}
+
+// TestLiveStartGPS covers both of startGPS's branches: no address never
+// calls the factory, and an address calls it exactly once with that address
+// and a non-nil callback.
+func TestLiveStartGPS(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no address means the factory is never called", func(t *testing.T) {
+		t.Parallel()
+
+		called := false
+		//nolint:ireturn // gpsFactory is the seam under test, so it has to hand back the interface.
+		factory := func(string, gps.FixCallback) gpsWatcher {
+			called = true
+
+			return stubGPSWatcher{}
+		}
+
+		live := &Live{newGPS: factory}
+		live.startGPS(context.Background())
+
+		if called {
+			t.Error("factory was called with no gpsd address configured")
+		}
+	})
+
+	t.Run("an address calls the factory once with the address and a callback", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			calls      int
+			gotAddress string
+			gotFix     gps.FixCallback
+		)
+
+		//nolint:ireturn // gpsFactory is the seam under test, so it has to hand back the interface.
+		factory := func(addr string, onFix gps.FixCallback) gpsWatcher {
+			calls++
+			gotAddress = addr
+			gotFix = onFix
+
+			return stubGPSWatcher{}
+		}
+
+		live := &Live{gpsd: gpsdTestAddress, newGPS: factory}
+		live.startGPS(context.Background())
+		live.group.Wait()
+
+		if calls != 1 {
+			t.Errorf("factory called %d times, want 1", calls)
+		}
+
+		if gotAddress != gpsdTestAddress {
+			t.Errorf("factory address = %q, want %q", gotAddress, gpsdTestAddress)
+		}
+
+		if gotFix == nil {
+			t.Error("factory callback = nil, want onFix")
+		}
+	})
+}
+
+// TestLiveWatchGPS covers watchGPS's two outcomes: an error from the watcher
+// puts one line on stderr, a nil error writes nothing.
+func TestLiveWatchGPS(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		err       error
+		wantWrite bool
+	}{
+		{name: "nil error writes nothing", err: nil, wantWrite: false},
+		{name: "an error writes one line", err: errGPSWatchFailure, wantWrite: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+
+			live := &Live{stderr: &stderr}
+			live.watchGPS(context.Background(), stubGPSWatcher{err: testCase.err})
+
+			got := stderr.String() != ""
+			if got != testCase.wantWrite {
+				t.Errorf("watchGPS() wrote %q, want write=%v", stderr.String(), testCase.wantWrite)
+			}
+		})
+	}
+}
+
+// TestLiveOnFix checks that onFix reads the shared location's coordinates
+// and stamps them alongside the time it is given.
+func TestLiveOnFix(t *testing.T) {
+	t.Parallel()
+
+	const wantLat, wantLon = 48.85, 2.35
+
+	live := &Live{loc: location.New(location.WithLatitude(wantLat), location.WithLongitude(wantLon))}
+	wantWhen := time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
+
+	live.onFix(wantWhen)
+
+	gotLat, gotLon, gotWhen := live.fix.snapshot()
+	if gotLat != wantLat || gotLon != wantLon || !gotWhen.Equal(wantWhen) {
+		t.Errorf("fix.snapshot() after onFix(%v) = (%v, %v, %v), want (%v, %v, %v)",
+			wantWhen, gotLat, gotLon, gotWhen, wantLat, wantLon, wantWhen)
+	}
+}
+
+// TestLiveGPSReceiverLiveFix covers gpsReceiver's live-fix branch: a live fix
+// wins outright, reporting the shared location's own coordinates and mode
+// rather than anything held from an earlier stamp.
+func TestLiveGPSReceiverLiveFix(t *testing.T) {
+	t.Parallel()
+
+	const (
+		liveLat    = 51.5
+		liveLon    = -0.1
+		heldLat    = 52.3
+		heldLon    = 4.9
+		twoDMode   = 2
+		threeDMode = 3
+	)
+
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name     string
+		mode     int
+		wantMode FixMode
+	}{
+		{name: "a live 3D fix", mode: threeDMode, wantMode: FixGPS3D},
+		{name: "a live 2D fix", mode: twoDMode, wantMode: FixGPS2D},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			loc := location.New(
+				location.WithLatitude(liveLat), location.WithLongitude(liveLon), location.WithMode(testCase.mode))
+			live := &Live{loc: loc, now: func() time.Time { return now }}
+			live.fix.stamp(heldLat, heldLon, now.Add(-time.Second))
+
+			receiver, ok := live.gpsReceiver()
+			if !ok {
+				t.Fatal("gpsReceiver() ok = false, want true for a live fix")
+			}
+
+			wrongState := receiver.Label != LabelGPS || receiver.Mode != testCase.wantMode || !receiver.HasFix
+			if wrongState {
+				t.Errorf("Receiver = %+v, want Label %q Mode %d HasFix true", receiver, LabelGPS, testCase.wantMode)
+			}
+
+			if receiver.Latitude != liveLat || receiver.Longitude != liveLon {
+				t.Errorf("Receiver coordinates = (%v, %v), want the live fix (%v, %v)",
+					receiver.Latitude, receiver.Longitude, liveLat, liveLon)
+			}
+
+			if want := now.Add(-time.Second); !receiver.LastFix.Equal(want) {
+				t.Errorf("Receiver.LastFix = %v, want %v", receiver.LastFix, want)
+			}
+		})
+	}
+}
+
+// TestLiveGPSReceiverHeldFix covers gpsReceiver's hold window: a lost fix
+// keeps reporting the position it was last stamped with, right up to and
+// including the gpsHold boundary itself.
+func TestLiveGPSReceiverHeldFix(t *testing.T) {
+	t.Parallel()
+
+	const heldLat, heldLon = 52.3, 4.9
+
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name string
+		age  time.Duration
+	}{
+		{name: "a stamp inside the hold window", age: gpsHold - time.Second},
+		{name: "a stamp exactly at the hold boundary", age: gpsHold},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			when := now.Add(-testCase.age)
+
+			live := &Live{loc: location.New(), now: func() time.Time { return now }}
+			live.fix.stamp(heldLat, heldLon, when)
+
+			receiver, ok := live.gpsReceiver()
+			if !ok {
+				t.Fatal("gpsReceiver() ok = false, want true (within the hold window)")
+			}
+
+			wrongState := receiver.Label != LabelGPS || receiver.Mode != FixGPSNoFix || receiver.HasFix
+			if wrongState {
+				t.Errorf("Receiver = %+v, want Label %q Mode %d HasFix false", receiver, LabelGPS, FixGPSNoFix)
+			}
+
+			if receiver.Latitude != heldLat || receiver.Longitude != heldLon {
+				t.Errorf("Receiver coordinates = (%v, %v), want the held fix (%v, %v)",
+					receiver.Latitude, receiver.Longitude, heldLat, heldLon)
+			}
+
+			if !receiver.LastFix.Equal(when) {
+				t.Errorf("Receiver.LastFix = %v, want %v", receiver.LastFix, when)
+			}
+		})
+	}
+}
+
+// TestLiveGPSReceiverDeclines covers gpsReceiver's two ways of saying no: a
+// stamp older than gpsHold, and a Live that was never stamped at all. Either
+// way the caller is expected to fall back to the self-locate estimate.
+func TestLiveGPSReceiverDeclines(t *testing.T) {
+	t.Parallel()
+
+	const heldLat, heldLon = 52.3, 4.9
+
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	t.Run("a stamp older than the hold", func(t *testing.T) {
+		t.Parallel()
+
+		live := &Live{loc: location.New(), now: clock}
+		live.fix.stamp(heldLat, heldLon, now.Add(-gpsHold-time.Second))
+
+		if _, ok := live.gpsReceiver(); ok {
+			t.Error("gpsReceiver() ok = true, want false (past the hold window)")
+		}
+	})
+
+	t.Run("never stamped", func(t *testing.T) {
+		t.Parallel()
+
+		live := &Live{loc: location.New(), now: clock}
+
+		if _, ok := live.gpsReceiver(); ok {
+			t.Error("gpsReceiver() ok = true, want false (no fix has ever been stamped)")
+		}
+	})
+}
+
+// TestLiveReceiverGPSPrecedenceWins covers the two cases where gpsReceiver
+// wins the argument with the self-locate estimate outright: a live fix, and
+// a fix lost inside the hold window, which must report the position gpsd
+// last confirmed rather than the estimate or the zeroes gpsd is still
+// streaming into the shared location.
+func TestLiveReceiverGPSPrecedenceWins(t *testing.T) {
+	t.Parallel()
+
+	const (
+		gpsLat     = 51.5
+		gpsLon     = -0.1
+		heldLat    = 52.3
+		heldLon    = 4.9
+		staleLat   = 0.0
+		staleLon   = 0.0
+		threeDMode = 3
+		noFixMode  = 1
+		insideHold = gpsHold - time.Second
+	)
+
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	t.Run("a live GPS fix beats an available estimate", func(t *testing.T) {
+		t.Parallel()
+
+		live := newTestLive(t, WithClock(clock))
+		seedLocatorEstimate(live)
+		live.loc.Update(
+			location.WithLatitude(gpsLat), location.WithLongitude(gpsLon), location.WithMode(threeDMode))
+
+		receiver := live.receiver()
+		if receiver.Label != LabelGPS || receiver.Mode != FixGPS3D {
+			t.Errorf("Receiver = %+v, want Label %q Mode %d", receiver, LabelGPS, FixGPS3D)
+		}
+
+		if receiver.Latitude != gpsLat || receiver.Longitude != gpsLon {
+			t.Errorf("Receiver coordinates = (%v, %v), want the live fix (%v, %v)",
+				receiver.Latitude, receiver.Longitude, gpsLat, gpsLon)
+		}
+	})
+
+	t.Run("a fix lost inside the hold reports the held position", func(t *testing.T) {
+		t.Parallel()
+
+		live := newTestLive(t, WithClock(clock))
+		seedLocatorEstimate(live)
+		live.fix.stamp(heldLat, heldLon, now.Add(-insideHold))
+		// gpsd keeps streaming after the fix is lost, and a no-fix TPV report
+		// carries zero coordinates: this is what the shared location looks
+		// like by the time receiver is asked. The held fix, not this stale
+		// pair and not the estimate, is what must come back.
+		live.loc.Update(
+			location.WithLatitude(staleLat), location.WithLongitude(staleLon), location.WithMode(noFixMode))
+
+		receiver := live.receiver()
+		if receiver.Label != LabelGPS || receiver.Mode != FixGPSNoFix {
+			t.Errorf("Receiver = %+v, want Label %q Mode %d", receiver, LabelGPS, FixGPSNoFix)
+		}
+
+		if receiver.Latitude != heldLat || receiver.Longitude != heldLon {
+			t.Errorf("Receiver coordinates = (%v, %v), want the held fix (%v, %v)",
+				receiver.Latitude, receiver.Longitude, heldLat, heldLon)
+		}
+	})
+}
+
+// TestLiveReceiverGPSPrecedenceFallsThrough covers the two cases where
+// gpsReceiver has nothing to report: a fix lost more than gpsHold ago, and no
+// GPS activity at all. Both must leave the self-locate estimate, or the lack
+// of one, as the answer.
+func TestLiveReceiverGPSPrecedenceFallsThrough(t *testing.T) {
+	t.Parallel()
+
+	const (
+		heldLat     = 52.3
+		heldLon     = 4.9
+		staleLat    = 0.0
+		staleLon    = 0.0
+		noFixMode   = 1
+		outsideHold = gpsHold + time.Second
+	)
+
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	t.Run("a fix lost past the hold window falls through to the estimate", func(t *testing.T) {
+		t.Parallel()
+
+		live := newTestLive(t, WithClock(clock))
+		seedLocatorEstimate(live)
+		live.fix.stamp(heldLat, heldLon, now.Add(-outsideHold))
+		live.loc.Update(
+			location.WithLatitude(staleLat), location.WithLongitude(staleLon), location.WithMode(noFixMode))
+
+		receiver := live.receiver()
+		if receiver.Label != LabelEstimate || receiver.Mode != FixEstimated {
+			t.Errorf("Receiver = %+v, want Label %q Mode %d", receiver, LabelEstimate, FixEstimated)
+		}
+	})
+
+	t.Run("neither GPS nor an estimate leaves the receiver unknown", func(t *testing.T) {
+		t.Parallel()
+
+		receiver := newTestLive(t, WithClock(clock)).receiver()
+		if receiver.Label != LabelNone || receiver.Mode != FixNone {
+			t.Errorf("Receiver = %+v, want Label %q Mode %d", receiver, LabelNone, FixNone)
+		}
+	})
+}
+
+// TestLiveReceiverViolatedCount checks that Violated only ever reaches the
+// Receiver through the estimate branch: a manual position and a GPS fix
+// both report zero even with a stale non-zero count sitting behind them.
+func TestLiveReceiverViolatedCount(t *testing.T) {
+	t.Parallel()
+
+	const (
+		estimateLat  = 52.5
+		estimateLon  = 4.5
+		violatedWant = 2
+		manualLat    = 51.0
+		manualLon    = 3.0
+		gpsLat       = 50.0
+		gpsLon       = 2.0
+		threeDMode   = 3
+	)
+
+	t.Run("an estimate with violated circles reports the count", func(t *testing.T) {
+		t.Parallel()
+
+		loc := location.New(
+			location.WithLatitude(estimateLat), location.WithLongitude(estimateLon),
+			location.WithSource(location.SourceInferred))
+		live := &Live{loc: loc}
+		live.rememberViolated(violatedWant)
+
+		receiver := live.receiver()
+		if receiver.Label != LabelEstimate || receiver.Violated != violatedWant {
+			t.Errorf("Receiver = %+v, want Label %q Violated %d", receiver, LabelEstimate, violatedWant)
+		}
+	})
+
+	t.Run("a manual position reports zero regardless of a stale violated count", func(t *testing.T) {
+		t.Parallel()
+
+		loc := location.New(location.WithLatitude(manualLat), location.WithLongitude(manualLon))
+		live := &Live{manual: true, manualLat: manualLat, manualLon: manualLon, loc: loc}
+		live.rememberViolated(violatedWant)
+
+		if got := live.receiver().Violated; got != 0 {
+			t.Errorf("Receiver.Violated for a manual position = %d, want 0", got)
+		}
+	})
+
+	t.Run("a GPS fix reports zero regardless of a stale violated count", func(t *testing.T) {
+		t.Parallel()
+
+		loc := location.New(
+			location.WithLatitude(gpsLat), location.WithLongitude(gpsLon), location.WithMode(threeDMode))
+		live := &Live{loc: loc}
+		live.rememberViolated(violatedWant)
+
+		if got := live.receiver().Violated; got != 0 {
+			t.Errorf("Receiver.Violated for a GPS fix = %d, want 0", got)
+		}
+	})
+}
+
+// TestLiveCloseWaitsForGPSWatcher checks that Close waits for the gpsd
+// watcher's goroutine, the same guarantee it already gives the ingest one.
+func TestLiveCloseWaitsForGPSWatcher(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan struct{})
+	//nolint:ireturn // gpsFactory is the seam under test, so it has to hand back the interface.
+	factory := func(string, gps.FixCallback) gpsWatcher { return blockingGPSWatcher{done: done} }
+
+	live, err := NewLive(WithIngest(stubIngest{}), WithGPSD(gpsdTestAddress), withGPSFactory(factory))
+	if err != nil {
+		t.Fatalf("NewLive: %v", err)
+	}
+
+	live.Start(context.Background())
+
+	if err := live.Close(); err != nil {
+		t.Errorf("Close() = %v, want nil", err)
+	}
+
+	select {
+	case <-done:
+	default:
+		t.Error("GPS watcher goroutine had not signalled exit by the time Close returned")
+	}
 }
