@@ -1,6 +1,7 @@
 package radar_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -147,18 +148,28 @@ func benchScene(tb testing.TB) (*radar.Scene, *canvas.Canvas) {
 // airlines.Lookup and adapts a brand colour to the palette on every aircraft,
 // so it is not a given that it stays free the way altitude mode is.
 //
+// The third case is minimal mode following the traffic, which walks the whole
+// fleet again for a centroid. The fixture's clock never moves, so what this
+// measures is the steady frame between two centrings, which is all but one
+// frame in three minutes of them; internal/radar's TestFollowAllocations is
+// what prices the other one.
+//
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
-		mode radar.ColourMode
+		set  radar.Settings
 	}{
-		{name: "altitude mode", mode: radar.ColourAltitude},
-		{name: "airline mode", mode: radar.ColourAirline},
+		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
+		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
+		{
+			name: "minimal mode following the traffic",
+			set:  radar.Settings{Colour: radar.ColourAltitude, Minimal: true, Recentre: radar.DefaultRecentre},
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := benchScene(t)
-			scene.Apply(radar.Settings{Colour: testCase.mode})
+			scene.Apply(testCase.set)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.
@@ -173,22 +184,28 @@ func TestDrawAllocations(t *testing.T) {
 
 // BenchmarkDraw measures one whole frame at the panel's resolution, in every
 // combination of colour mode and palette: airline mode and the paper palette
-// both do more work per aircraft than the defaults, and the four numbers
-// together are what the benchmark is for.
+// both do more work per aircraft than the defaults, and the numbers together
+// are what the benchmark is for. The last case is minimal mode following the
+// traffic, which has no furniture to draw and one more pass over the fleet.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range []struct {
 		name string
-		mode radar.ColourMode
+		set  radar.Settings
 		pal  theme.Palette
 	}{
-		{name: "altitude/night", mode: radar.ColourAltitude, pal: theme.Night},
-		{name: "altitude/paper", mode: radar.ColourAltitude, pal: theme.Paper},
-		{name: "airline/night", mode: radar.ColourAirline, pal: theme.Night},
-		{name: "airline/paper", mode: radar.ColourAirline, pal: theme.Paper},
+		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
+		{name: "altitude/paper", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Paper},
+		{name: "airline/night", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Night},
+		{name: "airline/paper", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Paper},
+		{
+			name: "minimal-following/night",
+			set:  radar.Settings{Colour: radar.ColourAltitude, Minimal: true, Recentre: radar.DefaultRecentre},
+			pal:  theme.Night,
+		},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
 			scene, canv := benchScene(b)
-			scene.Apply(radar.Settings{Colour: testCase.mode})
+			scene.Apply(testCase.set)
 			scene.SetPalette(testCase.pal)
 
 			b.ReportAllocs()
@@ -196,6 +213,58 @@ func BenchmarkDraw(b *testing.B) {
 
 			for b.Loop() {
 				scene.Draw(canv, 0)
+			}
+		})
+	}
+}
+
+// TestParseRecentre checks the --recenter allow list. Zero is a value rather
+// than a refusal: it is how the flag says "stay on the receiver", which is
+// what minimal mode did before the cadence existed.
+func TestParseRecentre(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		in   string
+		want time.Duration
+	}{
+		{name: "zero turns it off", in: "0", want: 0},
+		{name: "the floor", in: "10s", want: radar.MinRecentre},
+		{name: "the default", in: "3m", want: radar.DefaultRecentre},
+		{name: "the ceiling", in: "1h", want: radar.MaxRecentre},
+		{name: "a compound duration", in: "1m30s", want: 90 * time.Second},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := radar.ParseRecentre(testCase.in)
+			if err != nil {
+				t.Fatalf("ParseRecentre(%q) error = %v, want nil", testCase.in, err)
+			}
+
+			if got != testCase.want {
+				t.Errorf("ParseRecentre(%q) = %v, want %v", testCase.in, got, testCase.want)
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		name string
+		in   string
+	}{
+		{name: "under the floor", in: "9s"},
+		{name: "over the ceiling", in: "2h"},
+		{name: "negative", in: "-1m"},
+		{name: "not a duration", in: "forever"},
+		{name: "a bare number with no unit", in: "180"},
+		{name: "empty", in: ""},
+	} {
+		t.Run(testCase.name+" is refused", func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := radar.ParseRecentre(testCase.in); !errors.Is(err, radar.ErrRecentre) {
+				t.Errorf("ParseRecentre(%q) error = %v, want ErrRecentre", testCase.in, err)
 			}
 		})
 	}

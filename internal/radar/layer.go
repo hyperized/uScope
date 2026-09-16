@@ -43,6 +43,23 @@ type layerKey struct {
 	// auto range is on. Toggling r on a still scope changes no other field, so
 	// without this the word would appear only once something else moved.
 	auto bool
+
+	// minimal is in the key because z changes the whole picture behind the
+	// aircraft: the same canvas size, range and palette draw rings and a home
+	// marker in one view and two overlays around a different centre in the
+	// other.
+	minimal bool
+
+	// centreLat and centreLon are minimal mode's own projection centre,
+	// snapped onto the same grid the receiver's position is.
+	//
+	// The centre moves on its own, without a key being pressed, which is what
+	// makes it the one field here that has to be read every frame. A glide
+	// does rebuild the layer once per frame for its two seconds, and there is
+	// nothing to be done about that: the shore genuinely is somewhere else on
+	// each of those frames.
+	centreLat int64
+	centreLon int64
 }
 
 // paintBackground puts the background layer under the frame, redrawing it
@@ -53,10 +70,13 @@ type layerKey struct {
 // most expensive thing in the frame, and none of it changes between two frames
 // that share a key.
 func (s *Scene) paintBackground(dst *canvas.Canvas, frame source.Frame) {
-	// Minimal has nothing behind the aircraft but the field, so it clears
-	// straight into the frame and hands the layer's memory back rather than
-	// holding a second canvas the size of the first to keep one colour in.
-	if s.minimal {
+	// Minimal with both its overlays off has nothing behind the aircraft but
+	// the field, so it clears straight into the frame and hands the layer's
+	// memory back rather than holding a second canvas the size of the first
+	// to keep one colour in. Turn either overlay on and it wants the layer
+	// like any other view: a few thousand shore segments are not something to
+	// draw thirty times a second.
+	if s.minimal && !s.shoreDrawn() && !s.airportsDrawn() {
 		s.layer = nil
 		dst.Clear(s.pal.Field)
 
@@ -82,10 +102,14 @@ func (s *Scene) layerKeyFor(dst *canvas.Canvas, frame source.Frame) layerKey {
 		lat:      snap(frame.Receiver.Latitude),
 		lon:      snap(frame.Receiver.Longitude),
 		palette:  s.pal,
-		shore:    s.shoreOn,
-		airports: s.airports,
+		shore:    s.shoreDrawn(),
+		airports: s.airportsDrawn(),
 		fix:      frame.Receiver.Mode,
 		auto:     s.autoRange,
+
+		minimal:   s.minimal,
+		centreLat: snap(s.centre.lat),
+		centreLon: snap(s.centre.lon),
 	}
 }
 
@@ -108,9 +132,16 @@ func (s *Scene) renderLayer(dst *canvas.Canvas, key layerKey, frame source.Frame
 	s.layer.Clear(s.pal.Field)
 
 	lay := s.newLayout(s.layer)
-	lay.bottom -= s.keyBarHeight(&lay)
-	lay.top += s.headerHeight(&lay)
-	lay.split()
+
+	// Minimal takes the whole canvas, so there is no key bar or header to
+	// make room for and nothing to split off for a column. measureScope
+	// ignores lay.scope in that mode anyway; skipping the carving keeps it
+	// from being measured twice for an answer nothing reads.
+	if !s.minimal {
+		lay.bottom -= s.keyBarHeight(&lay)
+		lay.top += s.headerHeight(&lay)
+		lay.split()
+	}
 
 	s.drawField(&lay, frame)
 

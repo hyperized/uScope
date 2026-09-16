@@ -273,17 +273,11 @@ func bearingTo(receiver source.Receiver, plane airplane.Snapshot) (float64, bool
 	return bearing, true
 }
 
-// hasPosition reports whether an aircraft has a decoded position.
-//
-// Exactly (0, 0) is the undecoded state rather than a spot in the Gulf of
-// Guinea: a Snapshot starts there and stays until a position message resolves,
-// and uAirwaves' own distance function reads it the same way.
+// hasPosition reports whether an aircraft has a decoded position. The rule
+// itself is positioned, in follow.go, so the scope, the centroid and this
+// cannot come to different answers about the same aeroplane.
 func hasPosition(plane airplane.Snapshot) bool {
-	if math.IsNaN(plane.Latitude) || math.IsNaN(plane.Longitude) {
-		return false
-	}
-
-	return plane.Latitude != 0 || plane.Longitude != 0
+	return positioned(plane.Latitude, plane.Longitude)
 }
 
 // drawPosition writes where the aircraft is, to two decimals.

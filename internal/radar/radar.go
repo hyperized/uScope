@@ -167,9 +167,42 @@ type Scene struct {
 	shoreSet *shore.Set
 
 	// minimal strips the scene back to the aircraft and their trails on the
-	// whole canvas, which the z key flips. Every other setting keeps its
-	// state while it is on; some of them just have nothing left to draw.
+	// whole canvas, which the z key flips.
 	minimal bool
+
+	// minimalShore and minimalAirports are minimal mode's own copies of the
+	// two overlay toggles, and they are what m and a flip while it is on.
+	//
+	// Both start off, so minimal opens on a bare field, which is what it is
+	// for. They are separate from shoreOn and airports rather than shared
+	// because the two views want opposite defaults: the scope is a map with
+	// aircraft on it and minimal is aircraft with nothing behind them, so a
+	// shared pair would mean every trip into minimal started by turning two
+	// things off and every trip back started by turning them on again.
+	minimalShore    bool
+	minimalAirports bool
+
+	// Minimal mode's own projection centre and the glide that moves it, all
+	// of it inert while recentre is zero. recentre is the cadence --recenter
+	// asked for. centre is where minimal mode projects from on this frame;
+	// glideFrom and glideTo are the ends of the move in progress and glideAt
+	// the elapsed reading it started at. lastFit is the frame clock the last
+	// centring happened on, which is what the cadence is measured against,
+	// and haveCentre separates "nothing chosen yet" from "centred on the
+	// equator".
+	//
+	// follow.go works all of it out. It lives on the Scene rather than in a
+	// struct of its own because the draw path has to reach it without an
+	// allocation, and because it is state of the same kind as the toggles
+	// above it.
+	recentre   time.Duration
+	centre     geo
+	glideFrom  geo
+	glideTo    geo
+	glideAt    time.Duration
+	gliding    bool
+	haveCentre bool
+	lastFit    time.Time
 
 	// The background layer: everything on the scope that does not move
 	// between frames, kept on a canvas of its own and copied under each frame
@@ -349,16 +382,30 @@ type layout struct {
 	labels bool
 }
 
-// Draw paints one frame. elapsed is unused: the scene is driven by the data
-// and the clock in the frame, not by how long the program has been running.
-func (s *Scene) Draw(dst *canvas.Canvas, _ time.Duration) {
+// Draw paints one frame.
+//
+// Everything on screen comes from the data and the clock in the frame. The
+// one thing elapsed is read for is minimal mode's glide, which is an
+// animation rather than a reading: it has to advance once per drawn frame
+// whatever the feed is doing, and the run loop's own clock is the only thing
+// that measures that.
+func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	frame := s.src.Frame()
 	if frame.Now.IsZero() {
 		frame.Now = s.now()
 	}
 
 	s.syncSelection(frame)
-	s.fitRange(frame)
+
+	// Minimal mode following the traffic fits its own range, around the
+	// centroid and at the cadence rather than around the receiver and on
+	// every frame. Running both would have the two pull against each other
+	// once a frame, which is exactly the breathing the cadence is for.
+	if s.following() {
+		s.follow(frame, elapsed)
+	} else {
+		s.fitRange(frame)
+	}
 
 	// The field, the rings, the labels, the home marker, the airports and the
 	// shore all come from the background layer, which is redrawn only when

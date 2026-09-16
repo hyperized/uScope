@@ -36,6 +36,12 @@ const (
 	// homeRadius is the little ring around the receiver's own position.
 	homeRadius = 4
 
+	// receiverRadius is the same marker in minimal mode, one pixel wider.
+	// The ordinary view puts the receiver dead centre where the eye already
+	// is; minimal mode following the traffic puts it wherever it happens to
+	// fall, on a field with no other furniture to find it against.
+	receiverRadius = 5
+
 	// rangeLabelGap is the air between a range number and the ring it names.
 	rangeLabelGap = 4
 
@@ -102,16 +108,23 @@ type projector struct {
 	scale   float64
 }
 
-// newProjector builds the projection for one frame.
-func newProjector(geom scopeGeometry, receiver source.Receiver, scopeNm float64) (projector, bool) {
+// newProjector builds the projection for one frame around the point the scope
+// is centred on.
+//
+// That point is the receiver in the ordinary view, and in minimal mode it is
+// the traffic's own centroid as soon as --recenter has picked one. Taking a
+// bare position rather than a source.Receiver is what lets the second case
+// exist: the origin is a place, not a fix, and a parameter typed as a
+// receiver would be claiming otherwise.
+func newProjector(geom scopeGeometry, origin geo, scopeNm float64) (projector, bool) {
 	if geom.rangeR <= 0 || scopeNm <= 0 || math.IsNaN(scopeNm) {
 		return projector{}, false
 	}
 
-	// A receiver at exactly (0, 0) is the "no position yet" state rather than
-	// a buoy in the Gulf of Guinea, and uAirwaves' distance function treats it
+	// An origin at exactly (0, 0) is the "no position yet" state rather than a
+	// buoy in the Gulf of Guinea, and uAirwaves' distance function treats it
 	// the same way. Nothing can be plotted against it.
-	if receiver.Latitude == 0 && receiver.Longitude == 0 {
+	if !positioned(origin.lat, origin.lon) {
 		return projector{}, false
 	}
 
@@ -121,9 +134,9 @@ func newProjector(geom scopeGeometry, receiver source.Receiver, scopeNm float64)
 		radius:  geom.rangeR,
 		scopeNm: scopeNm,
 		limitNm: scopeNm,
-		lat0:    receiver.Latitude,
-		lon0:    receiver.Longitude,
-		cosLat0: math.Cos(receiver.Latitude * math.Pi / halfCircle),
+		lat0:    origin.lat,
+		lon0:    origin.lon,
+		cosLat0: math.Cos(origin.lat * math.Pi / halfCircle),
 		scale:   float64(geom.rangeR) / scopeNm,
 	}, true
 }
@@ -254,7 +267,7 @@ func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame,
 	}
 
 	scopeNm := s.scopeRange.GetCurrent()
-	proj, plottable := newProjector(geom, receiver, scopeNm)
+	proj, plottable := newProjector(geom, geo{lat: receiver.Latitude, lon: receiver.Longitude}, scopeNm)
 
 	return scopeFrame{geom: geom, proj: proj, scopeNm: scopeNm, plottable: plottable}, true
 }
@@ -262,10 +275,14 @@ func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame,
 // measureMinimal is the scope minimal mode projects with.
 //
 // The scope is the whole canvas rather than a box beside a column, so the
-// centre is the centre of the frame and the range maps to half the short edge.
-// Nothing is clipped to that radius: the cut-off is pushed out to the furthest
-// corner, which is the last place a position can land on a pixel, so the
-// corners show traffic the range ring would have hidden.
+// centre of the frame is the centre of the picture and the range maps to half
+// the short edge. What sits at that centre is the receiver with --recenter
+// off and the traffic's own centre with it on, which is minimalOrigin's
+// answer rather than this function's.
+//
+// Nothing is clipped to that radius: the cut-off is pushed out to the
+// furthest corner, which is the last place a position can land on a pixel, so
+// the corners show traffic the range ring would have hidden.
 func (s *Scene) measureMinimal(dst *canvas.Canvas, receiver source.Receiver) (scopeFrame, bool) {
 	geom, drawable := minimalGeometry(dst.Bounds())
 	if !drawable {
@@ -274,7 +291,7 @@ func (s *Scene) measureMinimal(dst *canvas.Canvas, receiver source.Receiver) (sc
 
 	scopeNm := s.scopeRange.GetCurrent()
 
-	proj, plottable := newProjector(geom, receiver, scopeNm)
+	proj, plottable := newProjector(geom, s.minimalOrigin(receiver), scopeNm)
 	if plottable {
 		proj = proj.reaching(scopeNm * cornerReach(dst.Bounds(), geom))
 	}
@@ -318,8 +335,14 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 		return
 	}
 
+	if s.minimal {
+		s.drawMinimalField(lay, view)
+
+		return
+	}
+
 	if s.shoreOn && view.plottable {
-		s.drawShore(lay.dst, view, frame.Receiver)
+		s.drawShore(lay.dst, view)
 	}
 
 	s.drawRings(lay, view.geom, view.scopeNm)
@@ -331,15 +354,88 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 	}
 }
 
+// drawMinimalField is the background minimal mode draws: its own two overlays
+// and nothing else.
+//
+// No rings, no cardinal letters, no range labels and no home marker. The
+// receiver gets a marker of its own over the traffic instead, because minimal
+// mode following the traffic is not centred on it and a marker in the middle
+// of the canvas would be pointing at the wrong place.
+func (s *Scene) drawMinimalField(lay *layout, view scopeFrame) {
+	if !view.plottable {
+		return
+	}
+
+	// drawRings is what clears this in the full scope, and minimal never
+	// calls it. Left over from the last full-scope render it would drop
+	// airports sitting nowhere near a label this view does not draw.
+	s.rangeLabelCount = 0
+
+	if s.minimalShore {
+		s.drawShore(lay.dst, view)
+	}
+
+	if s.minimalAirports {
+		s.drawAirports(lay, view.proj, airports.All())
+	}
+}
+
 // drawTraffic paints the part of the scope that changes every frame: the
 // trails, the aircraft and the selection marker.
+//
+// Minimal mode picks up the receiver marker here rather than on the
+// background layer, because minimal mode has no background layer: the field
+// is cleared straight into the frame, and the marker moves under the
+// projection like everything else that is plotted.
 func (s *Scene) drawTraffic(lay *layout, frame source.Frame) {
 	view, drawable := s.measureScope(lay, frame.Receiver)
 	if !drawable || !view.plottable {
 		return
 	}
 
+	if s.minimal {
+		s.drawReceiver(lay.dst, view.proj, frame.Receiver)
+	}
+
 	s.drawAircraft(lay, view.proj, frame)
+}
+
+// drawReceiver marks the receiver's own position on a scope that is no longer
+// centred on it.
+//
+// The ring follows the same fix-mode rule the ordinary view's home marker
+// does, with Muted standing in for Ink as the colour a known position gets.
+// On an otherwise bare field a marker set in the reading colour competes with
+// the aircraft, and the one thing this marker must not do is read as a
+// contact.
+//
+// The position is projected with offset rather than at, because at reports
+// only that something is outside the cut-off and this one is allowed to be:
+// following the traffic can put the receiver well off the canvas, and then
+// there is nothing to draw and nothing wrong.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawReceiver(dst *canvas.Canvas, proj projector, receiver source.Receiver) {
+	if !positioned(receiver.Latitude, receiver.Longitude) {
+		return
+	}
+
+	// No NaN guard: positioned above has already refused a NaN coordinate,
+	// and every other term in the projection is finite by construction, so
+	// there is nothing left here that could produce one.
+	offX, offY := proj.offset(receiver.Latitude, receiver.Longitude)
+	x, y := int(math.Round(offX)), int(math.Round(offY))
+
+	// The canvas clips a shape that runs off the edge, so this only has to
+	// catch the marker that is entirely outside it. Drawing one of those
+	// costs a few dozen rejected Set calls and says nothing.
+	marker := image.Rect(x-receiverRadius, y-receiverRadius, x+receiverRadius+1, y+receiverRadius+1)
+	if !marker.Overlaps(dst.Bounds()) {
+		return
+	}
+
+	dst.Circle(x, y, receiverRadius, s.fixColour(receiver.Mode, s.pal.Muted))
+	dst.FillCircle(x, y, 1, s.pal.Muted)
 }
 
 // drawRings draws the boundary and the range rings, with the range written on

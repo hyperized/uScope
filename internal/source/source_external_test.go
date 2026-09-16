@@ -961,6 +961,106 @@ func TestDemoSourceAndStats(t *testing.T) {
 	}
 }
 
+// TestDemoSectorPlacesFleetInNorthWestQuadrant checks that every aircraft
+// WithDemoSector places ends up north and west of the receiver. It asserts on
+// the sign of the lat/lon offset rather than recomputing a bearing from the
+// result, since the offset's sign is exactly what "north of" and "west of"
+// mean and needs no trigonometry of its own to check.
+func TestDemoSectorPlacesFleetInNorthWestQuadrant(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	demo, err := source.NewDemo(source.WithDemoSector(), source.WithDemoClock(func() time.Time { return fixed }))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	frame := demo.Frame()
+	receiver := frame.Receiver
+
+	if len(frame.Planes) == 0 {
+		t.Fatal("Frame().Planes is empty, want the full fleet")
+	}
+
+	for _, plane := range frame.Planes {
+		if plane.Latitude <= receiver.Latitude {
+			t.Errorf("plane %s latitude = %v, want > receiver latitude %v (north)",
+				plane.ICAO, plane.Latitude, receiver.Latitude)
+		}
+
+		if plane.Longitude >= receiver.Longitude {
+			t.Errorf("plane %s longitude = %v, want < receiver longitude %v (west)",
+				plane.ICAO, plane.Longitude, receiver.Longitude)
+		}
+	}
+}
+
+// TestDemoDefaultFleetIsNotConfinedToNorthWest proves the previous test is
+// checking something real: without WithDemoSector, at least one aircraft
+// falls outside the north-west quadrant.
+func TestDemoDefaultFleetIsNotConfinedToNorthWest(t *testing.T) {
+	t.Parallel()
+
+	demo, err := source.NewDemo()
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	frame := demo.Frame()
+	receiver := frame.Receiver
+
+	outside := false
+
+	for _, plane := range frame.Planes {
+		if plane.Latitude <= receiver.Latitude || plane.Longitude >= receiver.Longitude {
+			outside = true
+
+			break
+		}
+	}
+
+	if !outside {
+		t.Error("default fleet is entirely north-west of the receiver, want at least one aircraft elsewhere")
+	}
+}
+
+// TestDemoSectorIsDeterministic builds two demos with the same seed and
+// WithDemoSector and requires them to place every aircraft identically,
+// matching the guarantee the default fleet already has.
+func TestDemoSectorIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return fixed }
+
+	first, err := source.NewDemo(source.WithDemoSector(), source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	second, err := source.NewDemo(source.WithDemoSector(), source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	firstPlanes := first.Frame().Planes
+	secondPlanes := second.Frame().Planes
+
+	if len(firstPlanes) != len(secondPlanes) {
+		t.Fatalf("plane counts differ: %d vs %d", len(firstPlanes), len(secondPlanes))
+	}
+
+	for index := range firstPlanes {
+		if firstPlanes[index].ICAO != secondPlanes[index].ICAO ||
+			firstPlanes[index].Latitude != secondPlanes[index].Latitude ||
+			firstPlanes[index].Longitude != secondPlanes[index].Longitude {
+			t.Errorf("plane %d differs between two WithDemoSector() instances: %+v vs %+v",
+				index, firstPlanes[index], secondPlanes[index])
+		}
+	}
+}
+
 func TestDemoClose(t *testing.T) {
 	t.Parallel()
 

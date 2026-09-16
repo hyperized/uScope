@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/radar"
@@ -23,16 +24,17 @@ const appName = "uScope"
 // Flag defaults. The framebuffer path and the size match the uConsole, since
 // that is the machine this is for.
 const (
-	defaultFB      = "/dev/fb0"
-	defaultRotate  = "auto"
-	defaultFPS     = 30
-	defaultSize    = "1280x720"
-	defaultBackend = "auto"
-	defaultScene   = "radar"
-	defaultTheme   = "night"
-	defaultColour  = "altitude"
-	defaultOn      = "on"
-	defaultRange   = "auto"
+	defaultFB       = "/dev/fb0"
+	defaultRotate   = "auto"
+	defaultFPS      = 30
+	defaultSize     = "1280x720"
+	defaultBackend  = "auto"
+	defaultScene    = "radar"
+	defaultTheme    = "night"
+	defaultColour   = "altitude"
+	defaultOn       = "on"
+	defaultRange    = "auto"
+	defaultRecentre = "3m"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -103,6 +105,7 @@ var (
 	errBeastAddr  = errors.New(appName + ": --beast must be HOST:PORT")
 	errPNGBoth    = errors.New(appName + ": --png and --backend disagree")
 	errPNGPath    = errors.New(appName + ": --backend png needs --png PATH to write to")
+	errRecentre   = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
 )
 
 // config is the validated command line. Everything in it has already been
@@ -125,6 +128,7 @@ type config struct {
 	rangeNm     float64
 	minimal     bool
 	noDecay     bool
+	recentre    time.Duration
 
 	// battery is the power-supply file to read instead of looking one up. It
 	// is empty for the normal case, which is autodiscovery.
@@ -139,6 +143,11 @@ type config struct {
 	latitude    float64
 	longitude   float64
 	hasLocation bool
+
+	// demoSector is inert unless the demo fleet is what ends up running, the
+	// same way --beast alongside --demo is not an error: the operator asked
+	// for something that only matters if a later choice makes it apply.
+	demoSector bool
 }
 
 // rawFlags is the command line before validation: whatever the flag package
@@ -160,12 +169,14 @@ type rawFlags struct {
 	replay      string
 	latitude    string
 	longitude   string
+	recentre    string
 	fps         int
 	frames      int
 	testPattern bool
 	minimal     bool
 	noDecay     bool
 	demo        bool
+	demoSector  bool
 }
 
 // parseFlags turns an argument list into a validated config.
@@ -218,12 +229,21 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
 	set.BoolVar(&raw.minimal, "minimal", false,
 		"draw only the aircraft and their trails, edge to edge, with no header, key bar or column")
+	// The flag is spelled the American way and the Go identifiers behind it
+	// are spelled the British one, which is deliberate rather than a slip:
+	// "recenter" is what anyone reaching for this flag will type, and
+	// internal/radar spells everything else the way the rest of this repo
+	// does. Do not "fix" either half into the other.
+	set.StringVar(&raw.recentre, "recenter", defaultRecentre,
+		"how often minimal mode recentres on the traffic, 10s to 1h, or 0 to stay on the receiver")
 	set.BoolVar(&raw.noDecay, "no-decay", false,
 		"draw every trail segment at full strength instead of fading the tail out")
 	set.StringVar(&raw.battery, "battery", "",
 		"power-supply uevent file to read the battery from; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
 		"fly an invented fleet instead of decoding one, for a machine with no receiver")
+	set.BoolVar(&raw.demoSector, "demo-sector", false,
+		"place the whole demo fleet in the north-west quadrant, as a directional antenna would")
 	set.StringVar(&raw.beast, "beast", "",
 		"consume Mode S frames from a remote demodulator at HOST:PORT")
 	set.StringVar(&raw.replay, "replay-iq", "",
@@ -303,6 +323,11 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
+	recentre, err := parseRecentre(raw.recentre)
+	if err != nil {
+		return display{}, err
+	}
+
 	return display{
 		rotation:   rotation,
 		autoRotate: auto,
@@ -317,6 +342,7 @@ func (raw rawFlags) display() (display, error) {
 			RangeNm:  rangeNm,
 			Minimal:  raw.minimal,
 			NoDecay:  raw.noDecay,
+			Recentre: recentre,
 		},
 	}, nil
 }
@@ -378,6 +404,7 @@ func (raw rawFlags) validated() (config, error) {
 		rangeNm:     show.radar.RangeNm,
 		minimal:     show.radar.Minimal,
 		noDecay:     show.radar.NoDecay,
+		recentre:    show.radar.Recentre,
 		battery:     raw.battery,
 		source:      chosen,
 		beast:       raw.beast,
@@ -385,6 +412,7 @@ func (raw rawFlags) validated() (config, error) {
 		latitude:    place.latitude,
 		longitude:   place.longitude,
 		hasLocation: place.given,
+		demoSector:  raw.demoSector,
 	}, nil
 }
 
@@ -555,6 +583,17 @@ func parseRange(text string) (float64, error) {
 	}
 
 	return value, nil
+}
+
+// parseRecentre reads --recenter against internal/radar's allow list, which
+// owns the limits for the same reason parseRange does not write them here.
+func parseRecentre(text string) (time.Duration, error) {
+	every, err := radar.ParseRecentre(text)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errRecentre, err)
+	}
+
+	return every, nil
 }
 
 // checkBattery rejects an override that was given as an empty string.

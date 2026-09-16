@@ -24,6 +24,15 @@ import (
 // fixtures below put on the field.
 const sceneRangeNm = 60
 
+// fieldProbeX and fieldProbeY are a pixel that is bare field in every view:
+// the bottom-left corner, which is inside the layout margin under the key bar.
+// The top-left corner used to serve for this and no longer can, because the
+// header band bleeds into it.
+const (
+	fieldProbeX = 0
+	fieldProbeY = panelHeight - 1
+)
+
 // sceneClock is a fixed instant, so a header drawn twice is drawn the same.
 //
 //nolint:gochecknoglobals // a fixed clock is data, and time.Time cannot be const.
@@ -878,7 +887,7 @@ func TestOptions(t *testing.T) {
 		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(inverted))
 		scene.Draw(canv, 0)
 
-		if got := canv.Image().RGBAAt(0, 0); got != inverted.Field {
+		if got := canv.Image().RGBAAt(fieldProbeX, fieldProbeY); got != inverted.Field {
 			t.Errorf("field pixel = %v, want the palette's %v", got, inverted.Field)
 		}
 	})
@@ -980,14 +989,14 @@ func TestSetPaletteChangesColours(t *testing.T) {
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
 	scene.Draw(canv, 0)
 
-	if got := canv.Image().RGBAAt(0, 0); got != theme.Night.Field {
+	if got := canv.Image().RGBAAt(fieldProbeX, fieldProbeY); got != theme.Night.Field {
 		t.Fatalf("field pixel before SetPalette = %v, want %v", got, theme.Night.Field)
 	}
 
 	scene.SetPalette(theme.Paper)
 	scene.Draw(canv, 0)
 
-	if got := canv.Image().RGBAAt(0, 0); got != theme.Paper.Field {
+	if got := canv.Image().RGBAAt(fieldProbeX, fieldProbeY); got != theme.Paper.Field {
 		t.Errorf("field pixel after SetPalette(Paper) = %v, want %v", got, theme.Paper.Field)
 	}
 }
@@ -1841,15 +1850,22 @@ func TestMinimalModeStripsChrome(t *testing.T) {
 func TestMinimalModeDropsTheColumn(t *testing.T) {
 	t.Parallel()
 
-	t.Run("an empty sky paints only the field", func(t *testing.T) {
+	t.Run("an empty sky paints only the receiver marker", func(t *testing.T) {
 		t.Parallel()
 
 		scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame())
 		scene.Apply(radar.Settings{Minimal: true})
 		scene.Draw(canv, 0)
 
-		if got := painted(canv, canv.Bounds()); got != 0 {
-			t.Errorf("minimal mode with nothing on screen painted %d pixels, want 0", got)
+		// With --recenter off the projection still sits on the receiver, so
+		// the marker lands dead centre and is the only thing on the canvas.
+		marker := image.Rect(panelWidth/2-8, panelHeight/2-8, panelWidth/2+8, panelHeight/2+8)
+		if painted(canv, marker) == 0 {
+			t.Error("minimal mode painted nothing at the centre, want the receiver marker")
+		}
+
+		if got := painted(canv, canv.Bounds()) - painted(canv, marker); got != 0 {
+			t.Errorf("minimal mode with nothing on screen painted %d pixels away from the marker, want 0", got)
 		}
 	})
 
@@ -2459,5 +2475,465 @@ func TestSentinelsAreNotDrawnAsFigures(t *testing.T) {
 	// the only one whose silhouette does not rotate with the course.
 	if !identicalIn(headingUnknown, draw(t, sentinel, cruise), scopeBox) {
 		t.Error("two frames with the same undecoded heading drew different scopes")
+	}
+}
+
+// --- following the traffic in minimal mode --------------------------------
+
+// The pixel geometry these tests read positions off. The canvas is 1280x720,
+// so minimal mode's centre is (640, 360) and its radius is half the short
+// edge; with the range pinned at 60 nautical miles that is six pixels to the
+// nautical mile.
+const (
+	minimalCentreX = panelWidth / 2
+	minimalCentreY = panelHeight / 2
+	pixelsPerNm    = (panelHeight / 2) / sceneRangeNm
+
+	// followProbe is the half-side of the box these tests count pixels in. It
+	// is a little wider than a 15 pixel silhouette so a sprite that lands a
+	// pixel either side of where the arithmetic says still counts.
+	followProbe = 12
+)
+
+// glideSpanNs repeats internal/radar's own glideSpan, which an external test
+// cannot see. The package's TestGlide is what pins the real one; this is only
+// how long a draw here has to claim to be from the last for the glide to have
+// run its course.
+const glideSpanNs = 2 * time.Second
+
+// stepClock is a clock a test moves by hand.
+//
+// The scene reads it through radar.WithClock on any frame that carries no
+// timestamp of its own, which is how the recentring cadence gets driven
+// without a test waiting three minutes for it.
+type stepClock struct{ at time.Time }
+
+func (c *stepClock) now() time.Time       { return c.at }
+func (c *stepClock) step(d time.Duration) { c.at = c.at.Add(d) }
+
+// undated strips a frame's timestamp so the scene falls back to the clock the
+// test is holding.
+func undated(frame source.Frame) source.Frame {
+	frame.Now = time.Time{}
+
+	return frame
+}
+
+// followInterval is the cadence every test here runs at. A minute is long
+// enough to step a clock either side of without the arithmetic getting fussy,
+// and the real default would make every case wait three times as long for
+// nothing.
+const followInterval = time.Minute
+
+// probe is a box around a pixel on minimal mode's centre column, which is
+// where every position these tests read lands: the fleets are due north or
+// due south of the receiver, so only the row ever changes.
+func probe(y int) image.Rectangle {
+	return image.Rect(minimalCentreX-followProbe, y-followProbe, minimalCentreX+followProbe, y+followProbe)
+}
+
+// followScene builds a minimal-mode scene wired to a source and a clock the
+// test drives, with the range pinned so the centring can be watched on its
+// own without auto range moving the scale underneath it.
+func followScene(tb testing.TB, src source.Source, clock *stepClock) (*radar.Scene, *canvas.Canvas) {
+	tb.Helper()
+
+	canv, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	scene := radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(sceneRangeNm)),
+		radar.WithClock(clock.now))
+	scene.Apply(radar.Settings{Minimal: true, Recentre: followInterval, RangeNm: sceneRangeNm})
+
+	return scene, canv
+}
+
+// TestRecentreCadence is the cadence itself: the first aircraft with a
+// position is centred on at once, a fleet that moves inside the interval is
+// left where the last centring put it, and the next interval brings it back
+// to the middle.
+//
+// The aircraft is read off the canvas rather than out of the scene, because
+// where it lands is the whole of what recentring is for.
+func TestRecentreCadence(t *testing.T) {
+	t.Parallel()
+
+	clock := &stepClock{at: sceneClock}
+	north := undated(sceneFrame(scenePlane("484AC1", "KLM123", 0, 20, 2400, 180)))
+	src := &fakeSource{frame: north}
+
+	scene, canv := followScene(t, src, clock)
+	scene.Draw(canv, 0)
+
+	if painted(canv, probe(minimalCentreY)) == 0 {
+		t.Fatal("the first centring did not put the only aircraft in the middle")
+	}
+
+	// The same aeroplane, now the other side of the receiver: 40 nautical
+	// miles from where the centre was left, which at six pixels to the mile
+	// is 240 pixels down the canvas.
+	src.frame = undated(sceneFrame(scenePlane("484AC1", "KLM123", 180, 20, 2400, 0)))
+
+	clock.step(followInterval - time.Second)
+	scene.Draw(canv, glideSpanNs)
+
+	if painted(canv, probe(minimalCentreY)) != 0 {
+		t.Error("the centre moved before the interval was up, want it held")
+	}
+
+	moved := minimalCentreY + 40*pixelsPerNm
+	if painted(canv, probe(moved)) == 0 {
+		t.Errorf("nothing landed at y=%d, want the aircraft drawn against the held centre", moved)
+	}
+
+	// Past the interval now. The frame the cadence fires on is where the
+	// glide starts, not where it lands, so the move takes the frame after it.
+	clock.step(2 * time.Second)
+	scene.Draw(canv, 2*glideSpanNs)
+	scene.Draw(canv, 4*glideSpanNs)
+
+	if painted(canv, probe(minimalCentreY)) == 0 {
+		t.Error("the centre did not move after the interval, want the aircraft back in the middle")
+	}
+}
+
+// TestRecentreGlidesRatherThanJumping checks that the move between two
+// centres is spread over frames instead of landing in one. Halfway through
+// the glide the aircraft has to be halfway between where it was drawn and
+// where it is going, which is what keeps the trails sliding with it.
+func TestRecentreGlidesRatherThanJumping(t *testing.T) {
+	t.Parallel()
+
+	clock := &stepClock{at: sceneClock}
+	src := &fakeSource{frame: undated(sceneFrame(scenePlane("484AC1", "KLM123", 0, 20, 2400, 180)))}
+
+	scene, canv := followScene(t, src, clock)
+	scene.Draw(canv, 0)
+
+	// Move the fleet 40 nautical miles south and let the interval come round.
+	src.frame = undated(sceneFrame(scenePlane("484AC1", "KLM123", 180, 20, 2400, 0)))
+
+	clock.step(followInterval)
+
+	// The frame the glide starts on: the centre has not moved yet, so the
+	// aircraft is still drawn 240 pixels below the middle.
+	scene.Draw(canv, 0)
+
+	if painted(canv, probe(minimalCentreY+40*pixelsPerNm)) == 0 {
+		t.Fatal("the first frame of the glide had already moved, want it to start where it was")
+	}
+
+	// Halfway along, with the ease curve exactly at a half.
+	scene.Draw(canv, glideSpanNs/2)
+
+	if painted(canv, probe(minimalCentreY+20*pixelsPerNm)) == 0 {
+		t.Error("nothing landed halfway, want the centre part of the way across")
+	}
+
+	scene.Draw(canv, glideSpanNs)
+
+	if painted(canv, probe(minimalCentreY)) == 0 {
+		t.Error("the glide did not finish, want the aircraft in the middle")
+	}
+}
+
+// TestRecentreFitsTheRangeAroundTheCentroid checks that minimal mode following
+// the traffic sizes the scope by how far the fleet is spread rather than by
+// how far away it is. A tight group 50 nautical miles out needs a 20 mile
+// scope around itself, not a 60 mile one around the receiver.
+func TestRecentreFitsTheRangeAroundTheCentroid(t *testing.T) {
+	t.Parallel()
+
+	// Three aircraft strung out along one bearing, 39, 49 and 59 nautical
+	// miles from the receiver. Their centroid is the middle one, and nothing
+	// is more than ten miles from it.
+	frame := undated(sceneFrame(
+		scenePlane("484AC1", "KLM123", 315, 39, 2400, 41),
+		scenePlane("4CA2D3", "RYR7X", 315, 49, 8500, 41),
+		scenePlane("3C6745", "DLH4EA", 315, 59, 36000, 41),
+	))
+
+	for _, testCase := range []struct {
+		name     string
+		recentre time.Duration
+		want     float64
+	}{
+		{name: "following fits around the centroid", recentre: time.Minute, want: 20},
+		{name: "the cadence off fits around the receiver", want: 60},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := canvas.New(panelWidth, panelHeight)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			clock := &stepClock{at: sceneClock}
+			ranges := scope.New(scope.WithCurrent(sceneRangeNm))
+			scene := radar.New(testFaces(t), &fakeSource{frame: frame}, ranges, radar.WithClock(clock.now))
+			scene.Apply(radar.Settings{Minimal: true, Recentre: testCase.recentre})
+
+			scene.Draw(canv, 0)
+
+			if got := ranges.GetCurrent(); got != testCase.want {
+				t.Errorf("range after Draw = %g NM, want %g", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestReceiverMarker checks the marker minimal mode draws where the antenna
+// is, now that the picture is no longer centred on it.
+//
+// It is the palette's muted colour, which nothing else in minimal mode uses:
+// the aircraft here are low-band green, and there is no furniture.
+func TestReceiverMarker(t *testing.T) {
+	t.Parallel()
+
+	t.Run("it lands where the receiver projects to", func(t *testing.T) {
+		t.Parallel()
+
+		// One aircraft 20 nautical miles due north. Centred on it, the
+		// receiver is 20 miles due south of the middle of the canvas, which
+		// at six pixels to the mile is 120 pixels down.
+		clock := &stepClock{at: sceneClock}
+		src := &fakeSource{frame: undated(sceneFrame(scenePlane("484AC1", "KLM123", 0, 20, 2400, 180)))}
+
+		scene, canv := followScene(t, src, clock)
+		scene.Draw(canv, 0)
+
+		where := probe(minimalCentreY + 20*pixelsPerNm)
+		if countColour(canv, where, theme.Night.Muted) == 0 {
+			t.Error("no muted pixels where the receiver projects to, want the marker there")
+		}
+	})
+
+	t.Run("it is not drawn when it falls off the canvas", func(t *testing.T) {
+		t.Parallel()
+
+		// 120 nautical miles north is 720 pixels below the middle once the
+		// centre has followed the traffic up there, which is past the bottom
+		// edge of a 720 pixel canvas.
+		clock := &stepClock{at: sceneClock}
+		src := &fakeSource{frame: undated(sceneFrame(scenePlane("484AC1", "KLM123", 0, 120, 2400, 180)))}
+
+		scene, canv := followScene(t, src, clock)
+		scene.Draw(canv, 0)
+
+		if got := countColour(canv, canv.Bounds(), theme.Night.Muted); got != 0 {
+			t.Errorf("drew %d muted pixels with the receiver off the canvas, want 0", got)
+		}
+	})
+
+	t.Run("it is not drawn when there is no receiver position", func(t *testing.T) {
+		t.Parallel()
+
+		frame := undated(sceneFrame(scenePlane("484AC1", "KLM123", 0, 20, 2400, 180)))
+		frame.Receiver = source.Receiver{Label: source.LabelNone, Mode: source.FixNone}
+
+		clock := &stepClock{at: sceneClock}
+		scene, canv := followScene(t, &fakeSource{frame: frame}, clock)
+		scene.Draw(canv, 0)
+
+		if got := countColour(canv, canv.Bounds(), theme.Night.Muted); got != 0 {
+			t.Errorf("drew %d muted pixels with no receiver position, want 0", got)
+		}
+	})
+}
+
+// --- minimal mode's own overlays ------------------------------------------
+
+// TestMinimalShoreToggle checks that m draws the coastline in minimal mode,
+// that minimal starts without it, and that pressing it there leaves the full
+// scope's own coastline exactly as it was.
+func TestMinimalShoreToggle(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
+	scene.Apply(radar.Settings{RangeNm: sceneRangeNm})
+
+	scene.Draw(canv, 0)
+
+	fullScope := countColour(canv, canv.Bounds(), theme.Night.Shore)
+	if fullScope == 0 {
+		t.Fatal("the full scope drew no coastline, so this comparison proves nothing")
+	}
+
+	press(scene, 'z')
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, canv.Bounds(), theme.Night.Shore); got != 0 {
+		t.Errorf("minimal drew %d shore pixels before m, want 0", got)
+	}
+
+	press(scene, 'm')
+	scene.Draw(canv, 0)
+
+	if countColour(canv, canv.Bounds(), theme.Night.Shore) == 0 {
+		t.Error("minimal drew no shore pixels after m, want the coastline")
+	}
+
+	press(scene, 'z')
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, canv.Bounds(), theme.Night.Shore); got != fullScope {
+		t.Errorf("the full scope drew %d shore pixels after m in minimal, want the original %d", got, fullScope)
+	}
+}
+
+// TestMinimalAirportsToggle is TestMinimalShoreToggle for a. The markers are
+// the palette's rule colour, which in minimal mode nothing else uses: there
+// are no rings there for it to be confused with.
+func TestMinimalAirportsToggle(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Apply(radar.Settings{RangeNm: sceneRangeNm})
+
+	scene.Draw(canv, 0)
+
+	fullScope := countColour(canv, canv.Bounds(), theme.Night.Rule)
+	if fullScope == 0 {
+		t.Fatal("the full scope drew no rule-coloured pixels, so this comparison proves nothing")
+	}
+
+	press(scene, 'z')
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != 0 {
+		t.Errorf("minimal drew %d airfield pixels before a, want 0", got)
+	}
+
+	press(scene, 'a')
+	scene.Draw(canv, 0)
+
+	if countColour(canv, canv.Bounds(), theme.Night.Rule) == 0 {
+		t.Error("minimal drew no airfield pixels after a, want the markers")
+	}
+
+	press(scene, 'z')
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != fullScope {
+		t.Errorf("the full scope drew %d rule pixels after a in minimal, want the original %d", got, fullScope)
+	}
+}
+
+// TestMinimalOverlaysFollowTheCentre checks that minimal's overlays are drawn
+// around its own centre rather than around the receiver. A coastline that
+// runs through the receiver has to move on the canvas once the picture has
+// followed the traffic away from it.
+func TestMinimalOverlaysFollowTheCentre(t *testing.T) {
+	t.Parallel()
+
+	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+	plane := scenePlane("484AC1", "KLM123", 90, 30, 2400, 270)
+
+	canvases := make([]*canvas.Canvas, 0, 2)
+
+	for _, every := range []time.Duration{0, time.Minute} {
+		canv, err := canvas.New(panelWidth, panelHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		clock := &stepClock{at: sceneClock}
+		scene := radar.New(testFaces(t), &fakeSource{frame: undated(sceneFrame(plane))},
+			scope.New(scope.WithCurrent(sceneRangeNm)), radar.WithClock(clock.now), radar.WithShore(set))
+		scene.Apply(radar.Settings{Minimal: true, Recentre: every, RangeNm: sceneRangeNm})
+		press(scene, 'm')
+		scene.Draw(canv, 0)
+
+		if countColour(canv, canv.Bounds(), theme.Night.Shore) == 0 {
+			t.Fatalf("no coastline drawn with --recenter %v, want one", every)
+		}
+
+		canvases = append(canvases, canv)
+	}
+
+	if identical(canvases[0], canvases[1]) {
+		t.Error("the coastline landed in the same place centred and following, want it to move with the centre")
+	}
+}
+
+// --- the header band ------------------------------------------------------
+
+// TestHeaderBandBleedsToTheEdges checks that the band fills the canvas from
+// edge to edge rather than sitting inside the layout margin, and that the
+// hairline under it runs the full width too. Paper is used because night's
+// band repeats the field colour on purpose, which would make the count
+// meaningless.
+//
+// Both outside columns are read, so a band that reached one edge and not the
+// other would still fail.
+func TestHeaderBandBleedsToTheEdges(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
+	scene.Draw(canv, 0)
+
+	for _, column := range []int{0, panelWidth - 1} {
+		if got := canv.Image().RGBAAt(column, 0); got != theme.Paper.Band {
+			t.Errorf("pixel (%d, 0) = %v, want the band colour %v", column, got, theme.Paper.Band)
+		}
+
+		rule := bandBottom(t, canv, column)
+		if got := canv.Image().RGBAAt(column, rule); got != theme.Paper.Rule {
+			t.Errorf("pixel (%d, %d) = %v, want the hairline %v", column, rule, got, theme.Paper.Rule)
+		}
+
+		if got := canv.Image().RGBAAt(column, rule+1); got != theme.Paper.Field {
+			t.Errorf("pixel (%d, %d) = %v, want the field under the hairline %v",
+				column, rule+1, got, theme.Paper.Field)
+		}
+	}
+}
+
+// bandBottom walks one column down from the top and reports the first row
+// that is no longer the band, which is where the hairline sits.
+func bandBottom(tb testing.TB, canv *canvas.Canvas, column int) int {
+	tb.Helper()
+
+	for y := range canv.Bounds().Dy() {
+		if canv.Image().RGBAAt(column, y) != theme.Paper.Band {
+			return y
+		}
+	}
+
+	tb.Fatalf("column %d is band colour all the way down, so there is no hairline to find", column)
+
+	return 0
+}
+
+// TestMinimalOverlaysWithNowhereToDrawThem checks the case where minimal mode
+// has been asked for its overlays and has no idea where it is: no receiver
+// position and nothing in the sky to work a centre out from. The layer is
+// built, because the toggles say so, and nothing lands on it.
+func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame()
+	frame.Receiver = source.Receiver{Label: source.LabelNone, Mode: source.FixNone}
+
+	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
+	scene.Apply(radar.Settings{Minimal: true, Recentre: radar.DefaultRecentre})
+	press(scene, 'm')
+	press(scene, 'a')
+	scene.Draw(canv, 0)
+
+	if got := painted(canv, canv.Bounds()); got != 0 {
+		t.Errorf("minimal painted %d pixels with no position to draw against, want 0", got)
 	}
 }

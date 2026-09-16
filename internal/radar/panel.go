@@ -262,6 +262,14 @@ func (s *Scene) capLabel(entry keyCap) string {
 // navy strip and needs its own contrast rather than the page's. Night's Band
 // and BandInk repeat Field and Ink, so there the band is invisible and the
 // text reads exactly as it did before the band existed.
+//
+// The fill bleeds to all three edges it touches rather than sitting inside
+// the layout margin, and the hairline under it runs the full width with it.
+// Inset, the band read as a navy rectangle with paper showing above and to
+// the left of it, which is a box on a page rather than the masthead it is
+// meant to be. The type does not move: what was the layout's margin is now
+// the band's own inner padding, so the wordmark sits exactly where it sat and
+// the scope, the column and the key bar keep their margins untouched.
 func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	total := s.headerHeight(lay)
 	if total == 0 {
@@ -270,8 +278,10 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 
 	markHeight := lineHeight(s.faces.BodyBold)
 	band := total - ruleHeight - blockGap
+	bounds := lay.dst.Bounds()
+	rule := lay.top + band
 
-	lay.dst.FillRect(image.Rect(lay.left, lay.top, lay.right, lay.top+band), s.pal.Band)
+	lay.dst.FillRect(image.Rect(bounds.Min.X, bounds.Min.Y, bounds.Max.X, rule), s.pal.Band)
 
 	top := lay.top + headerPadY
 
@@ -284,8 +294,7 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	s.drawWordmark(lay, top, frame, edge-sourceLabelGap)
 	s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
 
-	rule := lay.top + band
-	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Rule)
+	lay.dst.FillRect(image.Rect(bounds.Min.X, rule, bounds.Max.X, rule+ruleHeight), s.pal.Rule)
 
 	lay.top += total
 }

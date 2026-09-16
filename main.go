@@ -176,6 +176,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			RangeNm:  cfg.rangeNm,
 			Minimal:  cfg.minimal,
 			NoDecay:  cfg.noDecay,
+			Recentre: cfg.recentre,
 		},
 	}
 
@@ -336,6 +337,10 @@ func demo(cfg config) (source.Source, error) {
 	var opts []source.DemoOption
 	if cfg.hasLocation {
 		opts = append(opts, source.WithDemoLocation(cfg.latitude, cfg.longitude))
+	}
+
+	if cfg.demoSector {
+		opts = append(opts, source.WithDemoSector())
 	}
 
 	src, err := source.NewDemo(opts...)

@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"math"
 	"strconv"
+	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/scope"
@@ -166,6 +167,17 @@ type Settings struct {
 	// tail out. Zero is off, which is the fade: on a busy field it is what says
 	// which end of a track is the aeroplane.
 	NoDecay bool
+
+	// Recentre is how often minimal mode refits itself on the traffic. Zero is
+	// off, which is the scene's own default and keeps minimal mode centred on
+	// the receiver.
+	//
+	// --recenter holds DefaultRecentre instead, because a directional antenna
+	// puts every contact in one half of the canvas and following them is what
+	// the flag is for. The two differ on purpose: a library caller building a
+	// Scene gets the plain projection until it asks for the other one, and the
+	// command line asks on its behalf.
+	Recentre time.Duration
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
@@ -177,6 +189,7 @@ func (s *Scene) Apply(set Settings) {
 	s.minimal = set.Minimal
 	s.noDecay = set.NoDecay
 	s.applyRange(set.RangeNm)
+	s.applyRecentre(set.Recentre)
 }
 
 // applyRange pins the scope to the range the command line asked for.

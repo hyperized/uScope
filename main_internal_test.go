@@ -49,28 +49,30 @@ const (
 
 	// Repeated literals, named once so goconst has nothing to complain
 	// about and a typo in one table cannot silently diverge from another.
-	altFB        = "/dev/fb1"
-	outPNG       = "out.png"
-	flagRotate   = "--rotate"
-	flagSize     = "--size"
-	flagFPS      = "--fps"
-	flagBackend  = "--backend"
-	flagFrames   = "--frames"
-	flagPNG      = "--png"
-	flagScene    = "--scene"
-	flagTheme    = "--theme"
-	flagDemo     = "--demo"
-	flagBeast    = "--beast"
-	flagReplay   = "--replay-iq"
-	flagLat      = "--lat"
-	flagLon      = "--lon"
-	flagColour   = "--colour"
-	flagBattery  = "--battery"
-	flagAirports = "--airports"
-	flagShore    = "--shore"
-	flagRange    = "--range"
-	flagMinimal  = "--minimal"
-	flagNoDecay  = "--no-decay"
+	altFB          = "/dev/fb1"
+	outPNG         = "out.png"
+	flagRotate     = "--rotate"
+	flagSize       = "--size"
+	flagFPS        = "--fps"
+	flagBackend    = "--backend"
+	flagFrames     = "--frames"
+	flagPNG        = "--png"
+	flagScene      = "--scene"
+	flagTheme      = "--theme"
+	flagDemo       = "--demo"
+	flagBeast      = "--beast"
+	flagReplay     = "--replay-iq"
+	flagLat        = "--lat"
+	flagLon        = "--lon"
+	flagColour     = "--colour"
+	flagBattery    = "--battery"
+	flagAirports   = "--airports"
+	flagShore      = "--shore"
+	flagRange      = "--range"
+	flagMinimal    = "--minimal"
+	flagNoDecay    = "--no-decay"
+	flagRecenter   = "--recenter"
+	flagDemoSector = "--demo-sector"
 
 	// patternValue and specimenValue are the two non-default --scene
 	// spellings, named because they turn up in several tables.
@@ -128,6 +130,7 @@ func defaultConfig() config {
 		colour:     radar.ColourAltitude,
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
+		recentre:   radar.DefaultRecentre,
 	}
 }
 
@@ -1394,11 +1397,12 @@ func TestSourceFor(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
-		name      string
-		cfg       config
-		goos      string
-		wantLabel string
-		wantWarn  bool
+		name       string
+		cfg        config
+		goos       string
+		wantLabel  string
+		wantWarn   bool
+		wantSector bool
 	}{
 		{
 			name:      "replay",
@@ -1446,6 +1450,13 @@ func TestSourceFor(t *testing.T) {
 			goos:      linuxGOOS,
 			wantLabel: "BEAST " + beastAddr,
 		},
+		{
+			name:       "demo sector crowds the fleet into the north-west quadrant",
+			cfg:        config{source: sourceDemo, demoSector: true},
+			goos:       linuxGOOS,
+			wantLabel:  demoLabel,
+			wantSector: true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1459,14 +1470,43 @@ func TestSourceFor(t *testing.T) {
 
 			defer func() { _ = src.Close() }()
 
-			if got := src.Frame().Source.Label; got != testCase.wantLabel {
+			frame := src.Frame()
+
+			if got := frame.Source.Label; got != testCase.wantLabel {
 				t.Errorf("source label = %q, want %q", got, testCase.wantLabel)
 			}
 
 			if warned := stderr.Len() > 0; warned != testCase.wantWarn {
 				t.Errorf("warned = %v (%q), want %v", warned, stderr.String(), testCase.wantWarn)
 			}
+
+			if testCase.wantSector {
+				checkSector(t, frame)
+			}
 		})
+	}
+}
+
+// checkSector asserts that --demo-sector actually reached the fleet: every
+// aircraft sits north and west of the receiver, which is what the north-west
+// quadrant means.
+func checkSector(t *testing.T, frame source.Frame) {
+	t.Helper()
+
+	if len(frame.Planes) == 0 {
+		t.Fatal("frame has no aircraft to check")
+	}
+
+	for _, plane := range frame.Planes {
+		if plane.Latitude <= frame.Receiver.Latitude {
+			t.Errorf("aircraft %s latitude %g, want it north of the receiver (%g)",
+				plane.ICAO, plane.Latitude, frame.Receiver.Latitude)
+		}
+
+		if plane.Longitude >= frame.Receiver.Longitude {
+			t.Errorf("aircraft %s longitude %g, want it west of the receiver (%g)",
+				plane.ICAO, plane.Longitude, frame.Receiver.Longitude)
+		}
 	}
 }
 
@@ -2001,8 +2041,62 @@ func TestParseFlagsRangeRejections(t *testing.T) {
 	}
 }
 
-// TestParseFlagsBooleans covers the two flags that are a bare switch: each in
-// its default state, given on its own, and given with an explicit value,
+func TestParseFlagsRecenter(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want time.Duration
+	}{
+		{name: caseDefault, args: nil, want: radar.DefaultRecentre},
+		{name: "explicit default", args: []string{flagRecenter, defaultRecentre}, want: radar.DefaultRecentre},
+		{name: "zero stays on the receiver", args: []string{flagRecenter, "0"}, want: 0},
+		{name: "lower edge", args: []string{flagRecenter, "10s"}, want: radar.MinRecentre},
+		{name: "upper edge", args: []string{flagRecenter, "1h"}, want: radar.MaxRecentre},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.recentre = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+func TestParseFlagsRecenterRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "just under the floor", args: []string{flagRecenter, "9s"}},
+		{name: "just over the ceiling", args: []string{flagRecenter, "2h"}},
+		{name: "negative", args: []string{flagRecenter, "-1m"}},
+		{name: "not a duration", args: []string{flagRecenter, "forever"}},
+		{name: caseEmpty, args: []string{flagRecenter, ""}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errRecentre) {
+				t.Errorf("parseFlags(%v) error = %v, want errors.Is(errRecentre)", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestParseFlagsBooleans covers the three flags that are a bare switch: each
+// in its default state, given on its own, and given with an explicit value,
 // because the flag package accepts all three spellings and a switch that only
 // worked as --flag would be a surprise to anyone scripting it.
 func TestParseFlagsBooleans(t *testing.T) {
@@ -2014,6 +2108,7 @@ func TestParseFlagsBooleans(t *testing.T) {
 	}{
 		{flag: flagMinimal, apply: func(cfg *config, on bool) { cfg.minimal = on }},
 		{flag: flagNoDecay, apply: func(cfg *config, on bool) { cfg.noDecay = on }},
+		{flag: flagDemoSector, apply: func(cfg *config, on bool) { cfg.demoSector = on }},
 	} {
 		for _, testCase := range []struct {
 			name string

@@ -48,9 +48,8 @@ func (s *Scene) Handle(key input.Key) bool {
 // The unshifted twins of + and - are bound as well, because reaching for
 // shift to change the range on a thumb keyboard is a nuisance.
 //
-// m and z both still work in minimal mode, and so does everything else here.
-// m changes whether the shore would be drawn rather than whether it is, since
-// minimal draws no shore either way, and z is how you get back out.
+// m and a work in minimal mode and draw there, on minimal's own pair of
+// toggles rather than on the scope's. z is how you get back out.
 func (s *Scene) handleRune(value rune) bool {
 	switch value {
 	case 'n', 'N':
@@ -66,9 +65,9 @@ func (s *Scene) handleRune(value rune) bool {
 	case 't', 'T':
 		s.trails = !s.trails
 	case 'a', 'A':
-		s.airports = !s.airports
+		s.toggleAirports()
 	case 'm', 'M':
-		s.shoreOn = !s.shoreOn
+		s.toggleShore()
 	case 'z', 'Z':
 		s.minimal = !s.minimal
 	case 'c', 'C':
@@ -78,6 +77,53 @@ func (s *Scene) handleRune(value rune) bool {
 	}
 
 	return true
+}
+
+// toggleShore flips whichever coastline switch the view on screen reads.
+//
+// Minimal mode keeps its own, off at the start and independent of the
+// scope's. Pressing m in minimal is a choice about minimal, not a change to
+// the view you get back when you press z, and the same the other way round.
+func (s *Scene) toggleShore() {
+	if s.minimal {
+		s.minimalShore = !s.minimalShore
+
+		return
+	}
+
+	s.shoreOn = !s.shoreOn
+}
+
+// toggleAirports is toggleShore for the airfield markers, on the same rule
+// and for the same reason.
+func (s *Scene) toggleAirports() {
+	if s.minimal {
+		s.minimalAirports = !s.minimalAirports
+
+		return
+	}
+
+	s.airports = !s.airports
+}
+
+// shoreDrawn and airportsDrawn are the two toggles that apply to whatever is
+// on screen. Everything that draws an overlay or keys the background layer
+// asks these rather than reading a field, so the minimal pair and the scope
+// pair cannot be mixed up between the drawing and the cache.
+func (s *Scene) shoreDrawn() bool {
+	if s.minimal {
+		return s.minimalShore
+	}
+
+	return s.shoreOn
+}
+
+func (s *Scene) airportsDrawn() bool {
+	if s.minimal {
+		return s.minimalAirports
+	}
+
+	return s.airports
 }
 
 // step moves the selection through the list, wrapping at both ends, and pins
@@ -184,6 +230,16 @@ func indexOf(icaos []string, want string) int {
 // alone, so the scope does not snap back to its minimum every time the feed
 // goes quiet.
 func (s *Scene) fitRange(frame source.Frame) {
+	s.fitRangeAround(frame, geo{lat: frame.Receiver.Latitude, lon: frame.Receiver.Longitude})
+}
+
+// fitRangeAround is fitRange with the point to measure from handed in.
+//
+// Minimal mode following the traffic measures from the centroid rather than
+// from the receiver, because the centroid is what it has centred on. Sizing
+// the scope by a distance the picture no longer shows would leave the whole
+// fleet in a small ring in the middle of an otherwise empty field.
+func (s *Scene) fitRangeAround(frame source.Frame, origin geo) {
 	if !s.autoRange {
 		return
 	}
@@ -191,8 +247,7 @@ func (s *Scene) fitRange(frame source.Frame) {
 	farthest := 0.0
 
 	for _, plane := range frame.Planes {
-		distance := airplanes.HaversineDistance(
-			frame.Receiver.Latitude, frame.Receiver.Longitude, plane.Latitude, plane.Longitude)
+		distance := airplanes.HaversineDistance(origin.lat, origin.lon, plane.Latitude, plane.Longitude)
 		if distance == math.MaxFloat64 || math.IsNaN(distance) {
 			continue
 		}

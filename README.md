@@ -176,19 +176,59 @@ packed format and how to rebuild it; `make shore-data` is the one command.
 
 `--minimal`, or `z` while it is running, strips the scene back to the aircraft
 sprites and their trails on the bare field, edge to edge. No header, no key
-bar, no right column, no rings, cardinals, range labels, home marker, airfields
-or shore.
+bar, no right column, no rings, cardinals, range labels or home marker.
 
-The projection is centred on the canvas with the range mapped to half the short
-edge, and nothing is clipped to a ring, so the corners show traffic that the
-ring would have cut off. Nothing is drawn for the selected aircraft: no ring,
-no leader line, no label. There is no panel here for a ring to refer to, and on
-an otherwise bare field a ring around one contact reads as another contact.
+The picture fills the canvas with the range mapped to half the short edge, and
+nothing is clipped to a ring, so the corners show traffic that a ring would
+have cut off. Nothing is drawn for the
+selected aircraft either: no ring, no leader line, no label. There is no panel
+here for a ring to refer to, and on an otherwise bare field a ring around one
+contact reads as another contact.
 
-Every key still works, including `a` and `m`. They change whether the airfields
-and the shore would be drawn rather than whether they are, so turning one off
-in minimal and pressing `z` shows a scope without it. `z` is not on the key
-bar, because minimal is what hides the key bar.
+`z` is not on the key bar, because minimal is what hides the key bar.
+
+#### Following the traffic
+
+A directional antenna hears one part of the sky, so a scope centred on the
+receiver spends half its canvas on a half of the sky with nothing in it.
+
+Every `--recenter` interval, three minutes unless you say otherwise, minimal
+mode takes the mean position of every aircraft that has one and makes that the
+centre of the picture. The range is refitted at the same moment, around that
+centre rather than around the antenna, so the scope is sized by how far the
+traffic is spread rather than by how far away it is.
+
+The first centring happens as soon as one aircraft has a position, and it
+snaps: there is nothing on screen yet for a slide to keep continuous, and a
+still frame is drawn once. Every centring after it glides over two seconds on
+an ease-in-out curve, so the sprites and their trails move together and the eye
+follows the picture across instead of losing it and finding it again.
+
+`+` and `-` still step the range and pin it, and `r` hands it back to
+automatic. `--recenter 0` turns the following off and leaves the picture
+centred on the receiver, which is what an omnidirectional aerial wants and what
+anyone comparing two renders wants. The flag takes that `0` or anything from
+`10s` to `1h`, and refuses the rest rather than clamping it.
+
+Because the picture is no longer centred on the antenna, minimal mode marks
+where the antenna actually is: a small ring with a dot in it, in the quietest
+colour the palette has so it does not read as a contact. The ring carries the
+fix state the same way the full scope's home marker does. Following the traffic
+can push it off the canvas, and then nothing is drawn for it.
+
+#### The two overlays
+
+`a` and `m` work in minimal mode and draw there, on a pair of toggles of
+minimal's own. Both start off, so minimal opens bare, and pressing either one
+leaves the full scope's pair alone. The scope is a map with
+aircraft on it and minimal is aircraft with nothing behind them: one shared
+pair would have meant two key presses on the way in and two more on the way
+back out.
+
+Turned on, the coastline and the airfield markers are drawn the way the full
+scope draws them, around minimal's own centre and range, ICAO codes included.
+There are no range labels in minimal mode for a code to collide with, so
+nothing is dropped for want of room beside one.
 
 ### Colour modes
 
@@ -215,6 +255,13 @@ which way round from the palette it is drawing with.
 
 ### The header
 
+The band bleeds to the top, left and right edges rather than sitting inside the
+page margin, and the hairline under it runs the full width. Inside the margin
+it reads as a navy rectangle on a page rather than as a masthead, which is
+visible only on the paper theme: night's band is the field colour. The type
+keeps its inset, so the margin is the band's inner padding and nothing else on
+the frame moves for it.
+
 The wordmark and the ingest source on the left, with a filled dot when the
 source is connected and a hollow one when it is not. The receiver's position
 under them, or `EST ±22 NM` when it was worked out from the aircraft, or
@@ -238,6 +285,14 @@ the same package that reads `/sys/class/power_supply` on the uConsole, so
 | `--beast HOST:PORT` | Mode S frames from a remote demodulator over TCP |
 | `--demo` | twelve invented aircraft on straight tracks |
 | none | the local RTL-SDR on Linux, the demo fleet anywhere else |
+
+`--demo-sector` moves the invented fleet into the north-west quadrant and
+leaves everything else about it alone. A real antenna on a mast hears one
+sector and the demo fleet is scattered evenly all round, which is the one way
+the demo is unlike every live feed. It is what to reach for when looking at
+minimal mode's recentring, or at anything else that depends on where the
+traffic sits rather than on how much of it there is. It is ignored on a run
+that is not flying the demo fleet.
 
 They are listed in the order they beat each other. A capture wins over a feed
 so a recorded problem can always be replayed on a machine that also has a feed
@@ -479,8 +534,8 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `-`, `_` | narrow it by one step, and turn auto off |
 | `r`, `R` | auto range on or off |
 | `t`, `T` | trails on or off |
-| `a`, `A` | airfield markers on or off |
-| `m`, `M` | coastline on or off |
+| `a`, `A` | airfield markers on or off; minimal keeps its own |
+| `m`, `M` | coastline on or off; minimal keeps its own |
 | `z`, `Z` | minimal view on or off |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `l`, `L` | cycle the colour theme |
@@ -524,9 +579,11 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--shore` | `on` | draw the coastline: `on` or `off` |
 | `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
 | `--minimal` | off | aircraft and trails only, edge to edge |
+| `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` to stay on the receiver |
 | `--no-decay` | off | draw every trail segment at full strength, no fade to the tail |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
 | `--demo` | off | fly twelve invented aircraft instead of decoding any |
+| `--demo-sector` | off | put the whole invented fleet in the north-west quadrant, as a directional antenna would |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
 | `--replay-iq` | | replay a captured IQ file through the demodulator |
 | `--lat` | | receiver latitude in degrees, needs `--lon` |

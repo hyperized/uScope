@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/airports"
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
@@ -721,38 +722,42 @@ func validProjectorGeometry() scopeGeometry {
 func TestNewProjector(t *testing.T) {
 	t.Parallel()
 
-	validReceiver := source.Receiver{Latitude: projLat0, Longitude: projLon0}
+	validOrigin := geo{lat: projLat0, lon: projLon0}
 
 	for _, testCase := range []struct {
-		name     string
-		geom     scopeGeometry
-		receiver source.Receiver
-		scopeNm  float64
+		name    string
+		geom    scopeGeometry
+		origin  geo
+		scopeNm float64
 	}{
-		{name: "a non-positive rangeR", geom: scopeGeometry{rangeR: 0}, receiver: validReceiver, scopeNm: projScopeNm},
-		{name: "a non-positive scope range", geom: validProjectorGeometry(), receiver: validReceiver, scopeNm: 0},
+		{name: "a non-positive rangeR", geom: scopeGeometry{rangeR: 0}, origin: validOrigin, scopeNm: projScopeNm},
+		{name: "a non-positive scope range", geom: validProjectorGeometry(), origin: validOrigin, scopeNm: 0},
 		{
 			name: "a NaN scope range", geom: validProjectorGeometry(),
-			receiver: validReceiver, scopeNm: math.NaN(),
+			origin: validOrigin, scopeNm: math.NaN(),
 		},
 		{
-			name: "a receiver with no position yet", geom: validProjectorGeometry(),
-			receiver: source.Receiver{}, scopeNm: projScopeNm,
+			name: "an origin with no position yet", geom: validProjectorGeometry(),
+			origin: geo{}, scopeNm: projScopeNm,
+		},
+		{
+			name: "an origin with a NaN coordinate", geom: validProjectorGeometry(),
+			origin: geo{lat: math.NaN(), lon: projLon0}, scopeNm: projScopeNm,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, ok := newProjector(testCase.geom, testCase.receiver, testCase.scopeNm); ok {
+			if _, ok := newProjector(testCase.geom, testCase.origin, testCase.scopeNm); ok {
 				t.Error("newProjector(...) ok = true, want false")
 			}
 		})
 	}
 
-	t.Run("a valid receiver and range build a usable projector", func(t *testing.T) {
+	t.Run("a valid origin and range build a usable projector", func(t *testing.T) {
 		t.Parallel()
 
-		if _, ok := newProjector(validProjectorGeometry(), validReceiver, projScopeNm); !ok {
+		if _, ok := newProjector(validProjectorGeometry(), validOrigin, projScopeNm); !ok {
 			t.Error("newProjector(...) ok = false, want true")
 		}
 	})
@@ -761,8 +766,7 @@ func TestNewProjector(t *testing.T) {
 func TestProjectorAt(t *testing.T) {
 	t.Parallel()
 
-	proj, ok := newProjector(validProjectorGeometry(), source.Receiver{Latitude: projLat0, Longitude: projLon0},
-		projScopeNm)
+	proj, ok := newProjector(validProjectorGeometry(), geo{lat: projLat0, lon: projLon0}, projScopeNm)
 	if !ok {
 		t.Fatal("newProjector(...) ok = false, want true")
 	}
@@ -879,7 +883,7 @@ func TestDrawAirportsSkipsRangeLabelOverlap(t *testing.T) {
 
 	outerLabel := scene.rangeLabelRects[scene.rangeLabelCount-1]
 
-	proj, ok := newProjector(geom, source.Receiver{Latitude: overlapLat0, Longitude: overlapLon0}, overlapScopeNm)
+	proj, ok := newProjector(geom, geo{lat: overlapLat0, lon: overlapLon0}, overlapScopeNm)
 	if !ok {
 		t.Fatal("newProjector(...) ok = false, want true")
 	}
@@ -3563,4 +3567,470 @@ func TestCapLabel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- minimal mode's recentring -------------------------------------------
+
+// The fixture the centring tests work around: a point and a second point two
+// degrees north and four degrees east of it, so every interpolation in
+// between lands on numbers that are exact in float64.
+var (
+	//nolint:gochecknoglobals // a fixture is data, and a struct cannot be const.
+	followStart = geo{lat: 51, lon: 4}
+
+	//nolint:gochecknoglobals // see above.
+	followTarget = geo{lat: 53, lon: 8}
+)
+
+// followPlane is one aircraft at a position, with nothing else filled in. The
+// centroid only reads the two coordinates.
+func followPlane(latitude, longitude float64) airplane.Snapshot {
+	return airplane.Snapshot{ICAO: "484AC1", Latitude: latitude, Longitude: longitude}
+}
+
+func TestCentroidOf(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		planes airplanes.List
+		want   geo
+		wantOK bool
+	}{
+		{name: "nothing on the field at all"},
+		{
+			name:   "one aircraft is its own centroid",
+			planes: airplanes.List{followPlane(52, 4)},
+			want:   geo{lat: 52, lon: 4}, wantOK: true,
+		},
+		{
+			name:   "two aircraft average",
+			planes: airplanes.List{followPlane(51, 3), followPlane(53, 5)},
+			want:   geo{lat: 52, lon: 4}, wantOK: true,
+		},
+		{
+			name: "an undecoded position is skipped rather than counted as (0, 0)",
+			planes: airplanes.List{
+				followPlane(51, 3), followPlane(0, 0), followPlane(53, 5),
+			},
+			want: geo{lat: 52, lon: 4}, wantOK: true,
+		},
+		{
+			name:   "a NaN coordinate is skipped for the same reason",
+			planes: airplanes.List{followPlane(51, 3), followPlane(math.NaN(), 5), followPlane(53, 5)},
+			want:   geo{lat: 52, lon: 4}, wantOK: true,
+		},
+		{
+			name:   "a fleet with no positions at all has no centroid",
+			planes: airplanes.List{followPlane(0, 0), followPlane(0, 0)},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := centroidOf(testCase.planes)
+			if ok != testCase.wantOK {
+				t.Fatalf("centroidOf(...) ok = %v, want %v", ok, testCase.wantOK)
+			}
+
+			if ok && got != testCase.want {
+				t.Errorf("centroidOf(...) = %+v, want %+v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestPositioned(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		lat, lon float64
+		want     bool
+	}{
+		{name: "a real position", lat: 52, lon: 4, want: true},
+		{name: "the undecoded sentinel", lat: 0, lon: 0},
+		{name: "a latitude of zero on a real meridian", lat: 0, lon: 4, want: true},
+		{name: "a longitude of zero on a real parallel", lat: 52, lon: 0, want: true},
+		{name: "a NaN latitude", lat: math.NaN(), lon: 4},
+		{name: "a NaN longitude", lat: 52, lon: math.NaN()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := positioned(testCase.lat, testCase.lon); got != testCase.want {
+				t.Errorf("positioned(%v, %v) = %v, want %v", testCase.lat, testCase.lon, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestEase pins the two things the glide curve has to be: exact at both ends
+// and at the middle, so the centre lands where it was aimed, and slower than
+// linear at the start and faster at the end, which is what makes it an ease
+// rather than a ramp.
+func TestEase(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		progress float64
+		want     float64
+	}{
+		{name: "the start is exact", progress: 0, want: 0},
+		{name: "the middle is exact", progress: 0.5, want: 0.5},
+		{name: "the end is exact", progress: 1, want: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := ease(testCase.progress); got != testCase.want {
+				t.Errorf("ease(%v) = %v, want exactly %v", testCase.progress, got, testCase.want)
+			}
+		})
+	}
+
+	t.Run("it eases in and out rather than ramping", func(t *testing.T) {
+		t.Parallel()
+
+		if got := ease(0.25); got >= 0.25 {
+			t.Errorf("ease(0.25) = %v, want less than 0.25", got)
+		}
+
+		if got := ease(0.75); got <= 0.75 {
+			t.Errorf("ease(0.75) = %v, want more than 0.75", got)
+		}
+	})
+}
+
+func TestBetween(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		along float64
+		want  geo
+	}{
+		{name: "nothing along is the start", along: 0, want: followStart},
+		{name: "halfway is halfway", along: 0.5, want: geo{lat: 52, lon: 6}},
+		{name: "all the way is the target", along: 1, want: followTarget},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := between(followStart, followTarget, testCase.along); got != testCase.want {
+				t.Errorf("between(%+v, %+v, %v) = %+v, want %+v",
+					followStart, followTarget, testCase.along, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestGlide walks the centre along one move and reads it off at the three
+// points the curve is pinned at. The scene is aimed twice on purpose: the
+// first aim snaps, because there is nothing on screen for a glide to keep
+// continuous, and only the second one starts a path.
+func TestGlide(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		elapsed     time.Duration
+		want        geo
+		wantGliding bool
+	}{
+		{
+			name: "at the start it has not moved", elapsed: 0,
+			want: followStart, wantGliding: true,
+		},
+		{
+			name: "an elapsed behind the start pins rather than reversing", elapsed: -glideSpan,
+			want: followStart, wantGliding: true,
+		},
+		{
+			name: "halfway through it is halfway there", elapsed: glideSpan / 2,
+			want: geo{lat: 52, lon: 6}, wantGliding: true,
+		},
+		{
+			name: "at the end it is there and done", elapsed: glideSpan,
+			want: followTarget,
+		},
+		{
+			name:    "a frame that arrived late lands at the end, not past it",
+			elapsed: 4 * glideSpan, want: followTarget,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{minimal: true, recentre: time.Minute}
+			scene.aim(followStart, 0)
+			scene.aim(followTarget, 0)
+
+			scene.glide(testCase.elapsed)
+
+			if scene.centre != testCase.want {
+				t.Errorf("centre after glide(%v) = %+v, want %+v", testCase.elapsed, scene.centre, testCase.want)
+			}
+
+			if scene.gliding != testCase.wantGliding {
+				t.Errorf("gliding after glide(%v) = %v, want %v",
+					testCase.elapsed, scene.gliding, testCase.wantGliding)
+			}
+		})
+	}
+
+	t.Run("a scene that is not gliding is left alone", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{minimal: true, recentre: time.Minute}
+		scene.aim(followStart, 0)
+		scene.glide(glideSpan)
+
+		if scene.centre != followStart {
+			t.Errorf("centre = %+v, want the snapped %+v", scene.centre, followStart)
+		}
+	})
+}
+
+// TestDue checks the cadence rule: the first centring is owed immediately so
+// a scope that has just started does not sit on the receiver, and every one
+// after it waits out the whole interval.
+func TestDue(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	every := time.Minute
+
+	for _, testCase := range []struct {
+		name       string
+		haveCentre bool
+		at         time.Duration
+		want       bool
+	}{
+		{name: "the first centring is owed at once", want: true},
+		{name: "nothing is owed a moment later", haveCentre: true, at: time.Second},
+		{name: "nothing is owed one tick short of the interval", haveCentre: true, at: every - time.Nanosecond},
+		{name: "the interval itself is due", haveCentre: true, at: every, want: true},
+		{name: "and so is anything past it", haveCentre: true, at: 10 * every, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{recentre: every, haveCentre: testCase.haveCentre, lastFit: base}
+			if got := scene.due(base.Add(testCase.at)); got != testCase.want {
+				t.Errorf("due(lastFit + %v) = %v, want %v", testCase.at, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestFollowLeavesAnEmptySkyAlone checks that a frame with nothing on it is
+// not a centring: the cadence stays owed, so the first aircraft to arrive
+// with a position is centred on immediately rather than after an interval of
+// waiting.
+func TestFollowLeavesAnEmptySkyAlone(t *testing.T) {
+	t.Parallel()
+
+	scene := &Scene{minimal: true, recentre: time.Minute, scopeRange: scope.New(), autoRange: true}
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+
+	scene.follow(source.Frame{Now: now}, 0)
+
+	if scene.haveCentre {
+		t.Fatal("an empty sky produced a centre, want none")
+	}
+
+	scene.follow(source.Frame{Planes: airplanes.List{followPlane(52, 4)}, Now: now}, 0)
+
+	if !scene.haveCentre {
+		t.Fatal("the first aircraft with a position did not produce a centre")
+	}
+
+	if want := (geo{lat: 52, lon: 4}); scene.centre != want {
+		t.Errorf("centre = %+v, want %+v", scene.centre, want)
+	}
+}
+
+func TestFollowing(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		minimal  bool
+		recentre time.Duration
+		want     bool
+	}{
+		{name: "minimal with a cadence follows", minimal: true, recentre: time.Minute, want: true},
+		{name: "minimal with the cadence off does not", minimal: true},
+		{name: "the full scope never does, cadence or no cadence", recentre: time.Minute},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{minimal: testCase.minimal, recentre: testCase.recentre}
+			if got := scene.following(); got != testCase.want {
+				t.Errorf("following() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestMinimalOrigin checks which point minimal mode projects from. The
+// receiver is the answer until the cadence has chosen a centre, which is what
+// makes --recenter 0 the behaviour minimal mode had before the flag existed.
+func TestMinimalOrigin(t *testing.T) {
+	t.Parallel()
+
+	receiver := source.Receiver{Latitude: 52.3105, Longitude: 4.7683}
+	centred := geo{lat: 53, lon: 6}
+
+	for _, testCase := range []struct {
+		name       string
+		minimal    bool
+		recentre   time.Duration
+		haveCentre bool
+		want       geo
+	}{
+		{
+			name: "the cadence off keeps the receiver", minimal: true,
+			haveCentre: true, want: geo{lat: receiver.Latitude, lon: receiver.Longitude},
+		},
+		{
+			name:    "the cadence on with nothing chosen yet keeps the receiver too",
+			minimal: true, recentre: time.Minute,
+			want: geo{lat: receiver.Latitude, lon: receiver.Longitude},
+		},
+		{
+			name: "the full scope is never recentred", recentre: time.Minute,
+			haveCentre: true, want: geo{lat: receiver.Latitude, lon: receiver.Longitude},
+		},
+		{
+			name: "minimal following a chosen centre projects from it", minimal: true,
+			recentre: time.Minute, haveCentre: true, want: centred,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{
+				minimal: testCase.minimal, recentre: testCase.recentre,
+				haveCentre: testCase.haveCentre, centre: centred,
+			}
+
+			if got := scene.minimalOrigin(receiver); got != testCase.want {
+				t.Errorf("minimalOrigin(%+v) = %+v, want %+v", receiver, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestApplyRecentreForgetsTheOldCentre checks that a fresh settings block
+// does not leave the scene gliding towards somewhere the new cadence never
+// chose, and that turning the cadence off puts the projection back on the
+// receiver rather than leaving it parked over the traffic.
+func TestApplyRecentreForgetsTheOldCentre(t *testing.T) {
+	t.Parallel()
+
+	scene := &Scene{minimal: true, recentre: time.Minute, scopeRange: scope.New()}
+	scene.aim(followStart, 0)
+	scene.aim(followTarget, 0)
+
+	scene.applyRecentre(0)
+
+	if scene.recentre != 0 || scene.haveCentre || scene.gliding {
+		t.Errorf("after applyRecentre(0): recentre = %v, haveCentre = %v, gliding = %v; want 0, false, false",
+			scene.recentre, scene.haveCentre, scene.gliding)
+	}
+
+	if scene.centre != (geo{}) {
+		t.Errorf("centre after applyRecentre(0) = %+v, want the zero point", scene.centre)
+	}
+}
+
+// TestFollowAllocations is the promise the draw path makes on the frames the
+// cadence actually fires on, which BenchmarkDraw's fixed clock never reaches:
+// working out a centroid, aiming at it and refitting the range are all done
+// on the stack.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestFollowAllocations(t *testing.T) {
+	scene := &Scene{minimal: true, recentre: time.Second, scopeRange: scope.New(), autoRange: true}
+	frame := source.Frame{
+		Planes: airplanes.List{followPlane(52, 4), followPlane(53, 5), followPlane(0, 0)},
+	}
+
+	base := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	tick := 0
+
+	// Every call steps the frame clock a whole minute, so the cadence is due
+	// on each one and the expensive half of follow runs every time.
+	if got := testing.AllocsPerRun(50, func() {
+		tick++
+		frame.Now = base.Add(time.Duration(tick) * time.Minute)
+		scene.follow(frame, time.Duration(tick)*time.Second)
+	}); got != 0 {
+		t.Errorf("follow allocated %.1f times per frame, want 0", got)
+	}
+}
+
+// TestOverlayToggles checks that m and a reach whichever of the two pairs the
+// view on screen reads, and that neither pair can be moved from the other
+// view. Minimal starts bare and the scope starts as a map; a shared pair
+// would mean every trip between them began with two key presses to undo.
+func TestOverlayToggles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("minimal's pair starts off and the scope's starts on", func(t *testing.T) {
+		t.Parallel()
+
+		scene := New(Faces{}, source.Empty{}, scope.New())
+		if !scene.shoreDrawn() || !scene.airportsDrawn() {
+			t.Error("the full scope started with an overlay off, want both on")
+		}
+
+		scene.minimal = true
+
+		if scene.shoreDrawn() || scene.airportsDrawn() {
+			t.Error("minimal started with an overlay on, want both off")
+		}
+	})
+
+	t.Run("a press in minimal leaves the scope's pair alone", func(t *testing.T) {
+		t.Parallel()
+
+		scene := New(Faces{}, source.Empty{}, scope.New())
+		scene.minimal = true
+
+		scene.toggleShore()
+		scene.toggleAirports()
+
+		if !scene.shoreDrawn() || !scene.airportsDrawn() {
+			t.Error("minimal's toggles did not turn its own overlays on")
+		}
+
+		scene.minimal = false
+
+		if !scene.shoreDrawn() || !scene.airportsDrawn() {
+			t.Error("a press in minimal changed the full scope's overlays, want them untouched")
+		}
+	})
+
+	t.Run("a press in the full scope leaves minimal's pair alone", func(t *testing.T) {
+		t.Parallel()
+
+		scene := New(Faces{}, source.Empty{}, scope.New())
+		scene.toggleShore()
+		scene.toggleAirports()
+
+		if scene.shoreDrawn() || scene.airportsDrawn() {
+			t.Error("the full scope's toggles did not turn its own overlays off")
+		}
+
+		scene.minimal = true
+
+		if scene.shoreDrawn() || scene.airportsDrawn() {
+			t.Error("a press in the full scope changed minimal's overlays, want them untouched")
+		}
+	})
 }

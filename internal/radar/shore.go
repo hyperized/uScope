@@ -3,7 +3,6 @@ package radar
 import (
 	"math"
 
-	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/shore"
 )
@@ -44,32 +43,42 @@ type segment struct {
 
 // drawShore paints the coastlines and lake shores that fall on the scope.
 //
-// The box handed to the index is the receiver plus and minus the range in
-// degrees, with longitude widened by the cosine of the latitude, because a
-// degree of longitude is shorter than a degree of latitude everywhere except
-// the equator. It is a box around a circle, so it asks for a little more than
-// the scope shows and the clipping throws the rest away.
+// Both the box and the clipping circle are taken off the projection rather
+// than off the receiver and the range ring. The two are the same thing in the
+// ordinary view, where limitNm is the range and the origin is the receiver.
+// They are not the same in minimal mode, which projects around the traffic's
+// own centre and reaches out to the canvas corner: a box around the receiver
+// would fetch the wrong stretch of coast, and a circle at the range radius
+// would leave a ring-shaped edge on a view that has no rings.
+//
+// The box is the origin plus and minus that reach in degrees, with longitude
+// widened by the cosine of the latitude, because a degree of longitude is
+// shorter than a degree of latitude everywhere except the equator. It is a
+// box around a circle, so it asks for a little more than the scope shows and
+// the clipping throws the rest away.
 //
 // A nil set draws nothing. That is the normal state when uScope was started
 // without the data rather than a failure, so there is nothing to report.
-func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame, receiver source.Receiver) {
+func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame) {
 	if s.shoreSet == nil {
 		return
 	}
 
-	latSpan := view.scopeNm / nmPerDegree
-	lonSpan := latSpan / max(view.proj.cosLat0, minCosLat)
+	proj := view.proj
+
+	latSpan := proj.limitNm / nmPerDegree
+	lonSpan := latSpan / max(proj.cosLat0, minCosLat)
 
 	ring := circle{
 		centerX: float64(view.geom.centerX),
 		centerY: float64(view.geom.centerY),
-		radius:  float64(view.geom.rangeR),
+		radius:  proj.limitNm * proj.scale,
 	}
 
 	s.shoreSet.Within(
-		receiver.Latitude-latSpan, receiver.Latitude+latSpan,
-		receiver.Longitude-lonSpan, receiver.Longitude+lonSpan,
-		func(line shore.Polyline) { s.drawShoreLine(dst, view.proj, ring, line) },
+		proj.lat0-latSpan, proj.lat0+latSpan,
+		proj.lon0-lonSpan, proj.lon0+lonSpan,
+		func(line shore.Polyline) { s.drawShoreLine(dst, proj, ring, line) },
 	)
 }
 

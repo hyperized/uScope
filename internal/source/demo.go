@@ -62,6 +62,12 @@ const (
 	jitterBearing  = 5.0
 	jitterDistance = 0.1
 
+	// sectorFrom and sectorTo bound the north-west quadrant WithDemoSector
+	// crowds the fleet into, so a directional-antenna scene can be built at a
+	// desk without scattering aircraft over demoFleet's own headings.
+	sectorFrom = 270.0
+	sectorTo   = 360.0
+
 	degreesPerCircle = 360.0
 	halfCircle       = 180.0
 
@@ -200,6 +206,7 @@ type Demo struct {
 	lat    float64
 	lon    float64
 	manual bool
+	sector bool
 }
 
 // DemoOption configures a Demo at construction.
@@ -230,6 +237,14 @@ func WithDemoClock(now func() time.Time) DemoOption {
 // from the table and never vary.
 func WithSeed(seed uint64) DemoOption {
 	return func(d *Demo) { d.seed = seed }
+}
+
+// WithDemoSector crowds the whole fleet into the north-west quadrant instead
+// of scattering it all the way round the receiver, so a directional-antenna
+// situation can be reproduced at a desk. There is no corresponding "off"
+// option: the scattered fleet is already the default.
+func WithDemoSector() DemoOption {
+	return func(d *Demo) { d.sector = true }
 }
 
 // NewDemo builds the fleet and back-fills every trail, so the first frame
@@ -299,12 +314,18 @@ func (d *Demo) validate() error {
 }
 
 // build places every aircraft and back-fills its trail.
+//
+// The bearing draw is taken every time, sector mode included, even though
+// bearingFor throws it away in that mode: keeping the draw means the distance
+// jitter below lands on the same numbers whichever fleet is being built, so
+// the two are one seeded sequence apart rather than two different ones.
 func (d *Demo) build() []craft {
 	rng := rand.New(rand.NewPCG(d.seed, d.seed^math.MaxUint32)) //nolint:gosec // a demo fleet, not a key.
 	fleet := make([]craft, 0, len(demoFleet))
 
-	for _, spec := range demoFleet {
-		bearing := spec.bearing + (rng.Float64()*2-1)*jitterBearing
+	for index, spec := range demoFleet {
+		bearingJitter := (rng.Float64()*2 - 1) * jitterBearing
+		bearing := d.bearingFor(index, spec, bearingJitter)
 		distance := spec.distance * (1 + (rng.Float64()*2-1)*jitterDistance)
 
 		latitude, longitude := offset(d.lat, d.lon, bearing, distance)
@@ -312,6 +333,27 @@ func (d *Demo) build() []craft {
 	}
 
 	return fleet
+}
+
+// bearingFor decides where one aircraft starts, in degrees.
+//
+// Off (the default), that is the table's own bearing plus its seeded jitter.
+// On WithDemoSector, the table bearing and the jitter are both ignored, and
+// the fleet is spread evenly across the north-west quadrant instead, so the
+// whole scene can sit inside one antenna's field of view.
+func (d *Demo) bearingFor(index int, spec craftSpec, jitter float64) float64 {
+	if !d.sector {
+		return spec.bearing + jitter
+	}
+
+	// Slot centre: index 0 lands half a step past sectorFrom, the last index
+	// half a step short of sectorTo, so the fleet fills the quadrant without
+	// stacking an aircraft on either edge.
+	const slotCentre = 0.5
+
+	step := (sectorTo - sectorFrom) / float64(len(demoFleet))
+
+	return sectorFrom + (float64(index)+slotCentre)*step
 }
 
 // advance flies every aircraft forward by the time since the last frame.
