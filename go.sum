@@ -4,7 +4,7 @@ github.com/hyperized/modes v0.2.0 h1:zH8r9IJljN0aTDrJja+oCZySYS/EhlwIU4AmL3BetRA
 github.com/hyperized/modes v0.2.0/go.mod h1:91Mi9u5mxZE4QmQTzN6ln29iiUmK9LgrpOGD0XjFKJQ=
 github.com/hyperized/rtl2832u v0.2.0 h1:xOxzMex2XrBwtbCZb71HbWIQurG86pab+w75/4aOs7U=
 github.com/hyperized/rtl2832u v0.2.0/go.mod h1:E6CsfYxZE3qX6WYbk7WTiykTbr8JpKNpsUCzg1g45UM=
-github.com/hyperized/uAirwaves v0.1.1-0.20260717212519-bce1770aadc0 h1:DCTvHqjBFKbGk423+RFVeGn5JhwdDUOAJOi0J1yt3j0=
-github.com/hyperized/uAirwaves v0.1.1-0.20260717212519-bce1770aadc0/go.mod h1:LMmfbcT0TV3cGVFurPwUIeArBAn53AQzqn6HoWJXdYE=
+github.com/hyperized/uAirwaves v0.1.1-0.20260916150856-9f7dfee2f73e h1:a4fCfQsEEJowwSeRwYIXhMYt5oGAq+KcMA51tYbM8Es=
+github.com/hyperized/uAirwaves v0.1.1-0.20260916150856-9f7dfee2f73e/go.mod h1:LMmfbcT0TV3cGVFurPwUIeArBAn53AQzqn6HoWJXdYE=
 golang.org/x/sys v0.45.0 h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=
 golang.org/x/sys v0.45.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
