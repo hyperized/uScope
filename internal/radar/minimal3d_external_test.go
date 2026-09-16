@@ -32,12 +32,11 @@ func minimal3DScene(tb testing.TB, frame source.Frame, set radar.Settings) (*rad
 // TestMinimal3DHasNoChrome checks that the bare 3D view really is bare: no
 // header band, no key bar, no column and no ground furniture.
 //
-// Two colours say all of it. Ink is what the header, the key caps, the card
-// and the rows are set in, and nothing the bare picture draws uses it: the
-// stalks and the receiver marker are muted, the models and their trails carry
-// the traffic's own colours. Rule is the header's hairline, the card's border,
-// the range rings and the airfield markers, and the bare view draws none of
-// them either.
+// Two colours say all of it. Ink is what the header, the key caps and the
+// flight strips are set in, and nothing the bare picture draws uses it: the
+// receiver marker is muted, the models and their trails carry the traffic's own
+// colours. Rule is the header's hairline, the strips' own rules, the range
+// rings and the airfield markers, and the bare view draws none of them either.
 func TestMinimal3DHasNoChrome(t *testing.T) {
 	t.Parallel()
 

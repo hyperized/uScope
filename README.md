@@ -79,17 +79,16 @@ the fix state is one glance rather than a line to read:
 |---|---|
 | muted grey | nothing known, so nothing can be plotted |
 | ink | a position given with `--lat` and `--lon` |
-| accent | a self-locate estimate, with its radius in the header |
-| red | a GPS fix that has gone, with its last position still on screen |
-| amber | a GPS fix without altitude |
-| green | a full GPS fix |
+| green | a GPS fix, with or without altitude |
+| amber | a self-locate estimate, or a GPS fix that has gone with its last position still on screen |
 
 The centre dot stays ink whatever the ring is doing, so the marker is the same
 size and in the same place at any fix state. The header's mode word takes the
 same colour as the ring, so the two are one signal read twice rather than two
-facts to reconcile. Red is deliberately better than the accent and worse than
-amber: the coordinates under it were sensed rather than guessed, they are just
-not current any more.
+facts to reconcile. A guess and a stale fix share the same amber, because both
+are the same caution to the eye: the position under them might not be where
+the receiver actually is right now. Red is kept for `EMERGENCY` alone, so a
+squawk in anger is the one thing on the whole scope that reads as a fault.
 
 Aircraft are 15 pixel silhouettes rotated to their heading. An aircraft whose
 heading nobody has decoded is drawn as a bare circle, because a silhouette
@@ -144,64 +143,81 @@ seconds in, the aircraft with no callsign stops transmitting and never comes
 back, so `--demo` and three presses of `t` leave a ghost on the field to look
 at.
 
-The right column runs panel, rows, legend, top to bottom.
+The right column runs the count line, the flight strip board, then the legend,
+top to bottom.
 
-The panel is the selected aircraft, and it is one block rather than two. Its
-callsign is set at 64 pixels, with the ICAO hex and the squawk beside it, its
-track in degrees with an arrow turned to it under that, three figures across the
-middle (distance in nautical miles, altitude in feet, speed in knots), and a
-line of smaller values under those: vertical rate with a climb or descent
-triangle, position to two decimals, and how long ago the aircraft was heard.
-`SEEN` reports in coarse buckets rather than in seconds, because a figure
-counting up is movement the eye keeps going back to. A squawk with the
-emergency flag set says `EMERGENCY` after it in the accent colour, which is the
-one place on the scope the accent means something other than the selection.
-With nothing in the sky the panel reads `NO TRAFFIC` and keeps its height, so
-the column does not change shape when the last aircraft leaves range.
+The count line sits above the board, right-aligned and set in the data colour
+because it is a reading about the machine rather than about any one aeroplane:
+`81 AIRCRAFT`, or `12 OF 81 AIRCRAFT` while a filter is narrowing the field.
 
-An aircraft with no callsign has its ICAO hex set in the large face, so the
-corner drops the hex rather than printing the same six characters twice.
+The board itself replaced a block that held the selected aircraft on its own
+and a separate table of rows under it, which was two grammars for one list.
+Now every aircraft is a flight strip, one under another, of one of two heights.
+The selected aircraft gets a full strip, about 64 pixels tall at the panel's
+own resolution, lifted off the page two fifths of the way towards the
+softkeys' grey and marked down its left edge with a 3 pixel accent bar. Every
+other aircraft gets a half strip, about 30 pixels tall, with no lift and no
+edge: both mark the selection, and a board where every strip stood out would
+have nothing picked out of it. The selected aircraft is always the strip at
+the top, so the scrolling window a plain list needed is gone: `n` and `p` move
+which strip is full rather than which part of a list is on screen.
 
-Under it is the row table, nearest aircraft first, with a small header line
-naming its columns: number, callsign, ICAO hex, altitude, speed, distance,
-bearing from the receiver and attitude, and the aircraft count right-aligned at
-the end of that same line. The selected row carries the accent bar. Bearing is
-three digits followed by a small arrow turned to the exact angle, and the
-panel's `TRACK` line is written the same way. An arrow rather than a compass
-point, because eight letters are eight sectors and `NE` says the same thing
-about 23 degrees as about 67, where the arrow says the angle itself. The arrow
-is a filled triangle worked out from the angle, not a bitmap turned to it: a
-nine-pixel sprite rotated by nearest neighbour lost a pixel out of its shaft at
-most angles, so the one thing it existed to say was the thing it said worst. A
-row with no bearing to show keeps its dashes and draws no arrow.
+Seven fields run left to right on every strip, with a hairline rule between
+each pair: `CALLSIGN / ICAO`, `LEVEL FT`, `GS KT`, `TRK`, `DIST NM / BRG`,
+`POS` and `SEEN`. A small header in the data colour names each one, set once
+on the top row of the full strip, because repeating FT and KT over every
+aircraft would spend a third of the board saying what it had already shown.
+The units live in those headers and nowhere else.
 
-`ATT` is the last column and it is a picture rather than a figure: the same
-low-polygon aeroplane the 3D view draws, in a 24-pixel cell, yawed to the
-aircraft's heading and pitched and banked by the same rules. Its camera is
-fixed, north up and looking down from due south, so every row is seen from the
-same angle and the column can be read down the page. An aircraft with no
-decoded heading gets the disc, the same as in the picture. It is the first
-column to go as the right column narrows, before bearing, because it is the
-only cell with no figure in it: everything else on the row is a number somebody
-might read out.
+The full strip sets its callsign in the large face, with the ICAO hex and the
+squawk on the line under it. A half strip has one line, so the hex sits beside
+the callsign in the bold body face instead of under it. An aircraft with no
+callsign gets its hex in the callsign's own place rather than printing the
+same six characters twice. An aircraft squawking an emergency draws
+`EMERGENCY` as a filled red box with white text, after the squawk on the full
+strip and in the hex's own place on a half strip, which has no room for both
+and no use for a hex while an aircraft is declaring one. A box rather than a
+coloured word, because it is the one thing on the board that has to be seen
+without being looked for.
 
-Altitude
-gets a small triangle beside it when the aircraft is climbing or descending,
-and both the figure and the triangle are set in that aircraft's altitude band
-whichever colour mode is on. That is the one column where a number and a
+Climb and descent get a small triangle beside the level figure, on every
+strip. The rate itself, in feet per minute, is on the selected strip alone: a
+column of rate figures nobody is reading is noise, and the one aircraft whose
+rate is worth a number is the one that has been picked. `SEEN` reports in
+coarse buckets rather than in seconds, because a figure counting up is
+movement the eye keeps going back to. `POS` stacks its two halves, one to a
+row, on the full strip, and sets them side by side on a half strip, which is
+the shape the field was sized for in the first place.
+
+The little attitude model sits at the right end of the ident field, in a
+24-pixel cell: the same low-polygon aeroplane the 3D view draws, yawed to the
+aircraft's heading and pitched and banked by the same rules, seen through a
+camera of its own that is fixed north up and looking down from due south, so
+every strip reads the same angle down the board. An aircraft with no decoded
+heading gets the disc, the same as in the picture. It takes the aircraft's own
+colour on every strip, the selected one included, because reading the board
+and reading the scope are meant to be the same act of recognition.
+
+Altitude gets its figure and its triangle set in that aircraft's altitude
+band, whichever colour mode is on. That is the one field where a number and a
 colour say the same thing, so the band survives airline mode instead of being
-the price of turning it on: the list still answers "how high" while the scope
-answers "who". The panel's altitude figure is set the same way.
+the price of turning it on.
 
-Every column, and the panel's three figures, are sized from the widest value
-they could hold rather than from the values on screen, so a table full of
-moving numbers stays still and a value climbing through a digit never nudges
-its neighbour. On a narrow right column the panel gives its figures up units
-first, then a smaller face, then the speed and distance figures in that
-order, keeping altitude to the last; narrower still and the line of values
-under them wraps and then goes. The rows take whatever height is left under
-the panel, up to twenty-four of them, and a longer list ends on a muted
-`+N MORE` that counts everything not on screen.
+Every field is sized from the widest value it could hold rather than from
+what is on screen, so a board full of moving numbers stays still and a value
+climbing through a digit never nudges its neighbour. As the column narrows,
+fields are given up whole rather than squeezed, in this order: `POS`, `SEEN`,
+`TRK`, the attitude model, then `GS`. The identity, the level and the range
+are never given up; a column too narrow even for those draws no board at all.
+
+With nothing in the sky the full strip is empty, with `NO TRAFFIC` where the
+callsign goes, and it keeps its height so the column does not change shape
+when the last aircraft leaves range. A pinned aircraft the filter is hiding
+still gets the full strip, with `FILTERED` added to its second line in the
+caution colour, until the filter widens enough to let it back in.
+
+A board longer than the column ends on a muted `+N MORE` line that counts
+everything not on screen.
 
 Under that, the legend.
 
@@ -243,9 +259,9 @@ single press apart.
 The picture fills the canvas with the range mapped to half the short edge, and
 nothing is clipped to a ring, so the corners show traffic that a ring would
 have cut off. Nothing is drawn for the
-selected aircraft either: no ring, no leader line, no label. There is no panel
-here for a ring to refer to, and on an otherwise bare field a ring around one
-contact reads as another contact.
+selected aircraft either: no ring, no leader line, no label. There is no strip
+board here for a ring to refer to, and on an otherwise bare field a ring around
+one contact reads as another contact.
 
 Pressing `v` also takes the key bar with it, `V VIEW` included: there is
 nothing left on screen for the cap to sit on.
@@ -354,6 +370,14 @@ and a half nautical miles against a scope tens of miles across. At 8 an
 airliner sits about as far above the ground as the outer ring is wide, which is
 where two aircraft a flight level apart are visibly a flight level apart.
 
+The camera's distance is set by whichever of two targets needs more room: the
+outer range ring across 85 percent of the box's width, which is the rule that
+has always held, and the envelope's own top ring inside 85 percent of the
+box's height, which is new. At the default exaggeration of 8 the second one
+wins, so the ring comes out narrower than it used to and the top of the
+envelope is no longer cut off by the edge of the box, in the wide view with
+the column hidden as well as the square one with it showing.
+
 The camera turns on its own, one revolution every two minutes. Left and Right
 nudge it fifteen degrees and stop it turning. `o` is the switch: it stops the
 orbit where the picture has it, and starts it again from there. Stopping is
@@ -363,8 +387,9 @@ elevation, starting at thirty-five.
 
 The bar lists all four while the view is up: `O ORBIT`, `E ENVELOPE`, a cap
 with the two arrows labelled `TURN`, and `[ ]` for `TILT`. The orbit and
-envelope caps are filled while their setting is on and hollow when it is off.
-None of the four appears in the two flat views, where the keys do nothing.
+envelope caps show the green engaged bar while their setting is on and none
+when it is off. None of the four appears in the two flat views, where the
+keys do nothing.
 
 #### The envelope
 
@@ -399,13 +424,18 @@ Two bands with an empty one between them are not bridged. An edge drawn through
 a band nothing was heard in would be claiming reception the tracker never saw.
 
 Both shapes are drawn faded into the field rather than at full strength. The
-measured mesh is the palette's accent mixed 35 percent into the field and the
-theoretical bowl is the muted colour mixed 60 percent in. At full strength the
-mesh was brighter than the aircraft inside it, so the picture read as a
+measured mesh is the palette's data colour mixed 35 percent into the field,
+and the theoretical bowl is the muted colour mixed in at the same 35 percent.
+The bowl used to sit at 60 percent, but even that dim it still outshone the
+mesh by brightness, so both were brought to the same fade and the hue alone
+now tells them apart. The mesh also moved off the accent, because the accent
+belongs to the selected aircraft alone and the mesh is a record of what the
+antenna has heard rather than a fact about any one aeroplane. At full strength
+either shape used to outshine the aircraft inside it, so the picture read as a
 wireframe with some dots caught in it: the envelope is context, and context
-that outshines its subject is in the way. The mixing happens once per frame and
-the lines are then drawn solid, which on a near-uniform field gives the same
-picture as blending every pixel for a fraction of the work.
+that outshines its subject is in the way. The mixing happens once per frame
+and the lines are then drawn solid, which on a near-uniform field gives the
+same picture as blending every pixel for a fraction of the work.
 
 The 3D view keeps no background layer. The camera moves on every frame the
 orbit is running, so a cached picture would be rebuilt each time and cost the
@@ -416,10 +446,16 @@ still allocates nothing.
 #### The bare 3D view
 
 `--view minimal3d`, or the third press of `v`, is what minimal is to the scope,
-done to the perspective picture. The models on their stalks, their trails in
-the air and the receiver's own marker, across the whole canvas. No header, no
-key bar, no column, and on the ground no rings, no cardinal letters, no range
-labels and no envelope.
+done to the perspective picture. The models, their trails in the air and the
+receiver's own marker, across the whole canvas. No header, no key bar, no
+column, and on the ground no rings, no cardinal letters, no range labels and no
+envelope.
+
+It draws no stalks either. The full view puts one under each aircraft because
+it is the only thing that says how high the aeroplane is; on a bare field with
+nothing else on screen, the trail already says where it has been, and a forest
+of verticals under the fleet was the one thing worth taking away along with
+the rest of the furniture.
 
 It follows the traffic the way minimal does, on the same `--recenter` cadence
 and the same two-second glide, and it refits the range around the same centre.
@@ -431,26 +467,26 @@ rather than changing a setting nothing on screen could show.
 `a` and `m` reach the bare pair of overlay toggles, so the coastline and the
 airfields can be put back on the ground a piece at a time. The selection keys
 still move the selection and nothing is drawn for it, which is minimal's rule:
-there is no card and no row table anywhere for a ring to refer to.
+there is no strip board anywhere for a ring to refer to.
 
 ### Hiding the column
 
 `w` takes the right column off the frame, and the picture gets the whole width
-between the header band and the key bar. The card, the compact rows and the
-legend go together; the header and the key bar stay exactly where they are, and
-`W WIDE` in the bar is filled while the column is away.
+between the header band and the key bar. The count line, the strips and the
+legend go together; the header and the key bar stay exactly where they are,
+and `W WIDE` in the bar shows its green engaged bar while the column is away.
 
 The two views behave differently under it, because they measure the box
 differently. The flat scope keeps the ring it had, sized by the height, and
 moves it to the middle of the frame: the same picture with air either side
 instead of a flight list. The perspective view genuinely grows, because its
-lens is the box's own width, so the outer ring still spans about 85 percent of
-whatever it is given and everything on the ground comes out proportionally
-larger.
+lens is the box's own width, so whichever of its two framing targets is
+binding comes out proportionally larger and everything on the ground grows
+with it.
 
 The selection keys keep working with the column away, and so does the filter.
 The scope still shows which aircraft is selected; what is gone is the block
-that said anything about it, and the count that went with the rows.
+that said anything about it, and the count line that went with the board.
 
 There is no flag for it. Hiding the figures is something you do while looking
 at the scope rather than something you decide before the program starts. The
@@ -461,30 +497,31 @@ two bare views have no column, so `w` falls through there.
 `--colour` picks what an aircraft's colour means, and `c` cycles it while the
 radar is up.
 
-`altitude` is the default: green below 10,000 feet, amber below 25,000, red
-above, and grey for an aircraft whose altitude nobody has decoded yet. That is
-the one thing a top-down scope cannot show by position, which is why it is
-what the colours carry until asked otherwise.
+`altitude` is the default: green below 10,000 feet, white between there and
+25,000, orange above, and muted grey for an aircraft whose altitude nobody has
+decoded yet. The ramp is the cockpit's own, low to high, and altitude is the
+one thing a top-down scope cannot show by position, which is why it is what
+the colours carry until asked otherwise.
 
 `airline` paints each aircraft in its operator's own colour instead, taken from
 the 409 designators in [pkg/airlines](pkg/airlines/README.md). The silhouette,
-the trail, the callsign on the card and the callsign in its row all match, so
-one glance ties the dot to the row. An aircraft with no callsign, or one whose
+the trail and the callsign match on every strip an aircraft appears on, full
+or half, so one glance ties the dot to the strip. An aircraft with no
+callsign, or one whose
 three-letter prefix is not in the database, is drawn muted. The legend then
 names the four operators with the most aircraft on the field, and adds `OTHER`
 when anything on it has no colour.
 
 Brand colours are picked for print, so they are adapted to the field before
 they are drawn: anything too dark to read against night's near-black field is
-lifted, and anything too light for paper is brought down. The scope decides
+lifted, and anything too light for the day page is brought down. The scope decides
 which way round from the palette it is drawing with.
 
 ### Traffic filter
 
 `f` and `F` cycle a filter that narrows the field to one entry of whichever
 legend the colour mode is currently drawing, and the key cap between `C` and
-`L` names the value it is on: hollow at `ALL`, filled with the value's own
-word otherwise, the same rule `T` and `C` follow for theirs.
+`L` names the value it is on, the same way `T` and `C` name theirs.
 
 In altitude mode the cycle runs:
 
@@ -513,7 +550,7 @@ a filter value is one entry of a legend and `c` is what replaces the legend.
 
 An aircraft the filter is holding back is not drawn anywhere: no silhouette on
 the flat scope, no model, stalk or label in the 3D view, no trail in any view,
-no row in the compact list. Minimal mode's centroid and the auto range both
+no strip on the board. Minimal mode's centroid and the auto range both
 work from what is left, so narrowing to the low band on a scope that had
 widened to 180 nautical miles pulls the range in with it. Ghost trails are the
 one exception. A ghost is the track of an aircraft that has stopped
@@ -521,22 +558,19 @@ transmitting, so there is no live aircraft left to test against a band or a
 callsign, only a last reading that could be any age, and hiding a track on a
 reading that old would be a decision nobody watching the scope could check.
 
-The row list's title line says which state you are in: `81 AIRCRAFT` at `ALL`,
-`12 OF 81 AIRCRAFT` while a filter is on, so a short list under a filter reads
-as the filter doing its job rather than as a quiet sky. The rows are numbered
-from one down the page rather than by where each aircraft sits in the fleet,
-and the table gives up about fifty pixels of width to the longer count while a
-filter is on, taking them back the moment it goes to `ALL`. The legend marks
-its own place in this too: whichever entry the filter is on gets a ring around
-its swatch, drawn outside it in the reading ink, so the legend says which of
-its own rows the scope is showing.
+The count line above the board says which state you are in: `81 AIRCRAFT` at
+`ALL`, `12 OF 81 AIRCRAFT` while a filter is on, so a short board under a
+filter reads as the filter doing its job rather than as a quiet sky. The
+legend marks its own place in this too: whichever entry the filter is on gets
+a ring around its swatch, drawn outside it in the reading ink, so the legend
+says which of its own rows the scope is showing.
 
 Selection follows the same rule as everything else, with one exception for a
 pin. An unpinned selection moves to the nearest aircraft the filter is still
 showing, so it follows the field when a value hides the aircraft it was on. A
-pinned aircraft the filter hides stays selected: the panel keeps drawing it
-and the card's heading reads `-- / SELECTED FLIGHT / FILTERED` until the
-filter widens enough to let it back in. A pinned aircraft that leaves the list
+pinned aircraft the filter hides stays selected: it keeps the full strip, with
+`FILTERED` added to its second line in the caution colour, until the filter
+widens enough to let it back in. A pinned aircraft that leaves the list
 altogether still loses its pin, exactly as it did before the filter existed.
 There is no flag for the filter; it is reachable from `f` and nowhere else,
 the same as the trail modes.
@@ -545,10 +579,11 @@ the same as the trail modes.
 
 The band bleeds to the top, left and right edges rather than sitting inside the
 page margin, and the hairline under it runs the full width. Inside the margin
-it reads as a navy rectangle on a page rather than as a masthead, which is
-visible only on the paper theme: night's band is the field colour. The type
-keeps its horizontal inset, so the margin is the band's inner padding on the
-left and nothing else on the frame moves for it.
+it would read as a rectangle on a page rather than as a masthead. Night's own
+band sits a shade above its true-black field rather than flush with it, for
+the same reason: flush, the strip would only ever have read as a band on the
+day theme. The type keeps its horizontal inset, so the margin is the band's
+inner padding on the left and nothing else on the frame moves for it.
 
 Vertically the type is centred in what the fill covers rather than in the room
 the layout reserves under the margin. The two are a whole margin apart, and
@@ -571,19 +606,17 @@ is being held after the lock went, `LOC MANUAL` for coordinates you typed in,
 when none of that has happened yet. An estimate the self-locator does not
 fully believe gets a `?` after the radius. Without the prefix the line was a
 mode word and two numbers with nothing saying what they were of, and next to
-the aircraft position on the card it read as another aeroplane. `LOC` is drawn
-in the band's own ink whatever the fix mode is; only the mode word after it
-carries the fix colour.
+the aircraft's position on the selected strip it read as another aeroplane.
+`LOC` is drawn in the band's own ink whatever the fix mode is; only the mode
+word after it carries the fix colour.
 
 While `--auto-sweep` is walking the gain grid the source label picks up a
-`SWEEP` suffix in the accent colour. A sweep decodes nothing for the few
-seconds it runs, so without the marker the scope is empty for no stated reason,
-which reads as a broken receiver. It is the one place the accent is used for
-something other than the selected aircraft, and during a sweep there is no
-selected aircraft to confuse it with. The marker takes its room out of the
-label's budget rather than being appended after it, so a long `--beast`
-address is cut one character shorter instead of pushing `SWEEP` across the
-clocks.
+`SWEEP` suffix in the caution colour. A sweep decodes nothing for the few
+seconds it runs, so without the marker the scope is empty for a reason that
+has not gone wrong, which otherwise reads as a broken receiver. The marker
+takes its room out of the label's budget rather than being appended after it,
+so a long `--beast` address is cut one character shorter instead of pushing
+`SWEEP` across the clocks.
 
 On the right, two clocks and the battery. Local time keeps the 32 pixel face;
 UTC sits beside it in the 16 pixel one with a `Z` after it, because aviation
@@ -741,11 +774,22 @@ switches to it, and none of the radar's own keys do anything there either.
 
 ## Themes
 
-uScope has two colour themes. Night is the default: a near-black field, light
-ink, and it costs the least on a backlit handheld in the dark. Paper is
-modelled on an e-paper flight display: a light field, dark ink, and a navy
-header band. `l` cycles between them at run time, on whichever scene is on
-screen, and `--theme night` or `--theme paper` picks the one to start on.
+uScope has two colour themes, night and day, and both are drawn from a glass
+cockpit's own colour grammar rather than from decoration: magenta is the one
+thing that is selected, cyan is a reading about the machine, green is valid or
+engaged, amber is a caution, red is kept for a genuine warning, and every
+control sits in a grey softkey box. Anyone who has flown behind a Garmin panel
+already knows the vocabulary; uScope maps onto it rather than inventing one of
+its own.
+
+Night is the default: a true black field, white ink, and it costs the least on
+a backlit handheld used in the dark, where a light field would be a torch in
+the face. Day is the same grammar on a cool light grey, which is the page a
+glass panel puts up for its daytime view, with every hue pulled down far
+enough to still mean the same thing against the lighter field: the magenta
+deepens, the cyan becomes a teal, and the greens and reds darken rather than
+change. `l` cycles between them at run time, on whichever scene is on screen,
+and `--theme night` or `--theme day` picks the one to start on.
 
 ## Fonts
 
@@ -754,10 +798,10 @@ loads into a virtual terminal. Four faces are compiled into the binary:
 
 | Face | Size | What it sets |
 |---|---|---|
-| Terminus | 6x12 | labels, unit suffixes, key caps |
-| Terminus | 8x16 | body text and the compact rows |
-| Terminus Bold | 8x16 | the wordmark |
-| Terminus Bold | 16x32 | the clock and the figures on a card |
+| Terminus | 6x12 | labels, unit suffixes, softkey labels |
+| Terminus | 8x16 | body text, the scope tag and the half strips |
+| Terminus Bold | 8x16 | the wordmark, softkey letters and the full strip's figures |
+| Terminus Bold | 16x32 | the clock and the callsign on the full strip |
 
 They are Debian `console-setup`'s Uni3 builds of Terminus Font, taken byte
 for byte and gzipped as that package ships them. Two of the four are PSF1 and
@@ -956,16 +1000,19 @@ the ones it takes: pressing it never reaches the run loop, because it is the
 radar's own cycle through its four views. The pattern scene binds
 nothing, so Esc still quits from it.
 
-Until you choose an aircraft, the selection is the nearest contact and the rows
-start at the top. `n`, `p`, Up and Down pin it to whatever they land on, and it
-then stays with that aeroplane by ICAO however the distance-sorted list moves
-under it. Esc lets go again, and so does the aircraft leaving the list.
+Until you choose an aircraft, the selection is the nearest contact, which is
+also the strip already sitting at the top of the board. `n`, `p`, Up and Down
+pin it to whatever they land on, and it then stays with that aeroplane by ICAO
+however the distance-sorted order moves under it. Esc lets go again, and so
+does the aircraft leaving the list.
 
-The key caps carry their own state. A cap for a toggle that is on is filled,
-one that is off is a hollow outline, and the two cycling keys are labelled with
-the value they are on rather than with the name of the setting: `C ALT` or
-`C AIRLINE`, `L NIGHT` or `L PAPER`. The scope says the same thing from its own
-side, writing `AUTO` before the outer ring's range while auto range is on.
+The key caps carry their own state. Every softkey is drawn in the same grey
+box; a toggle that is on shows a green bar along the inside of its bottom
+edge, and one that is off shows none. `C`, `L`, `T` and `F` never carry a bar,
+because they answer with a value rather than an on or off state, and the cap
+already says which value that is: `C ALT` or `C AIRLINE`, `L NIGHT` or
+`L DAY`. The scope says the same thing from its own side, writing `AUTO`
+before the outer ring's range while auto range is on.
 
 ## Flags
 
@@ -973,7 +1020,7 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 |---|---|---|
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
 | `--scene` | `radar` | `radar` or `pattern`; `pattern` is a flags-only diagnostic with no key back to it |
-| `--theme` | `night` | `night` or `paper` colour theme |
+| `--theme` | `night` | `night` or `day` colour theme |
 | `--view` | `scope` | which view the radar starts on: `scope`, `3d`, `minimal` or `minimal3d`; `v` cycles them while it runs |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
@@ -1129,8 +1176,8 @@ One question [DESIGN.md](DESIGN.md) left open is still open. Trails fade by
 age, which was the thing to try first and looks right, but nobody has seen it
 next to a version that fades by altitude.
 
-Two more went with it. The paper theme is built (`--theme paper`, `l` at run
-time) and airline colouring is built (`--colour airline`, `c` at run time), and
+Two more went with it. The day theme is built (`--theme day`, `l` at run time)
+and airline colouring is built (`--colour airline`, `c` at run time), and
 neither has been judged against its alternative by anyone who was holding the
 device at the time.
 
@@ -1139,13 +1186,13 @@ panel. Its two open questions are whether an exaggeration of 8 still reads at a
 third the size, and whether the theoretical bowl is worth drawing at a range
 where every altitude it covers is over the horizon anyway.
 
-The aircraft models add a third and the attitude column a fourth. Sixteen
+The aircraft models add a third and the attitude cell a fourth. Sixteen
 pixels of span was picked against eighty real aircraft on a 1280-pixel monitor,
 where the shapes are distinct without crowding; at a third the size the fin and
 the tailplane are a pixel each, and whether what is left still reads as an
-aeroplane or as a smear is a question for the panel. The `ATT` cell is the same
-model at fourteen pixels in a 20-pixel row, so it is the same question asked
-where there is even less room to answer it.
+aeroplane or as a smear is a question for the panel. The same model appears at
+fourteen pixels in the 24-pixel cell at the end of the ident field, so it is
+the same question asked where there is even less room to answer it.
 
 Nobody has looked at the radar on the panel yet. That is `make radar`. The
 battery indicator has been checked two ways, neither of them on the device: on

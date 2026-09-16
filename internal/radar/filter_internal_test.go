@@ -508,33 +508,29 @@ func TestSelectedPlaneUnderAFilter(t *testing.T) {
 		scene      Scene
 		wantFound  bool
 		wantHidden bool
-		wantRow    int
 		wantICAO   string
 	}{
 		{
-			name:      "a selection with a row",
+			name:      "a selection in the index",
 			scene:     Scene{icaos: []string{icaoFirst, icaoSecond}, selIndex: 1},
-			wantFound: true, wantRow: 1, wantICAO: icaoSecond,
+			wantFound: true, wantICAO: icaoSecond,
 		},
 		{
 			name:      "a pinned aircraft the filter is hiding",
 			scene:     Scene{selHidden: true, selICAO: icaoFirst, selIndex: notSelected},
-			wantFound: true, wantHidden: true, wantRow: notSelected, wantICAO: icaoFirst,
+			wantFound: true, wantHidden: true, wantICAO: icaoFirst,
 		},
 		{
-			name:    "a hidden selection whose aircraft has gone",
-			scene:   Scene{selHidden: true, selICAO: goneICAO, selIndex: notSelected},
-			wantRow: notSelected,
+			name:  "a hidden selection whose aircraft has gone",
+			scene: Scene{selHidden: true, selICAO: goneICAO, selIndex: notSelected},
 		},
 		{
-			name:    "nothing selected at all",
-			scene:   Scene{selIndex: notSelected},
-			wantRow: notSelected,
+			name:  "nothing selected at all",
+			scene: Scene{selIndex: notSelected},
 		},
 		{
-			name:    "a selection past the end of the index",
-			scene:   Scene{icaos: []string{icaoFirst}, selIndex: 4},
-			wantRow: notSelected,
+			name:  "a selection past the end of the index",
+			scene: Scene{icaos: []string{icaoFirst}, selIndex: 4},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -549,10 +545,6 @@ func TestSelectedPlaneUnderAFilter(t *testing.T) {
 
 			if sel.hidden != testCase.wantHidden {
 				t.Errorf("hidden = %v, want %v", sel.hidden, testCase.wantHidden)
-			}
-
-			if sel.row != testCase.wantRow {
-				t.Errorf("row = %d, want %d", sel.row, testCase.wantRow)
 			}
 
 			if sel.found && sel.plane.ICAO != testCase.wantICAO {
@@ -616,40 +608,16 @@ func TestAutoRangeSkipsFilteredAircraft(t *testing.T) {
 	}
 }
 
-// TestRowsCountWidthGrowsWithTheFilter checks the room the title line reserves
-// for its count. The filtered spelling carries a second number and an OF, and
-// the table is that much narrower while it is on screen.
-func TestRowsCountWidthGrowsWithTheFilter(t *testing.T) {
-	t.Parallel()
-
-	scene := &Scene{faces: layerTestFaces(t)}
-
-	plain := scene.rowsCountWidth()
-
-	scene.filter = filterState{kind: filterBand, band: bandLow}
-	filtered := scene.rowsCountWidth()
-
-	if filtered <= plain {
-		t.Errorf("reserved width filtered = %d, at ALL = %d, want the filtered one wider", filtered, plain)
-	}
-
-	scene.faces = Faces{}
-
-	if got := scene.rowsCountWidth(); got != 0 {
-		t.Errorf("reserved width with no face = %d, want 0", got)
-	}
-}
-
-// TestDrawRowCountShowsTheFilterHeld checks what the title line actually
-// paints rather than only the room reserved for it: "2 AIRCRAFT" at ALL, "1 OF
-// 2 AIRCRAFT" once a filter is active, so a short list under a filter reads as
-// the filter doing its job rather than as a quiet sky.
+// TestDrawStripCountShowsTheFilterHeld checks what the line above the board
+// actually paints: "2 AIRCRAFT" at ALL, "1 OF 2 AIRCRAFT" once a filter is
+// active, so a short board under a filter reads as the filter doing its job
+// rather than as a quiet sky.
 //
-// It calls drawRowCount directly on a canvas of its own rather than through a
-// full Draw, because the row table's own column titles share the title line
-// and would sit at the same y as anything measured out of the whole panel,
-// leaving no way to tell the two apart by counting pixels alone.
-func TestDrawRowCountShowsTheFilterHeld(t *testing.T) {
+// It calls drawStripCount directly on a layout of its own rather than through
+// a full Draw, because the board's own field headers share the column with it
+// and would sit close enough to anything measured out of the whole panel to
+// make the two hard to tell apart by counting pixels alone.
+func TestDrawStripCountShowsTheFilterHeld(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
@@ -665,16 +633,18 @@ func TestDrawRowCountShowsTheFilterHeld(t *testing.T) {
 		right = 280
 	)
 
+	col := &layout{dst: canv, left: 0, right: right, top: 0, bottom: 20}
+
 	draw := func() int {
 		canv.Clear(theme.Night.Field)
-		scene.drawRowCount(canv, right, 0, shown, total)
+		scene.drawStripCount(col, shown, total)
 
 		return filterPainted(canv)
 	}
 
 	plain := draw()
 	if plain == 0 {
-		t.Fatal(`drawRowCount at ALL painted nothing, want "2 AIRCRAFT"`)
+		t.Fatal(`drawStripCount at ALL painted nothing, want "2 AIRCRAFT"`)
 	}
 
 	scene.filter = filterState{kind: filterBand, band: bandLow}
@@ -713,12 +683,11 @@ func TestMarkLegendEntryDrawsNothingUnmarked(t *testing.T) {
 	}
 }
 
-// TestDrawCardLabelShowsTheFilteredTag checks the one thing sel.hidden adds to
-// the heading: the extra " / FILTERED" after the ordinary suffix, set in the
-// same small muted face the rest of the heading uses. A heading with nothing
-// selected reads the same "--" either way and must not pick the tag up on its
-// own.
-func TestDrawCardLabelShowsTheFilteredTag(t *testing.T) {
+// TestDrawStripCodesShowsTheFilteredTag checks the one thing sel.hidden adds
+// to the selected strip's second line: the extra " / FILTERED" after the
+// squawk, in the caution colour. The same line with nothing hidden must not
+// pick the tag up on its own.
+func TestDrawStripCodesShowsTheFilteredTag(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
@@ -728,15 +697,17 @@ func TestDrawCardLabelShowsTheFilteredTag(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
+	plane := airplane.Snapshot{ICAO: icaoFirst}
+
 	draw := func(sel selection) int {
 		canv.Clear(theme.Night.Field)
-		scene.drawCardLabel(canv, 0, 0, sel)
+		scene.drawStripCodes(stripPen{dst: canv}, 0, plane, sel)
 
 		return filterPainted(canv)
 	}
 
-	plain := draw(selection{row: notSelected})
-	hidden := draw(selection{row: notSelected, hidden: true})
+	plain := draw(selection{})
+	hidden := draw(selection{hidden: true})
 
 	if hidden <= plain {
 		t.Errorf("pixels painted with the FILTERED tag = %d, without it = %d, want more with the tag",

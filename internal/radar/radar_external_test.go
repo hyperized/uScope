@@ -402,9 +402,9 @@ func BenchmarkDraw(b *testing.B) {
 		wide    bool
 	}{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
-		{name: "altitude/paper", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Paper},
+		{name: "altitude/day", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Day},
 		{name: "airline/night", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Night},
-		{name: "airline/paper", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Paper},
+		{name: "airline/day", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Day},
 		{
 			name: "minimal-following/night",
 			set: radar.Settings{

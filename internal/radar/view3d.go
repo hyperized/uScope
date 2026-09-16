@@ -180,7 +180,13 @@ func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration
 	azimuth := s.cameraAzimuth(elapsed)
 	upScale := s.exaggerate / ftPerNm
 
-	cam, drawable := newCamera3(lay.scope, scopeNm, azimuth, s.elevation, bowlTopFt*upScale)
+	cam, drawable := newCamera3(lay.scope, framing3{
+		scopeNm:     scopeNm,
+		azimuth:     azimuth,
+		elevation:   s.elevation,
+		topNm:       bowlTopFt * upScale,
+		topRadiusNm: bowlRadiusNm(bowlTopFt, scopeNm),
+	})
 	if !drawable {
 		return scene3{}, false
 	}
@@ -553,7 +559,7 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 			continue
 		}
 
-		s.drawContact3(lay, view, plane)
+		s.drawContact3(lay, view, plane, frame.Receiver)
 	}
 }
 
@@ -602,9 +608,9 @@ func (s *Scene) drawPath3(
 	}
 }
 
-// drawContact3 draws one aircraft: the stalk from its shadow on the ground up
-// to where it is flying, the shape on the end of it, and the selection marker
-// when it is the one the panel is about.
+// drawContact3 draws one aircraft: in the 3D view the stalk from its shadow on
+// the ground up to where it is flying, the shape on the end of it, and the
+// selection marker when it is the one the panel is about.
 //
 // The shape is a model rather than the flat scope's rotated bitmap. A sprite
 // is a picture of an aeroplane seen from directly above, and this camera is
@@ -615,13 +621,18 @@ func (s *Scene) drawPath3(
 // everything else.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) {
+func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot, receiver source.Receiver) {
 	x, y, ok := view.project(plane.Latitude, plane.Longitude, plane.Altitude)
 	if !ok {
 		return
 	}
 
-	s.drawStalk3(lay.dst, view, plane, x, y)
+	// The bare 3D view draws no stalks: with nothing else on screen the trails
+	// already say where each aircraft has been, and a forest of verticals under
+	// them was the one thing the user asked to have taken away.
+	if !s.bare() {
+		s.drawStalk3(lay.dst, view, plane, x, y)
+	}
 
 	col := s.aircraftColour(plane)
 
@@ -629,7 +640,7 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) 
 	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col)
 
 	if !s.bare() && plane.ICAO == s.selICAO {
-		s.drawSelection(lay, x, y, plane)
+		s.drawSelection(lay, x, y, plane, receiver)
 	}
 }
 

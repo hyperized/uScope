@@ -29,10 +29,13 @@ const (
 
 // testCamera builds the camera every projection case below measures against.
 func testCamera(azimuthDeg, elevationDeg float64) camera3 {
-	cam, _ := newCamera3(
-		image.Rect(0, 0, cameraSide, cameraSide),
-		cameraRangeNm, azimuthDeg, elevationDeg, cameraTopNm,
-	)
+	cam, _ := newCamera3(image.Rect(0, 0, cameraSide, cameraSide), framing3{
+		scopeNm:     cameraRangeNm,
+		azimuth:     azimuthDeg,
+		elevation:   elevationDeg,
+		topNm:       cameraTopNm,
+		topRadiusNm: bowlRadiusNm(bowlTopFt, cameraRangeNm),
+	})
 
 	return cam
 }
@@ -58,15 +61,27 @@ func TestNewCamera3Refuses(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, ok := newCamera3(testCase.box, testCase.scopeNm, 0, defaultElevation, cameraTopNm); ok {
+			framing := framing3{
+				scopeNm: testCase.scopeNm, azimuth: 0, elevation: defaultElevation,
+				topNm: cameraTopNm, topRadiusNm: bowlRadiusNm(bowlTopFt, testCase.scopeNm),
+			}
+			if _, ok := newCamera3(testCase.box, framing); ok {
 				t.Errorf("newCamera3 with %s reported ok, want refused", testCase.name)
 			}
 		})
 	}
 }
 
-// TestCameraFramesTheRing checks the rule the orbit distance is solved from:
-// the outer range ring spans about ringSpan of the box's width.
+// TestCameraFramesTheRing checks the rule ringFraming3 solves for: the outer
+// range ring spans about ringSpan of the box's width, when that rule is the
+// one that binds.
+//
+// It only binds at a shallow envelope: framing the ring across the box then
+// asks for more distance than framing the envelope down it does. A life-size
+// envelope is that shallow, so the camera here is built at MinExaggerate
+// rather than through testCamera, whose default exaggeration is deep enough
+// that the vertical rule binds instead and the ring comes out narrower; see
+// the note on newCamera3.
 //
 // It is measured between the ring's east and west points, which are its widest
 // pair from any azimuth, and allowed a few per cent either way: the solved
@@ -75,7 +90,16 @@ func TestNewCamera3Refuses(t *testing.T) {
 func TestCameraFramesTheRing(t *testing.T) {
 	t.Parallel()
 
-	cam := testCamera(0, defaultElevation)
+	cam, drawable := newCamera3(image.Rect(0, 0, cameraSide, cameraSide), framing3{
+		scopeNm:     cameraRangeNm,
+		azimuth:     0,
+		elevation:   defaultElevation,
+		topNm:       bowlTopFt * MinExaggerate / ftPerNm,
+		topRadiusNm: bowlRadiusNm(bowlTopFt, cameraRangeNm),
+	})
+	if !drawable {
+		t.Fatal("newCamera3 refused a life-size framing, want a camera")
+	}
 
 	eastX, _, eastOK := cam.at(point3{east: cameraRangeNm})
 	westX, _, westOK := cam.at(point3{east: -cameraRangeNm})
@@ -1285,7 +1309,7 @@ func TestView3DRefusesABoxItCannotDrawIn(t *testing.T) {
 // across this package's tests.
 const (
 	caseNight = "night"
-	casePaper = "paper"
+	caseDay   = "day"
 )
 
 // TestEnvelopeInkIsFadedIntoTheField pins the two wireframe colours to exact
@@ -1310,13 +1334,13 @@ func TestEnvelopeInkIsFadedIntoTheField(t *testing.T) {
 	}{
 		{
 			name: caseNight, pal: theme.Night,
-			wantMeasured: color.RGBA{R: 91, G: 65, B: 30, A: opaque},
-			wantBowl:     color.RGBA{R: 39, G: 48, B: 58, A: opaque},
+			wantMeasured: color.RGBA{R: 22, G: 79, B: 89, A: opaque},
+			wantBowl:     color.RGBA{R: 49, G: 52, B: 55, A: opaque},
 		},
 		{
-			name: casePaper, pal: theme.Paper,
-			wantMeasured: color.RGBA{R: 228, G: 196, B: 156, A: opaque},
-			wantBowl:     color.RGBA{R: 196, G: 198, B: 197, A: opaque},
+			name: caseDay, pal: theme.Day,
+			wantMeasured: color.RGBA{R: 159, G: 201, B: 217, A: opaque},
+			wantBowl:     color.RGBA{R: 192, G: 198, B: 203, A: opaque},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1351,7 +1375,7 @@ func TestEnvelopeInkSitsBetweenTheFieldAndItsSource(t *testing.T) {
 		pal  theme.Palette
 	}{
 		{name: caseNight, pal: theme.Night},
-		{name: casePaper, pal: theme.Paper},
+		{name: caseDay, pal: theme.Day},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1359,7 +1383,7 @@ func TestEnvelopeInkSitsBetweenTheFieldAndItsSource(t *testing.T) {
 			scene := &Scene{}
 			scene.SetPalette(testCase.pal)
 
-			assertBetween(t, "measured", testCase.pal.Field, scene.measuredInk(), testCase.pal.Accent)
+			assertBetween(t, "measured", testCase.pal.Field, scene.measuredInk(), testCase.pal.Data)
 			assertBetween(t, "bowl", testCase.pal.Field, scene.bowlInk(), testCase.pal.Muted)
 		})
 	}
@@ -1472,4 +1496,134 @@ func TestToggleOrbitIsThreeDOnly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The aircraft the stalk cases below fly: north-east of the receiver and well
+// inside the range, so its stalk stands clear of the four cardinal letters out
+// on the ring and of the range rings on the ground.
+const (
+	stalkNorthNm    = 9.0
+	stalkEastNm     = 9.0
+	stalkAltitudeFt = 30000.0
+
+	// stalkEndSkip is how many samples at each end of the line are left out of
+	// the count: the model sits on one end and the ground rings pass near the
+	// other, and neither is the stalk.
+	stalkEndSkip = 4
+
+	// stalkSamples is how many points along the line are read. The line is
+	// under two hundred pixels long at this camera, so one sample a pixel or
+	// finer costs nothing and cannot step over a one-pixel stalk.
+	stalkSamples = 256
+)
+
+// TestBare3DDrawsNoStalk checks that the bare 3D view leaves the air under an
+// aircraft empty.
+//
+// The stalk is what the two perspective views differ by once the furniture is
+// gone, so the full view is measured first over the same aircraft: a run where
+// nothing was drawn between the ground and the aeroplane in either view would
+// otherwise pass for the wrong reason.
+func TestBare3DDrawsNoStalk(t *testing.T) {
+	t.Parallel()
+
+	if full := stalkRun(t, View3D); full == 0 {
+		t.Fatal("the full 3D view drew nothing between the ground and the aircraft, so this proves nothing")
+	}
+
+	if got := stalkRun(t, ViewMinimal3D); got != 0 {
+		t.Errorf("the bare 3D view drew %d pixels along the stalk, want the ground under it left empty", got)
+	}
+}
+
+// stalkRun draws one aircraft in the view named and counts the pixels that are
+// not bare field along the line from its shadow on the ground up to itself.
+//
+// The overlays, the envelope and the trail are all off, so the only thing that
+// can land on that line is the stalk. The layout is measured the way Draw
+// measures it rather than guessed at, because the box the camera frames against
+// is the whole canvas in the bare view and the square beside the column in the
+// full one.
+func stalkRun(tb testing.TB, shown View) int {
+	tb.Helper()
+
+	plane := airplane.Snapshot{
+		ICAO:      icaoSampleReal,
+		Callsign:  "KLM123",
+		Latitude:  layerBaseLat + stalkNorthNm/nmPerDegree,
+		Longitude: layerBaseLon + stalkEastNm/(nmPerDegree*math.Cos(layerBaseLat*math.Pi/halfCircle)),
+		Altitude:  stalkAltitudeFt,
+		Heading:   45,
+		Velocity:  420,
+	}
+
+	frame := source.Frame{
+		Receiver: source.Receiver{
+			Latitude: layerBaseLat, Longitude: layerBaseLon, HasFix: true, Mode: source.FixManual,
+		},
+		Planes: []airplane.Snapshot{plane},
+		Now:    time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC),
+	}
+
+	scene, canv := view3DScene(tb, frame)
+	scene.shown = shown
+	scene.envelope, scene.airports, scene.shoreOn = false, false, false
+	scene.Draw(canv, 0)
+
+	view, ok := scene.measure3D(stalkLayout(scene, canv), frame, 0)
+	if !ok {
+		tb.Fatalf("measure3D in the %s view reported no room", shown)
+	}
+
+	groundX, groundY, groundOK := view.cam.at(view.ground(plane.Latitude, plane.Longitude))
+	airX, airY, airOK := view.project(plane.Latitude, plane.Longitude, plane.Altitude)
+
+	if !groundOK || !airOK {
+		tb.Fatalf("one end of the stalk is not visible in the %s view: ground %v, air %v", shown, groundOK, airOK)
+	}
+
+	return paintedRun(canv, scene.pal.Field, groundX, groundY, airX, airY)
+}
+
+// stalkLayout carves the frame the way Draw carves it, so the camera measured
+// here is the camera the picture was drawn through.
+func stalkLayout(scene *Scene, canv *canvas.Canvas) *layout {
+	lay := scene.newLayout(canv)
+
+	if scene.bare() {
+		lay.scope = canv.Bounds()
+
+		return &lay
+	}
+
+	lay.bottom -= scene.keyBarHeight(&lay)
+	lay.top += scene.headerHeight(&lay)
+	lay.split()
+
+	return &lay
+}
+
+// paintedRun counts the samples along a line that are anything other than the
+// field colour, leaving stalkEndSkip samples out at each end.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func paintedRun(canv *canvas.Canvas, field color.RGBA, fromX, fromY, toX, toY int) int {
+	bounds := canv.Bounds()
+	count := 0
+
+	for step := stalkEndSkip; step <= stalkSamples-stalkEndSkip; step++ {
+		along := float64(step) / stalkSamples
+		x := fromX + int(math.Round(float64(toX-fromX)*along))
+		y := fromY + int(math.Round(float64(toY-fromY)*along))
+
+		if !image.Pt(x, y).In(bounds) {
+			continue
+		}
+
+		if canv.Image().RGBAAt(x, y) != field {
+			count++
+		}
+	}
+
+	return count
 }

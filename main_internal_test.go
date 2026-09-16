@@ -93,10 +93,10 @@ const (
 	patternValue  = "pattern"
 	specimenValue = "specimen"
 
-	// paperValue is the one non-default --theme spelling, airlineValue the
+	// dayValue is the one non-default --theme spelling, airlineValue the
 	// one non-default --colour spelling, offValue the one non-default
 	// --airports spelling.
-	paperValue    = "paper"
+	dayValue      = "day"
 	airlineValue  = "airline"
 	offValue      = "off"
 	demoValue     = "demo"
@@ -1121,7 +1121,7 @@ func TestParseFlagsTheme(t *testing.T) {
 	}{
 		{name: caseDefault, args: nil, want: theme.KindNight},
 		{name: "night explicit", args: []string{flagTheme, defaultTheme}, want: theme.KindNight},
-		{name: paperValue, args: []string{flagTheme, paperValue}, want: theme.KindPaper},
+		{name: dayValue, args: []string{flagTheme, dayValue}, want: theme.KindDay},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1147,6 +1147,11 @@ func TestParseFlagsThemeRejections(t *testing.T) {
 		args []string
 	}{
 		{name: "unknown theme", args: []string{flagTheme, "sepia"}},
+		{
+			// paper was the light theme's spelling before the rewrite; it has
+			// to keep failing rather than being accepted as an alias for day.
+			name: "paper is no longer a theme", args: []string{flagTheme, "paper"},
+		},
 		{name: "empty theme", args: []string{flagTheme, ""}},
 		{
 			// --theme is an allow list, not free text: the exact spelling is
@@ -1177,13 +1182,13 @@ func TestParseFlagsThemeRejections(t *testing.T) {
 func TestThemeReachesConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := parseFlags([]string{flagTheme, paperValue})
+	cfg, err := parseFlags([]string{flagTheme, dayValue})
 	if err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
-	if cfg.theme != theme.KindPaper {
-		t.Errorf("config.theme = %v, want %v", cfg.theme, theme.KindPaper)
+	if cfg.theme != theme.KindDay {
+		t.Errorf("config.theme = %v, want %v", cfg.theme, theme.KindDay)
 	}
 }
 

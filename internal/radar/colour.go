@@ -352,7 +352,7 @@ func outranks(left, right operatorCount) bool {
 }
 
 // aircraftColour is the colour one aircraft is drawn in: its silhouette, its
-// trail, its callsign on the card and its callsign in the compact rows.
+// trail, its callsign on its own strip and the little model beside it.
 func (s *Scene) aircraftColour(plane airplane.Snapshot) color.RGBA {
 	return s.contactColour(plane.Altitude, plane.Callsign)
 }
@@ -416,15 +416,4 @@ func (s *Scene) callsignInk(plane airplane.Snapshot) color.RGBA {
 	}
 
 	return s.pal.Ink
-}
-
-// rowCallsignInk is callsignInk for the compact row at index, where an
-// unselected callsign is muted in altitude mode so the eye lands on the
-// selection first.
-func (s *Scene) rowCallsignInk(plane airplane.Snapshot, index int) color.RGBA {
-	if index == s.selIndex || s.colour == ColourAirline {
-		return s.callsignInk(plane)
-	}
-
-	return s.pal.Muted
 }

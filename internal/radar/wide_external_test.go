@@ -20,25 +20,31 @@ import (
 // columnBox is the whole right-hand column, from the gap past the scope square
 // to the right margin. columnGapBox is that gap itself, the sixteen pixels of
 // blockGap between the two, which nothing draws in while the column is there.
-// wideCapBox is the W cap in the bottom bar: it sits right after the eleven
-// caps that were in keyCaps before it, so its left edge is where the bar used
-// to end, and its width is one small glyph plus the cap's padding either side.
+// wideCapBox is the whole W softkey in the bottom bar.
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	columnBox    = image.Rect(625, 77, 1264, 670)
-	columnGapBox = image.Rect(609, 77, 625, 670)
-	wideCapBox   = image.Rect(780, 686, 796, 704)
+	columnBox    = image.Rect(621, 77, 1264, 666)
+	columnGapBox = image.Rect(605, 77, 621, 666)
+	wideCapBox   = image.Rect(672, 682, 720, 704)
 
 	// columnTypeBox is the column with its first seventy-five pixels left out,
 	// which is where the cases below count the reading colour.
 	//
 	// The home marker is set in Ink as well, and once the scope takes the
 	// whole width it sits at the middle of the frame, a few pixels inside the
-	// column's left edge. The card and the rows set type all the way across
-	// the column, so starting past the marker costs nothing and keeps the
-	// count about them.
-	columnTypeBox = image.Rect(700, 77, 1264, 670)
+	// column's left edge. The strips set type all the way across the column,
+	// so starting past the marker costs nothing and keeps the count about
+	// them.
+	columnTypeBox = image.Rect(700, 77, 1264, 666)
+
+	// wideEngagedBar is the strip along the inside of wideCapBox's bottom
+	// edge the engaged bar is drawn in, worked out the way autoEngagedBar in
+	// scene_external_test.go is.
+	wideEngagedBar = image.Rect(
+		wideCapBox.Min.X+keyEngagedInsetTest, wideCapBox.Max.Y-keyPadYTest,
+		wideCapBox.Max.X-keyEngagedInsetTest, wideCapBox.Max.Y-keyPadYTest+keyEngagedHeightTest,
+	)
 )
 
 // TestWideHidesTheColumn checks the whole point of the key: with it on, the
@@ -160,8 +166,9 @@ func ringMiddle(canv *canvas.Canvas) (int, bool) {
 	return (first + last) / 2, true
 }
 
-// colourExtent is paintedExtent for one exact colour: the leftmost and
-// rightmost columns of box holding a pixel of col, or -1 for neither.
+// colourExtent is paintedEnd's own leftmost/rightmost pair, for one exact
+// colour: the leftmost and rightmost columns of box holding a pixel of col,
+// or -1 for neither.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func colourExtent(canv *canvas.Canvas, box image.Rectangle, col color.RGBA) (int, int) {
@@ -299,8 +306,9 @@ func TestWideLeavesTheBareViewsAlone(t *testing.T) {
 }
 
 // TestWideCapFollowsTheKey checks that the bar says which state the column is
-// in, the way every other toggle's cap does: filled while the scope is wide
-// and a hollow outline while the column is there.
+// in, the way every other toggle's cap does: the engaged bar along the bottom
+// of the W cap while the scope is wide, and nothing there while the column is
+// still on screen.
 func TestWideCapFollowsTheKey(t *testing.T) {
 	t.Parallel()
 
@@ -310,11 +318,8 @@ func TestWideCapFollowsTheKey(t *testing.T) {
 	scene.Apply(radar.Settings{RangeNm: sceneRangeNm})
 	scene.Draw(canv, 0)
 
-	hollowInk := countColour(canv, wideCapBox, theme.Night.Ink)
-	hollowField := countColour(canv, wideCapBox, theme.Night.Field)
-
-	if hollowInk >= hollowField {
-		t.Errorf("column shown: %d ink and %d field pixels, want a hollow cap", hollowInk, hollowField)
+	if got := countColour(canv, wideEngagedBar, theme.Night.OK); got != 0 {
+		t.Errorf("column shown: %d OK pixels in the engaged bar, want none", got)
 	}
 
 	if !press(scene, 'w') {
@@ -323,11 +328,8 @@ func TestWideCapFollowsTheKey(t *testing.T) {
 
 	scene.Draw(canv, 0)
 
-	filledInk := countColour(canv, wideCapBox, theme.Night.Ink)
-	filledField := countColour(canv, wideCapBox, theme.Night.Field)
-
-	if filledInk <= filledField {
-		t.Errorf("column hidden: %d ink and %d field pixels, want a filled cap", filledInk, filledField)
+	if got := countColour(canv, wideEngagedBar, theme.Night.OK); got == 0 {
+		t.Error("column hidden: no OK pixels in the engaged bar, want it drawn")
 	}
 }
 

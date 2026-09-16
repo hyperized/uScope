@@ -102,7 +102,7 @@ var (
 	errFrames     = errors.New(appName + ": --frames out of range")
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
 	errScene      = errors.New(appName + ": --scene must be radar or pattern")
-	errTheme      = errors.New(appName + ": --theme must be night or paper")
+	errTheme      = errors.New(appName + ": --theme must be night or day")
 	errColour     = errors.New(appName + ": --colour must be altitude or airline")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
@@ -247,7 +247,7 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.scene, "scene", defaultScene,
 		"what to draw: radar or pattern. pattern is a flags-only diagnostic with no key back to it")
 	set.StringVar(&raw.theme, "theme", defaultTheme,
-		"colour theme: night or paper")
+		"colour theme: night or day")
 	set.StringVar(&raw.colour, "colour", defaultColour,
 		"what an aircraft's colour means: altitude or airline")
 	set.StringVar(&raw.airports, "airports", defaultOn,

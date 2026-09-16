@@ -958,12 +958,12 @@ func TestSessionCycleTheme(t *testing.T) {
 
 	ses.cycleTheme()
 
-	if ses.themeKind != theme.KindPaper {
-		t.Errorf("themeKind after one cycle = %v, want %v", ses.themeKind, theme.KindPaper)
+	if ses.themeKind != theme.KindDay {
+		t.Errorf("themeKind after one cycle = %v, want %v", ses.themeKind, theme.KindDay)
 	}
 
-	if len(themed.palettes) != 1 || themed.palettes[0] != theme.Paper {
-		t.Errorf("SetPalette calls = %v, want exactly one call with theme.Paper", themed.palettes)
+	if len(themed.palettes) != 1 || themed.palettes[0] != theme.Day {
+		t.Errorf("SetPalette calls = %v, want exactly one call with theme.Day", themed.palettes)
 	}
 
 	ses.cycleTheme()

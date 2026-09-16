@@ -20,7 +20,7 @@ const (
 	// at an angle has less of itself facing the camera than a bitmap does.
 	modelSpanPx = 16.0
 
-	// attSpanPx is the same model in the row table's attitude cell, a couple
+	// attSpanPx is the same model in a flight strip's attitude cell, a couple
 	// of pixels narrower: a wing that swings out as an aircraft turns has to
 	// stay inside a 24-pixel column, where in the 3D view it has the whole
 	// picture to swing into.
@@ -274,7 +274,7 @@ func (c camera3) spanScale(world point3) float64 {
 	return c.modelSpan * world.minus(c.eye).dot(c.forward) / c.focal
 }
 
-// newCellCamera3 is the fixed camera the row table's attitude cell is drawn
+// newCellCamera3 is the fixed camera a flight strip's attitude cell is drawn
 // through: north up, due south of its subject, looking down at the elevation
 // the 3D view starts on.
 //

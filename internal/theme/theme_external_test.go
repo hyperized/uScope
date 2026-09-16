@@ -14,14 +14,20 @@ import (
 // that is worth catching in a test rather than on the panel.
 const wantAlpha = 0xFF
 
-// Field names, named once so goconst does not flag their repetition across
-// nightColours, allFields and the distinctness tables below.
+// Field names, named once so goconst does not flag their repetition across the
+// palette field lists and distinctness tables below.
 const (
 	nameField   = "Field"
 	nameInk     = "Ink"
 	nameMuted   = "Muted"
 	nameAccent  = "Accent"
+	nameData    = "Data"
+	nameOK      = "OK"
+	nameCaution = "Caution"
+	nameWarn    = "Warn"
+	nameKey     = "Key"
 	nameRule    = "Rule"
+	nameShore   = "Shore"
 	nameAltLow  = "AltLow"
 	nameAltMid  = "AltMid"
 	nameAltHigh = "AltHigh"
@@ -144,21 +150,49 @@ func TestNightInkIsLighterThanField(t *testing.T) {
 	}
 }
 
-// allFields lists every field of a palette, named, so the two tests below can
-// table-drive off either theme without repeating the field list twice.
-func allFields(pal theme.Palette) []namedColour {
-	return []namedColour{
-		{name: nameField, col: pal.Field},
-		{name: nameInk, col: pal.Ink},
-		{name: nameMuted, col: pal.Muted},
-		{name: nameAccent, col: pal.Accent},
-		{name: nameRule, col: pal.Rule},
-		{name: nameAltLow, col: pal.AltLow},
-		{name: nameAltMid, col: pal.AltMid},
-		{name: nameAltHigh, col: pal.AltHigh},
-		{name: nameBand, col: pal.Band},
-		{name: nameBandInk, col: pal.BandInk},
+// fieldAccessor names one field of Palette together with a function that
+// reads it, so the tests below can walk the whole struct once instead of
+// repeating its field list per test.
+type fieldAccessor struct {
+	name string
+	get  func(theme.Palette) color.RGBA
+}
+
+// paletteFields lists every field of Palette, in struct order. It is the one
+// place that enumerates the struct, so a field added there and forgotten here
+// shows up as a gap in coverage rather than as a silently untested colour.
+func paletteFields() []fieldAccessor {
+	return []fieldAccessor{
+		{name: nameField, get: func(p theme.Palette) color.RGBA { return p.Field }},
+		{name: nameInk, get: func(p theme.Palette) color.RGBA { return p.Ink }},
+		{name: nameMuted, get: func(p theme.Palette) color.RGBA { return p.Muted }},
+		{name: nameAccent, get: func(p theme.Palette) color.RGBA { return p.Accent }},
+		{name: nameData, get: func(p theme.Palette) color.RGBA { return p.Data }},
+		{name: nameOK, get: func(p theme.Palette) color.RGBA { return p.OK }},
+		{name: nameCaution, get: func(p theme.Palette) color.RGBA { return p.Caution }},
+		{name: nameWarn, get: func(p theme.Palette) color.RGBA { return p.Warn }},
+		{name: nameKey, get: func(p theme.Palette) color.RGBA { return p.Key }},
+		{name: nameRule, get: func(p theme.Palette) color.RGBA { return p.Rule }},
+		{name: nameShore, get: func(p theme.Palette) color.RGBA { return p.Shore }},
+		{name: nameAltLow, get: func(p theme.Palette) color.RGBA { return p.AltLow }},
+		{name: nameAltMid, get: func(p theme.Palette) color.RGBA { return p.AltMid }},
+		{name: nameAltHigh, get: func(p theme.Palette) color.RGBA { return p.AltHigh }},
+		{name: nameBand, get: func(p theme.Palette) color.RGBA { return p.Band }},
+		{name: nameBandInk, get: func(p theme.Palette) color.RGBA { return p.BandInk }},
 	}
+}
+
+// allFields lists every field of a palette, named, so the opacity check below
+// can table-drive off either theme without repeating the field list itself.
+func allFields(pal theme.Palette) []namedColour {
+	fields := paletteFields()
+	colours := make([]namedColour, 0, len(fields))
+
+	for _, field := range fields {
+		colours = append(colours, namedColour{name: field.name, col: field.get(pal)})
+	}
+
+	return colours
 }
 
 // namedPalette pairs a palette with the name a failure should report.
@@ -167,17 +201,18 @@ type namedPalette struct {
 	pal  theme.Palette
 }
 
-// bothPalettes is Night and Paper together, for the tests that hold both to
-// the same rule.
+// bothPalettes is Night and Day together, for the tests that hold both to the
+// same rule.
 func bothPalettes() []namedPalette {
 	return []namedPalette{
 		{name: "Night", pal: theme.Night},
-		{name: "Paper", pal: theme.Paper},
+		{name: "Day", pal: theme.Day},
 	}
 }
 
 // TestPalettesAreFullyOpaque checks every field of both palettes, including
-// Band and BandInk, which the older Night-only opacity test above predates.
+// the six fields (Data, OK, Caution, Warn, Key, Shore) the older Night-only
+// opacity test above predates.
 func TestPalettesAreFullyOpaque(t *testing.T) {
 	t.Parallel()
 
@@ -191,6 +226,123 @@ func TestPalettesAreFullyOpaque(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// hueFields lists the colours a reader has to be able to tell apart at a
+// glance: the field and ink that frame the whole picture, the muted chrome,
+// and the four status hues plus the one accent that all have to read as
+// distinct marks rather than shades of each other.
+func hueFields(pal theme.Palette) []namedColour {
+	return []namedColour{
+		{name: nameField, col: pal.Field},
+		{name: nameInk, col: pal.Ink},
+		{name: nameMuted, col: pal.Muted},
+		{name: nameAccent, col: pal.Accent},
+		{name: nameData, col: pal.Data},
+		{name: nameOK, col: pal.OK},
+		{name: nameCaution, col: pal.Caution},
+		{name: nameWarn, col: pal.Warn},
+	}
+}
+
+// TestSemanticHuesAreDistinct checks the hues whose whole job is to be told
+// apart at a glance. Two of the status colours landing on the same value, or
+// on the accent, ink, muted chrome or field they sit against, would be
+// invisible in the struct literal but would erase a distinction the operator
+// relies on to read the panel at a glance.
+func TestSemanticHuesAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	for _, palette := range bothPalettes() {
+		t.Run(palette.name, func(t *testing.T) {
+			t.Parallel()
+
+			assertPairwiseDistinct(t, hueFields(palette.pal))
+		})
+	}
+}
+
+// TestKeyIsDistinctFromFieldAndInk checks the softkey box against the two
+// colours it sits between. Landing on Field would make the box invisible
+// against the frame it is a step off; landing on Ink would make it read as
+// more type rather than as hardware under the picture.
+func TestKeyIsDistinctFromFieldAndInk(t *testing.T) {
+	t.Parallel()
+
+	for _, palette := range bothPalettes() {
+		t.Run(palette.name, func(t *testing.T) {
+			t.Parallel()
+
+			assertPairwiseDistinct(t, []namedColour{
+				{name: nameField, col: palette.pal.Field},
+				{name: nameInk, col: palette.pal.Ink},
+				{name: nameKey, col: palette.pal.Key},
+			})
+		})
+	}
+}
+
+// TestIntentionalColourRepeats asserts the equalities the palette carries by
+// design, so that a future edit which splits one of these pairs into its own
+// colour fails here instead of silently adding a shade to the picture. See
+// the doc comments on AltLow, AltMid and BandInk in theme.go for why each
+// pair is meant to match.
+func TestIntentionalColourRepeats(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		got  color.RGBA
+		want color.RGBA
+	}{
+		{name: "Night AltLow repeats OK", got: theme.Night.AltLow, want: theme.Night.OK},
+		{name: "Night AltMid repeats Ink", got: theme.Night.AltMid, want: theme.Night.Ink},
+		{name: "Day AltLow repeats OK", got: theme.Day.AltLow, want: theme.Day.OK},
+		{name: "Day AltMid repeats Ink", got: theme.Day.AltMid, want: theme.Day.Ink},
+		{
+			// Night's band text and its ink are the same white for the same
+			// reason AltMid is: text is text, wherever in the picture it sits.
+			// Combined with the AltMid case above this ties BandInk, AltMid
+			// and Ink to a single white.
+			name: "Night BandInk repeats Ink",
+			got:  theme.Night.BandInk,
+			want: theme.Night.Ink,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if testCase.got != testCase.want {
+				// This equality is deliberate; see the doc comment above.
+				t.Errorf("%s: got %v, want %v", testCase.name, testCase.got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestNightAndDayDiffer walks every field of the two palettes and checks that
+// each one differs, except BandInk, which both themes fix at white on
+// purpose. This is the test that would catch a copy-paste leaving one theme
+// half built from the other's colours.
+func TestNightAndDayDiffer(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range paletteFields() {
+		if field.name == nameBandInk {
+			continue
+		}
+
+		t.Run(field.name, func(t *testing.T) {
+			t.Parallel()
+
+			night := field.get(theme.Night)
+			day := field.get(theme.Day)
+
+			if night == day {
+				t.Errorf("Night.%s == Day.%s == %v, want them to differ", field.name, field.name, night)
+			}
+		})
 	}
 }
 
@@ -210,9 +362,12 @@ const (
 	wcagGreenWeight = 0.7152
 	wcagBlueWeight  = 0.0722
 
-	// minLuminanceGap is how far apart Ink and Field, and BandInk and Band,
-	// have to sit: below this a theme would not read as text on a background
-	// on the panel.
+	// minLuminanceGap is the floor for the pairs TestContrastPairsAreLegible
+	// checks: half of the full relative-luminance range from black to white.
+	// That is a real minimum a text-on-background pair has to clear, not a
+	// number picked to match what these two palettes happen to measure: their
+	// narrowest pair, Day's Field against Ink, sits at about 0.87, so both
+	// themes clear 0.5 with more than a third of the whole range to spare.
 	minLuminanceGap = 0.5
 )
 
@@ -245,8 +400,8 @@ func TestContrastPairsAreLegible(t *testing.T) {
 	}{
 		{name: "Night Ink vs Field", lighter: theme.Night.Ink, darker: theme.Night.Field},
 		{name: "Night BandInk vs Band", lighter: theme.Night.BandInk, darker: theme.Night.Band},
-		{name: "Paper Field vs Ink", lighter: theme.Paper.Field, darker: theme.Paper.Ink},
-		{name: "Paper BandInk vs Band", lighter: theme.Paper.BandInk, darker: theme.Paper.Band},
+		{name: "Day Field vs Ink", lighter: theme.Day.Field, darker: theme.Day.Ink},
+		{name: "Day BandInk vs Band", lighter: theme.Day.BandInk, darker: theme.Day.Band},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -269,7 +424,7 @@ func TestParse(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "night", text: "night", want: theme.KindNight},
-		{name: "paper", text: "paper", want: theme.KindPaper},
+		{name: "day", text: "day", want: theme.KindDay},
 		{name: "empty string is rejected", text: "", wantErr: true},
 		{
 			// --theme is an allow list, not free text, so the exact spelling
@@ -315,7 +470,7 @@ func TestKindPalette(t *testing.T) {
 		want theme.Palette
 	}{
 		{name: "night resolves to Night", kind: theme.KindNight, want: theme.Night},
-		{name: "paper resolves to Paper", kind: theme.KindPaper, want: theme.Paper},
+		{name: "day resolves to Day", kind: theme.KindDay, want: theme.Day},
 		{name: "the zero value resolves to Night", kind: theme.Kind(""), want: theme.Night},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -331,57 +486,57 @@ func TestKindPalette(t *testing.T) {
 func TestKindNext(t *testing.T) {
 	t.Parallel()
 
-	t.Run("night moves to paper", func(t *testing.T) {
+	t.Run("night moves to day", func(t *testing.T) {
 		t.Parallel()
 
-		if got := theme.KindNight.Next(); got != theme.KindPaper {
-			t.Errorf("KindNight.Next() = %v, want %v", got, theme.KindPaper)
+		if got := theme.KindNight.Next(); got != theme.KindDay {
+			t.Errorf("KindNight.Next() = %v, want %v", got, theme.KindDay)
 		}
 	})
 
-	t.Run("paper moves back to night, completing the cycle", func(t *testing.T) {
+	t.Run("day moves back to night, completing the cycle", func(t *testing.T) {
 		t.Parallel()
 
-		if got := theme.KindPaper.Next(); got != theme.KindNight {
-			t.Errorf("KindPaper.Next() = %v, want %v", got, theme.KindNight)
+		if got := theme.KindDay.Next(); got != theme.KindNight {
+			t.Errorf("KindDay.Next() = %v, want %v", got, theme.KindNight)
 		}
 	})
 
 	t.Run("the zero value cycles the same way night does", func(t *testing.T) {
 		t.Parallel()
 
-		if got := theme.Kind("").Next(); got != theme.KindPaper {
-			t.Errorf(`Kind("").Next() = %v, want %v`, got, theme.KindPaper)
+		if got := theme.Kind("").Next(); got != theme.KindDay {
+			t.Errorf(`Kind("").Next() = %v, want %v`, got, theme.KindDay)
 		}
 	})
 }
 
 // TestPaletteLight checks that Light answers true for exactly one value,
-// theme.Paper, and false for everything else, including a palette that only
-// differs from Paper in a single channel. That last case is deliberate, not
-// an edge case Light happens to miss: a scene calls Light to decide whether a
+// theme.Day, and false for everything else, including a palette that only
+// differs from Day in a single channel. That last case is deliberate, not an
+// edge case Light happens to miss: a scene calls Light to decide whether a
 // colour it was not handed by the palette needs to be lifted off a light
 // field or a dark one, and the only two answers that question ever gets in
-// the running program are theme.Night and theme.Paper. A palette that is
-// merely close to Paper is not one of those two, so reading it as dark is
-// the same "anything that is not Paper reads as night" rule Kind.Palette and
+// the running program are theme.Night and theme.Day. A palette that is
+// merely close to Day is not one of those two, so reading it as dark is the
+// same "anything that is not Day reads as night" rule Kind.Palette and
 // Kind.Next already apply, and it is what keeps a test-built palette from
 // silently drawing as if it were the light theme.
 func TestPaletteLight(t *testing.T) {
 	t.Parallel()
 
-	almostPaper := theme.Paper
-	almostPaper.Rule = color.RGBA{}
+	almostDay := theme.Day
+	almostDay.Rule = color.RGBA{}
 
 	for _, testCase := range []struct {
 		name string
 		pal  theme.Palette
 		want bool
 	}{
-		{name: "Paper is light", pal: theme.Paper, want: true},
+		{name: "Day is light", pal: theme.Day, want: true},
 		{name: "Night is not light", pal: theme.Night, want: false},
 		{name: "the zero value is not light", pal: theme.Palette{}, want: false},
-		{name: "a palette differing from Paper in one channel is not light", pal: almostPaper, want: false},
+		{name: "a palette differing from Day in one channel is not light", pal: almostDay, want: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

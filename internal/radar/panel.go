@@ -75,11 +75,11 @@ const (
 	coordinateSeparator = " / "
 
 	// sweepSuffix follows the source label while the gain auto-sweep is
-	// running. It is drawn in the accent rather than in BandInk because it is
-	// the one thing in the band that explains an otherwise empty scope: the
-	// sweep walks the gain grid for a few seconds and decodes nothing while it
-	// does, and a receiver that looks broken for no stated reason is the bug
-	// report this line prevents.
+	// running. It is drawn in the caution colour because that is what it is:
+	// the sweep walks the gain grid for a few seconds and decodes nothing while
+	// it does, so the scope beside it is empty for a reason that has not gone
+	// wrong. A receiver that looks broken with nothing on screen to say why is
+	// the bug report this line prevents.
 	sweepSuffix = " SWEEP"
 
 	// sourceLabelGap is the air the source label leaves between itself and the
@@ -131,7 +131,7 @@ const (
 	labelAltitude = "ALT"
 	labelAirline  = "AIRLINE"
 	labelNight    = "NIGHT"
-	labelPaper    = "PAPER"
+	labelDay      = "DAY"
 
 	// trailBarLabel is what the trail cap falls back to. It is never drawn:
 	// capLabel answers capTrails from the mode itself, and every mode has a
@@ -152,12 +152,10 @@ type keyCap struct {
 // leaving, then moving through the list, then the five things that change what
 // is on the field, then the two that change how it looks.
 //
-// Twelve caps and their labels come to 858 pixels of the 1248 the panel leaves
-// between its margins, with every cycling key on its longest word, so nothing
-// here has to be shortened to fit. The trail cap's longest word, SHORT, is a
-// character shorter than the TRAILS it replaced, so the bar did not grow when
-// the four modes arrived; the filter cap's longest, 10-25K, added 76 pixels
-// when it did, and W WIDE another 64.
+// Twelve softkeys come to 728 pixels of the 1248 the panel leaves between its
+// margins, with every cycling key on its longest word, so nothing here has to
+// be shortened to fit. See drawSoftkey for how one box is measured and
+// view3DCaps for the widest the bar ever gets.
 //
 // F sits next to C rather than at the end of the row, because the filter is
 // the colour mode's own legend with one entry picked out of it and the two
@@ -201,13 +199,11 @@ var keyCaps = [...]keyCap{
 // That was checked before this was written rather than assumed, the same way
 // the up and down pair was.
 //
-// Sixteen caps and their labels come to about 1162 pixels of the 1248 the
-// panel leaves between its margins, or about 1238 with the bias-tee cap as
-// well, so nothing here has to be shortened. That is the whole bar at its
-// longest and it clears the right margin by ten pixels. W WIDE took fifty of
-// the fifty-eight that used to be spare, so there is no room left for another
-// cap at the panel's own resolution: anything else on this bar has to replace
-// something. See the note on keyCaps.
+// Sixteen softkeys come to about 1041 pixels of the 1248 the panel leaves
+// between its margins, or about 1103 with the bias-tee key as well, so nothing
+// here has to be shortened: ENVELOPE and AIRPORTS both fit at their full
+// length with about 145 pixels to spare. That is the whole bar at its longest,
+// in the 3D view on a dongle that has a bias-tee. See the note on keyCaps.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
@@ -261,20 +257,15 @@ func (s *Scene) drawKeyBar(lay *layout) {
 	lay.bottom -= reserved
 }
 
-// drawCaps draws a run of caps from pen and returns the x just past the last
-// one it drew.
+// drawCaps draws a run of softkeys from pen and returns the x just past the
+// last one it drew.
 //
-// It stops after the cap that reaches the right margin rather than before it,
-// which is what the bar has always done: one cap running into the margin says
+// It stops after the key that reaches the right margin rather than before it,
+// which is what the bar has always done: one box running into the margin says
 // there was more, where stopping short of it just looks like the bar ended.
 func (s *Scene) drawCaps(lay *layout, pen, top int, caps []keyCap) int {
-	face := s.faces.Small
-
 	for _, entry := range caps {
-		pen = s.drawCap(lay.dst, pen, top, entry.key, s.capOn(entry.state))
-		pen += capGap
-		pen = text.Draw(lay.dst, face, pen, top+capPadY, s.capLabel(entry), s.pal.Muted)
-		pen += entryGap
+		pen = s.drawSoftkey(lay.dst, pen, top, entry) + keyGap
 
 		if pen >= lay.right {
 			break
@@ -284,20 +275,25 @@ func (s *Scene) drawCaps(lay *layout, pen, top int, caps []keyCap) int {
 	return pen
 }
 
-// keyBarHeight is the room the key bar takes off the bottom, blockGap
-// included, or zero when there is no face to set it in or no room left for it.
+// keyBarHeight is the room the softkey bar takes off the bottom, blockGap
+// included, or zero when one of its two faces is missing or there is no room
+// left for it.
 //
 // It is separate from drawKeyBar because the background layer has to carve the
 // frame the same way without drawing a bar of its own: the layer holds the
 // scope, and the scope only sits where it does because the bar took its room
 // off the bottom first.
+//
+// The box is sized on the cap letter's face rather than on the label's. The
+// letter is the taller of the two and it is what the box has to hold; the
+// label is centred against it.
 func (s *Scene) keyBarHeight(lay *layout) int {
-	capHeight := lineHeight(s.faces.Small)
-	if capHeight == 0 {
+	capHeight := lineHeight(s.faces.BodyBold)
+	if capHeight == 0 || lineHeight(s.faces.Small) == 0 {
 		return 0
 	}
 
-	height := capHeight + 2*capPadY
+	height := capHeight + 2*keyPadY
 	if !lay.fits(height) {
 		return 0
 	}
@@ -305,47 +301,77 @@ func (s *Scene) keyBarHeight(lay *layout) int {
 	return height + blockGap
 }
 
-// drawCap draws one key cap and returns the x just past it.
+// drawSoftkey draws one key as a softkey and returns the x just past its box.
 //
-// A cap for a setting that is on is the letter knocked out of a filled box,
-// which is what every cap used to look like. One that is off is the same box
-// as a hairline outline with the letter in ink, so the two read as a switch
-// thrown and a switch not thrown rather than as two different words.
+// A softkey is the whole control in one grey box: the cap letter in the bold
+// face, the word for what the key does in the small one beside it, and a green
+// bar along the bottom when the setting is engaged. That is the grammar of the
+// row along the bottom of a glass panel, and it answers the question the old
+// bar could not. A row of filled and hollow caps said a setting was on by the
+// weight of one letter, which is a difference nobody sees without comparing
+// two caps side by side; a bar under a box is a switch that is visibly thrown.
 //
-//nolint:revive // flag-parameter: on picks which of two caps to draw, not a mode to branch deeper on.
-func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string, on bool) int {
-	face := s.faces.Small
-	width, height := text.Measure(face, key)
-	box := image.Rect(left, top, left+width+2*capPadX, top+height+2*capPadY)
+// The box is sized from the type rather than set to a fixed width. The caps
+// are one, two and three characters long and the labels four to eight, so a
+// grid of equal boxes would be sized for TILT and ENVELOPE at once and waste
+// most of the bar on the short ones.
+func (s *Scene) drawSoftkey(dst *canvas.Canvas, left, top int, entry keyCap) int {
+	bold, small := s.faces.BodyBold, s.faces.Small
+	word := s.capLabel(entry)
 
-	if !on {
-		dst.Rect(box, s.pal.Ink)
-		text.Draw(dst, face, left+capPadX, top+capPadY, key, s.pal.Ink)
+	capWidth, capHeight := text.Measure(bold, entry.key)
+	labelWidth, labelHeight := text.Measure(small, word, text.WithSpacing(labelTracking))
 
-		return box.Max.X
-	}
+	box := image.Rect(left, top,
+		left+2*keyPadX+capWidth+keyCapGap+labelWidth, top+2*keyPadY+capHeight)
 
-	dst.FillRect(box, s.pal.Ink)
-	text.Draw(dst, face, left+capPadX, top+capPadY, key, s.pal.Field)
+	dst.FillRect(box, s.pal.Key)
+
+	pen := text.Draw(dst, bold, left+keyPadX, top+keyPadY, entry.key, s.pal.Ink)
+
+	// The label rides the middle of the cap letter's line rather than its
+	// baseline. The two faces are four pixels apart in height, and a small
+	// label set on the bold one's baseline sits low enough in the box to read
+	// as a second row.
+	text.Draw(dst, small, pen+keyCapGap, top+keyPadY+(capHeight-labelHeight)/2, word, s.pal.Ink,
+		text.WithSpacing(labelTracking))
+
+	s.drawEngaged(dst, box, entry.state)
 
 	return box.Max.X
 }
 
-// capOn reports whether a cap is drawn filled. Everything that is not a
-// toggle is, because there is no state for it to be in.
+// drawEngaged puts the green bar along the inside of a softkey's bottom edge
+// when its setting is on, and nothing at all when it is off.
+func (s *Scene) drawEngaged(dst *canvas.Canvas, box image.Rectangle, which capToggle) {
+	if !s.capEngaged(which) {
+		return
+	}
+
+	bar := box.Max.Y - keyPadY
+
+	dst.FillRect(image.Rect(
+		box.Min.X+keyEngagedInset, bar,
+		box.Max.X-keyEngagedInset, bar+keyEngagedHeight), s.pal.OK)
+}
+
+// capEngaged reports whether a softkey shows its engaged bar.
 //
-// The trail cap is the exception among the cycling keys, and the filter cap is
-// the second one. Colour and theme have no off state and are always filled,
-// but one of the four trail modes is genuinely off and one of the filter's
-// values is genuinely everything. A hollow box beside the word OFF, or beside
-// ALL, says the same thing twice on purpose: it is the state somebody scanning
-// the bar has to be able to spot without reading it.
-func (s *Scene) capOn(which capToggle) bool {
+// Only the genuine on-or-off settings do. A key that carries a value rather
+// than a state has nothing to be engaged about: C says which colour mode is on,
+// L which theme, T how much trail and F which slice of the traffic, and every
+// one of those is always on something. A bar under them would be claiming an
+// off position they do not have, and the cap already says which value it is on.
+// The keys with no setting behind them at all, q and the three that step
+// through something, are the same case one step further out.
+//
+// It is the bar and not the box that says so. Every key is drawn in the same
+// grey whatever its state, because the box is the switch and the bar is the
+// light on it.
+func (s *Scene) capEngaged(which capToggle) bool {
 	switch which {
 	case capAuto:
 		return s.autoRange
-	case capTrails:
-		return s.trail != trailOff
 	case capAirports:
 		return s.airports
 	case capShore:
@@ -358,12 +384,10 @@ func (s *Scene) capOn(which capToggle) bool {
 		return s.biasEnabled
 	case capWide:
 		return s.wide
-	case capFilter:
-		return s.filter.active()
-	case capAlways, capColour, capTheme:
+	case capAlways, capColour, capTheme, capTrails, capFilter:
 		fallthrough
 	default:
-		return true
+		return false
 	}
 }
 
@@ -382,7 +406,7 @@ func (s *Scene) capLabel(entry keyCap) string {
 		return labelAltitude
 	case capTheme:
 		if s.light {
-			return labelPaper
+			return labelDay
 		}
 
 		return labelNight
@@ -401,11 +425,15 @@ func (s *Scene) capLabel(entry keyCap) string {
 // the left with the receiver position under them, the two clocks and the
 // battery on the right, a hairline under all of it.
 //
-// The band is filled with pal.Band and everything on it is set in pal.BandInk
-// rather than the scene's usual muted/ink split, because paper's band is a
-// navy strip and needs its own contrast rather than the page's. Night's Band
-// and BandInk repeat Field and Ink, so there the band is invisible and the
-// text reads exactly as it did before the band existed.
+// The band is filled with pal.Band and the type on it is split three ways
+// rather than by the scene's usual muted and ink pair. The wordmark and the
+// fixed words are BandInk, because the band is a near-black strip on both
+// themes and needs its own contrast rather than the page's. Everything that is
+// a reading about the machine, the source label, the coordinates, both clocks
+// and the battery percentage, is Data: on a glass panel cyan is what a data
+// field is set in, and these are the only readings on screen that are about the
+// receiver rather than about an aeroplane. The mode word is whichever of OK,
+// Caution and Muted says what the position under it is worth.
 //
 // The fill bleeds to all three edges it touches rather than sitting inside
 // the layout margin, and the hairline under it runs the full width with it.
@@ -490,15 +518,13 @@ func (s *Scene) headerHeight(lay *layout) int {
 // dot, and SWEEP after that while the gain sweep is running.
 //
 // The dot is filled when the source is connected and hollow when it is not,
-// which is one glance rather than a word to read. It is the low-altitude
-// green rather than the accent, because the accent marks the selected
-// aircraft and nothing else, and it is left in its own colour rather than
-// moved onto the band's BandInk/Muted split: it is a status light, not text.
+// which is one glance rather than a word to read. It is OK green, because a
+// connected feed is the engaged state of the one thing the whole scope depends
+// on, and it keeps its own colour rather than joining the band's BandInk and
+// Data split: it is a status light, not text.
 //
-// The sweep marker is the one exception to "the accent marks the selected
-// aircraft and nothing else". A sweep decodes nothing for a few seconds, so
-// the scope it explains is empty and there is no selected aircraft for the
-// accent to be confused with.
+// The label itself is Data. It says which feed the aircraft came off, which is
+// a reading about the machine rather than about any aeroplane on the field.
 func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int) {
 	// Both faces are known to be present: drawHeader drops the whole band
 	// unless all three of its faces loaded, so there is nothing to check here.
@@ -512,7 +538,7 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	middle := top + markHeight/2
 
 	if frame.Source.Connected {
-		lay.dst.FillCircle(pen+dotRadius, middle, dotRadius, s.pal.AltLow)
+		lay.dst.FillCircle(pen+dotRadius, middle, dotRadius, s.pal.OK)
 	} else {
 		lay.dst.Circle(pen+dotRadius, middle, dotRadius, s.pal.Muted)
 	}
@@ -530,11 +556,11 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	}
 
 	head, marker := fitLabel(face, frame.Source.Label, limit-pen-reserved)
-	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.BandInk, text.WithSpacing(labelTracking))
-	pen = text.Draw(lay.dst, face, pen, label, marker, s.pal.BandInk, text.WithSpacing(labelTracking))
+	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.Data, text.WithSpacing(labelTracking))
+	pen = text.Draw(lay.dst, face, pen, label, marker, s.pal.Data, text.WithSpacing(labelTracking))
 
 	if frame.Sweeping {
-		text.Draw(lay.dst, face, pen, label, sweepSuffix, s.pal.Accent, text.WithSpacing(labelTracking))
+		text.Draw(lay.dst, face, pen, label, sweepSuffix, s.pal.Caution, text.WithSpacing(labelTracking))
 	}
 }
 
@@ -586,9 +612,10 @@ func cutMarker(face *psf.Font) string {
 //
 // The mode takes the same colour the home marker's ring does, so the word in
 // the header and the ring on the field are one signal read twice rather than
-// two facts to reconcile. The LOC before it and the coordinates after it stay
-// in BandInk: they are the same word and the same two numbers whatever
-// produced them, and colouring those as well would make the whole line shout.
+// two facts to reconcile. LOC stays in BandInk because it is a label that never
+// changes, and the coordinates after it are Data like every other reading about
+// the machine: they are the same two numbers whatever produced them, and it is
+// the mode word in front of them that says what they are worth.
 //
 // The face is known to be present for the same reason drawWordmark's is:
 // drawHeader drops the band rather than half of it.
@@ -607,9 +634,9 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 		text.Draw(lay.dst, face, left, top, noFixText, ink)
 	default:
 		pen := text.Draw(lay.dst, face, left, top, modeWord(receiver.Mode), ink) + modeGap
-		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.BandInk)
-		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.BandInk)
-		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.BandInk)
+		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.Data)
+		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.Data)
+		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.Data)
 	}
 }
 
@@ -622,7 +649,7 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 // is what says the answer is a compromise between constraints that cannot all
 // be true.
 //
-// It is drawn in the accent, which is the colour the whole estimate line
+// It is drawn in the caution colour, which is what the whole estimate line
 // already carries, so it reads as part of the same doubt rather than as a
 // second thing to decode.
 func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated int) {
@@ -630,7 +657,7 @@ func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated
 		return
 	}
 
-	text.Draw(dst, face, pen, top, doubtMarker, s.pal.Accent)
+	text.Draw(dst, face, pen, top, doubtMarker, s.pal.Caution)
 }
 
 // modeWord opens the receiver line when there are coordinates after it.
@@ -778,8 +805,10 @@ func (s *Scene) drawHeaderRight(lay *layout, middle int, now time.Time) int {
 // label starts at.
 //
 // The pair is measured and then drawn left to right rather than drawn right to
-// left, so the label stays quiet and the clock stays in the band's reading
-// colour without the two drifting apart as the minutes change width.
+// left, so the label stays quiet and the clock stays in the data colour without
+// the two drifting apart as the minutes change width. The clock is a reading
+// about the machine, which is what puts it in Data beside the source label and
+// the coordinates rather than in the band's own ink.
 func (s *Scene) drawClock(
 	lay *layout, rightX, middle int, label string, face *psf.Font, value []byte,
 ) int {
@@ -790,7 +819,7 @@ func (s *Scene) drawClock(
 	left := rightX - labelWidth - clockLabelGap - valueWidth
 
 	text.Draw(lay.dst, small, left, middle-labelHeight/2, label, s.bandMuted(), text.WithSpacing(labelTracking))
-	drawBytes(lay.dst, face, left+labelWidth+clockLabelGap, middle-lineHeight(face)/2, value, s.pal.BandInk)
+	drawBytes(lay.dst, face, left+labelWidth+clockLabelGap, middle-lineHeight(face)/2, value, s.pal.Data)
 
 	return left
 }
@@ -830,8 +859,8 @@ func (s *Scene) drawBattery(lay *layout, rightX, middle int) (int, bool) {
 		s.drawBatteryLevel(lay.dst, inner, int(percent))
 	}
 
-	pen := drawBytes(lay.dst, face, rightX-fieldWidth, middle-fieldHeight/2, s.count(int(percent)), s.pal.BandInk)
-	text.Draw(lay.dst, face, pen, middle-fieldHeight/2, percentSign, s.pal.BandInk)
+	pen := drawBytes(lay.dst, face, rightX-fieldWidth, middle-fieldHeight/2, s.count(int(percent)), s.pal.Data)
+	text.Draw(lay.dst, face, pen, middle-fieldHeight/2, percentSign, s.pal.Data)
 
 	return left, true
 }
@@ -861,23 +890,26 @@ func (s *Scene) drawBatteryLevel(dst *canvas.Canvas, inner image.Rectangle, perc
 
 // batteryInk is the fill colour for a level.
 //
-// The altitude bands are reused rather than given colours of their own. They
-// are already the palette's "getting worse" ramp, and a fourth amber that only
-// the battery used would be one more colour to keep in step across two themes.
+// It is the palette's own caution and warning rather than colours of the
+// battery's own, which is the whole point of naming those two: a flat battery
+// on a handheld is a warning in the same sense an emergency squawk is, and one
+// getting low is a caution in the same sense an estimated position is. Above
+// both it is Data, matching the percentage beside it, so a healthy battery is
+// one colour and reads as a reading rather than as a state.
 func (s *Scene) batteryInk(percent int) color.RGBA {
 	switch {
 	case percent <= batteryCritical:
-		return s.pal.AltHigh
+		return s.pal.Warn
 	case percent <= batteryLow:
-		return s.pal.AltMid
+		return s.pal.Caution
 	default:
-		return s.pal.BandInk
+		return s.pal.Data
 	}
 }
 
 // drawChargingBolt draws the lightning mark inside a charging battery.
 func (s *Scene) drawChargingBolt(dst *canvas.Canvas, inner image.Rectangle) {
-	ink := s.pal.AltLow
+	ink := s.pal.OK
 	topX := inner.Min.X + inner.Dx()/2 + boltInset
 	waistX := inner.Min.X + inner.Dx()/2 - boltInset
 	waistY := inner.Min.Y + boltWaist
