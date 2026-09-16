@@ -31,9 +31,9 @@ const (
 
 // Trail is a track with no aircraft on the end of it.
 //
-// It is what --no-decay keeps when a contact is lost: the last position
-// history the aircraft showed, plus the two things the radar needs to colour
-// it by. There is no position and no heading, because there is no longer an
+// It is what a source keeps when a contact is lost: the last position history
+// the aircraft showed, plus the two things the radar needs to colour it by.
+// There is no position and no heading, because there is no longer an
 // aeroplane to have either.
 //
 // Points aliases the slice the source last saw rather than copying it, and
@@ -62,9 +62,12 @@ type liveTrail struct {
 
 // ghosts remembers the trails of aircraft that have gone quiet.
 //
-// It is off unless the source was told to keep them, and off it holds no
-// maps, no ring and no per-frame work at all, so the default path costs
-// nothing.
+// Both sources track them on every run, whether or not the radar is in the
+// mode that draws them. It used to be tied to a flag, which meant a session
+// that reached for the trail mode an hour in found the last hour empty: the
+// tracking has to have been running before the question is asked, or the
+// answer is always no. The ring below is what bounds the cost of leaving it
+// on.
 //
 // The ring is a ring rather than a slice with its front cut off because
 // eviction is by age and revival is by ICAO, and both have to be cheap.
@@ -75,8 +78,6 @@ type liveTrail struct {
 // ghosts is not safe for concurrent use. Each source holds one and calls into
 // it under its own lock.
 type ghosts struct {
-	on bool
-
 	// live is what each aircraft in the sky last showed, and gen the frame
 	// counter its entries are stamped with.
 	live map[string]liveTrail
@@ -112,16 +113,14 @@ type ghosts struct {
 	dirty bool
 }
 
-// newGhosts builds the tracker, or the inert zero value when ghosts are off.
+// newGhosts builds the tracker.
 //
-//nolint:revive // flag-parameter: on picks which of two values to build, not a mode to branch deeper on.
-func newGhosts(on bool) ghosts {
-	if !on {
-		return ghosts{}
-	}
-
+// Every source calls it, so there is no off state and no zero value to guard
+// against: the two maps are always there and observe can always write to
+// them. The ring itself is still allocated lazily in push, because a receiver
+// that never loses a contact never needs one.
+func newGhosts() ghosts {
 	return ghosts{
-		on:        true,
 		live:      make(map[string]liveTrail),
 		at:        make(map[string]int),
 		maxTrails: maxGhostTrails,
@@ -135,10 +134,6 @@ func newGhosts(on bool) ghosts {
 // The slice is the tracker's own and is refilled on the next frame that
 // changes anything, which is the contract Frame.Planes already carries.
 func (g *ghosts) observe(planes airplanes.List) []Trail {
-	if !g.on {
-		return nil
-	}
-
 	g.gen++
 
 	for _, plane := range planes {

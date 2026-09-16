@@ -22,6 +22,7 @@ import (
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/shore"
+	"github.com/hyperized/uScope/pkg/text"
 )
 
 // The ICAOs in the small fleets these tests build. The first is the one an
@@ -1535,6 +1536,19 @@ func rowPlanFaces(tb testing.TB) *psf.Font {
 	return body
 }
 
+// rowPlanSmall loads the small face the header's labels and the key bar's
+// caps are set in, for the same reason rowPlanFaces loads the body one.
+func rowPlanSmall(tb testing.TB) *psf.Font {
+	tb.Helper()
+
+	small, err := fonts.Small()
+	if err != nil {
+		tb.Fatalf("fonts.Small: %v", err)
+	}
+
+	return small
+}
+
 // TestRowPlanGeometry drives rowPlan's own arithmetic directly: which columns
 // count, how much room they need including the gap between them, and where
 // place() puts each edge.
@@ -1639,11 +1653,12 @@ func TestPlanRows(t *testing.T) {
 	scene := &Scene{faces: Faces{Body: body}}
 
 	full := rowPlanWithout()
-	noBearing := rowPlanWithout(colBearing)
-	noSpeed := rowPlanWithout(colBearing, colSpeed)
-	noICAO := rowPlanWithout(colBearing, colSpeed, colICAO)
-	noAltitude := rowPlanWithout(colBearing, colSpeed, colICAO, colAltitude)
-	identityOnly := rowPlanWithout(colBearing, colSpeed, colICAO, colAltitude, colDistance)
+	noAttitude := rowPlanWithout(colAttitude)
+	noBearing := rowPlanWithout(colAttitude, colBearing)
+	noSpeed := rowPlanWithout(colAttitude, colBearing, colSpeed)
+	noICAO := rowPlanWithout(colAttitude, colBearing, colSpeed, colICAO)
+	noAltitude := rowPlanWithout(colAttitude, colBearing, colSpeed, colICAO, colAltitude)
+	identityOnly := rowPlanWithout(colAttitude, colBearing, colSpeed, colICAO, colAltitude, colDistance)
 
 	const left = 0
 
@@ -1653,8 +1668,12 @@ func TestPlanRows(t *testing.T) {
 		wantOn [colCount]bool
 		wantOK bool
 	}{
-		{name: "a generous width keeps all seven columns", right: full.width(glyph), wantOn: full.on, wantOK: true},
-		{name: "narrower drops bearing first", right: noBearing.width(glyph), wantOn: noBearing.on, wantOK: true},
+		{name: "a generous width keeps all eight columns", right: full.width(glyph), wantOn: full.on, wantOK: true},
+		{
+			name:  "narrower drops the attitude cell first",
+			right: noAttitude.width(glyph), wantOn: noAttitude.on, wantOK: true,
+		},
+		{name: "narrower still drops bearing", right: noBearing.width(glyph), wantOn: noBearing.on, wantOK: true},
 		{name: "narrower still drops speed next", right: noSpeed.width(glyph), wantOn: noSpeed.on, wantOK: true},
 		{name: "narrower still drops the ICAO hex", right: noICAO.width(glyph), wantOn: noICAO.on, wantOK: true},
 		{name: "narrower still drops altitude", right: noAltitude.width(glyph), wantOn: noAltitude.on, wantOK: true},
@@ -3206,21 +3225,12 @@ func TestKnownHeading(t *testing.T) {
 	}
 }
 
-// TestTrailFade checks both halves of the trail's shading: the floor
-// --no-decay and the fade disagree about, and the ramp segmentAlpha runs from
-// that floor up to the head.
+// TestTrailFade checks the ramp segmentAlpha runs from a mode's floor up to
+// the head. The floors themselves are TestTrailPlan's subject.
 func TestTrailFade(t *testing.T) {
 	t.Parallel()
 
 	const span = 4.0
-
-	if got := (&Scene{noDecay: true}).trailFloor(); got != trailMaxAlpha {
-		t.Errorf("no-decay trailFloor() = %v, want %v", got, trailMaxAlpha)
-	}
-
-	if got := (&Scene{}).trailFloor(); got != trailMinAlpha {
-		t.Errorf("trailFloor() = %v, want %v", got, trailMinAlpha)
-	}
 
 	for index := range int(span) + 1 {
 		if got := segmentAlpha(trailMaxAlpha, index, span); got != trailMaxAlpha {
@@ -3441,8 +3451,11 @@ func TestCapOn(t *testing.T) {
 	}{
 		{name: "auto on", scene: Scene{autoRange: true}, toggle: capAuto, want: true},
 		{name: "auto off", scene: Scene{}, toggle: capAuto, want: false},
-		{name: "trails on", scene: Scene{trails: true}, toggle: capTrails, want: true},
-		{name: "trails off", scene: Scene{}, toggle: capTrails, want: false},
+		{name: "trails long", scene: Scene{trail: trailLong}, toggle: capTrails, want: true},
+		{name: "trails short", scene: Scene{trail: trailShort}, toggle: capTrails, want: true},
+		{name: "trails all", scene: Scene{trail: trailAll}, toggle: capTrails, want: true},
+		{name: "trails off", scene: Scene{trail: trailOff}, toggle: capTrails, want: false},
+		{name: "the zero value reads as long", scene: Scene{}, toggle: capTrails, want: true},
 		{name: "airports on", scene: Scene{airports: true}, toggle: capAirports, want: true},
 		{name: "airports off", scene: Scene{}, toggle: capAirports, want: false},
 		{name: "shore on", scene: Scene{shoreOn: true}, toggle: capShore, want: true},
@@ -3569,10 +3582,10 @@ func TestDrawCopiesBiasTeeFromFrame(t *testing.T) {
 func TestCapLabel(t *testing.T) {
 	t.Parallel()
 
-	// The two cycling entries, taken from the bar itself rather than written
-	// out again, so a rename of either label cannot leave this table testing a
-	// cap that is no longer on screen.
-	colourCap, themeCap := keyCaps[7], keyCaps[8]
+	// The three cycling entries, taken from the bar itself rather than written
+	// out again, so a rename of any of their labels cannot leave this table
+	// testing a cap that is no longer on screen.
+	trailCap, colourCap, themeCap := keyCaps[4], keyCaps[7], keyCaps[8]
 
 	for _, testCase := range []struct {
 		name  string
@@ -3601,8 +3614,28 @@ func TestCapLabel(t *testing.T) {
 			entry: themeCap, want: labelPaper,
 		},
 		{
-			name: "a toggle keeps its own label", scene: Scene{},
-			entry: keyCap{key: "T", label: "TRAILS", state: capTrails}, want: "TRAILS",
+			name: "the long trail mode", scene: Scene{trail: trailLong},
+			entry: trailCap, want: labelTrailLong,
+		},
+		{
+			name: "the short trail mode", scene: Scene{trail: trailShort},
+			entry: trailCap, want: labelTrailShort,
+		},
+		{
+			name: "the all trail mode", scene: Scene{trail: trailAll},
+			entry: trailCap, want: labelTrailAll,
+		},
+		{
+			name: "the off trail mode", scene: Scene{trail: trailOff},
+			entry: trailCap, want: labelTrailOff,
+		},
+		{
+			name: "the zero trail mode reads as long", scene: Scene{},
+			entry: trailCap, want: labelTrailLong,
+		},
+		{
+			name: "a plain toggle keeps its own label", scene: Scene{},
+			entry: keyCap{key: "R", label: "AUTO", state: capAuto}, want: "AUTO",
 		},
 		{
 			name: "so does a key that is not a toggle", scene: Scene{},
@@ -4084,4 +4117,260 @@ func TestOverlayToggles(t *testing.T) {
 			t.Error("a press in the full scope changed minimal's overlays, want them untouched")
 		}
 	})
+}
+
+// arrowCanvas draws one direction arrow at a known centre on a canvas big
+// enough to hold it with room to spare, and hands back the canvas and the
+// centre pixel.
+//
+// The arrow is drawn through drawArrow rather than by reaching for its three
+// corners, so what the cases below read is the shape the rows and the panel
+// actually get.
+func arrowCanvas(tb testing.TB, degrees float64) (*canvas.Canvas, int, int) {
+	tb.Helper()
+
+	const side = 41
+
+	canv, err := canvas.New(side, side)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	canv.Clear(theme.Night.Field)
+
+	middle := side / 2
+	scene := &Scene{}
+
+	// drawArrow takes the left edge of the cell and centres the arrow in it,
+	// so the left edge is half a cell back from where the middle is wanted.
+	scene.drawArrow(canv, middle-arrowCell/2, middle, degrees, theme.Night.Ink)
+
+	return canv, middle, middle
+}
+
+// TestArrowPointsAtTheAngle checks the four cardinal directions land where a
+// compass says they do: up at zero, right at ninety, down at a half turn and
+// left at three quarters.
+//
+// It reads the apex pixel rather than counting ink, because the apex is the
+// whole point of the shape. The old arrow was a nine-pixel bitmap turned by
+// nearest neighbour, which put the point in roughly the right place at these
+// four angles and nowhere near it in between; a triangle worked out from the
+// angle lands it exactly, and this is what says so.
+func TestArrowPointsAtTheAngle(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		degrees float64
+		offX    int
+		offY    int
+	}{
+		{name: "north points up the screen", degrees: 0, offY: -int(arrowApex)},
+		{name: "east points right", degrees: 90, offX: int(arrowApex)},
+		{name: "south points down", degrees: 180, offY: int(arrowApex)},
+		{name: "west points left", degrees: 270, offX: -int(arrowApex)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv, centreX, centreY := arrowCanvas(t, testCase.degrees)
+			apexX, apexY := centreX+testCase.offX, centreY+testCase.offY
+
+			if got := canv.Image().RGBAAt(apexX, apexY); got != theme.Night.Ink {
+				t.Errorf("the pixel at the apex (%d, %d) is %v, want the ink %v",
+					apexX, apexY, got, theme.Night.Ink)
+			}
+
+			// One pixel past the apex is outside the shape, which is what says
+			// the arrow stops where it is meant to rather than running on.
+			pastX, pastY := centreX+testCase.offX*2, centreY+testCase.offY*2
+			if got := canv.Image().RGBAAt(pastX, pastY); got == theme.Night.Ink {
+				t.Errorf("the pixel past the apex (%d, %d) is ink, want the arrow to end at the apex",
+					pastX, pastY)
+			}
+		})
+	}
+}
+
+// TestArrowHasNoGapsAtAnyAngle walks the whole compass in fifteen-degree steps
+// and checks the shaft is solid at each one.
+//
+// This is the failure the bitmap arrow actually had. Nearest-neighbour
+// rotation of a nine-pixel sprite dropped a pixel out of the shaft at most
+// angles off the four axes, so the arrow broke into a dotted line exactly
+// where it was being asked to say something a compass letter could not. A
+// filled triangle cannot do that, and a step of fifteen degrees is fine enough
+// to have caught it when it could.
+func TestArrowHasNoGapsAtAnyAngle(t *testing.T) {
+	t.Parallel()
+
+	const (
+		step   = 15.0
+		steps  = int(degreesPerCircle / step)
+		sample = 2.0
+	)
+
+	for index := range steps {
+		degrees := float64(index) * step
+
+		t.Run(strconv.FormatFloat(degrees, 'f', 0, 64), func(t *testing.T) {
+			t.Parallel()
+
+			canv, centreX, centreY := arrowCanvas(t, degrees)
+
+			// A point on the axis between the centre and the apex. Inside a
+			// solid needle this is ink at every angle; inside a broken one it
+			// is where the break shows.
+			sin, cos := math.Sincos(degrees * math.Pi / halfCircle)
+			atX := centreX + round(sin*sample)
+			atY := centreY - round(cos*sample)
+
+			if got := canv.Image().RGBAAt(atX, atY); got != theme.Night.Ink {
+				t.Errorf("at %g degrees the pixel %g px along the shaft (%d, %d) is %v, want ink",
+					degrees, sample, atX, atY, got)
+			}
+
+			// The centre itself is inside the base as well, so a triangle that
+			// had collapsed would fail here even if the sample above landed on
+			// a surviving corner.
+			if got := canv.Image().RGBAAt(centreX, centreY); got != theme.Night.Ink {
+				t.Errorf("at %g degrees the arrow's own centre is %v, want ink", degrees, got)
+			}
+		})
+	}
+}
+
+// TestRound checks the conversion drawArrow rounds its three corners through,
+// including the half-way case that separates rounding from truncation.
+func TestRound(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		in   float64
+		want int
+	}{
+		{in: 0, want: 0},
+		{in: 0.4, want: 0},
+		{in: 0.5, want: 1},
+		{in: 2.5, want: 3},
+		{in: -0.4, want: 0},
+		{in: -0.5, want: -1},
+		{in: -2.5, want: -3},
+	} {
+		t.Run(strconv.FormatFloat(testCase.in, 'f', -1, 64), func(t *testing.T) {
+			t.Parallel()
+
+			if got := round(testCase.in); got != testCase.want {
+				t.Errorf("round(%g) = %d, want %d", testCase.in, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestReceiverLineOpensWithLoc checks every form of the header's receiver line
+// starts with the same word.
+//
+// Without it the line was a mode word and two numbers with nothing saying what
+// they were of, and next to the aircraft position on the card it read as
+// another aeroplane. LOC is what a chart calls a location. It is drawn in the
+// band's own ink whatever the fix mode is, because the word is a label and
+// does not change: only the mode word after it carries the fix colour.
+//
+// The check renders the line and compares its first four characters against a
+// canvas carrying nothing but the prefix, drawn at the same place in the same
+// face. That is stricter than counting pixels and it reads the thing on
+// screen rather than the constant behind it.
+func TestReceiverLineOpensWithLoc(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side = 240
+		top  = 8
+		left = 4
+	)
+
+	faces := Faces{Small: rowPlanSmall(t)}
+	prefixWidth, prefixHeight := text.Measure(faces.Small, locPrefix)
+	prefixBox := image.Rect(left, top, left+prefixWidth, top+prefixHeight)
+
+	reference, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	reference.Clear(theme.Night.Field)
+	text.Draw(reference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
+
+	for _, testCase := range []struct {
+		name     string
+		receiver source.Receiver
+	}{
+		{
+			name: "a position the operator gave",
+			receiver: source.Receiver{
+				Latitude: 52.31, Longitude: 4.77, HasFix: true,
+				Label: source.LabelManual, Mode: source.FixManual,
+			},
+		},
+		{
+			name: "a GPS fix",
+			receiver: source.Receiver{
+				Latitude: 52.31, Longitude: 4.77, HasFix: true,
+				Label: source.LabelGPS, Mode: source.FixGPS3D,
+			},
+		},
+		{
+			name: "a self-locate estimate",
+			receiver: source.Receiver{
+				Latitude: 52.31, Longitude: 4.77, ConfidenceNm: 22,
+				Label: source.LabelEstimate, Mode: source.FixEstimated,
+			},
+		},
+		{
+			name:     "nothing known yet",
+			receiver: source.Receiver{Label: source.LabelNone, Mode: source.FixNone},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := canvas.New(side, side)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			canv.Clear(theme.Night.Field)
+
+			scene := &Scene{faces: faces}
+			scene.SetPalette(theme.Night)
+			scene.drawReceiverLine(&layout{dst: canv, left: left}, top, testCase.receiver)
+
+			if !samePixels(canv, reference, prefixBox) {
+				t.Errorf("the line does not open with %q", locPrefix)
+			}
+
+			// The rest of the line has to be there as well, or a line that
+			// drew the prefix and stopped would pass the comparison above.
+			rest := image.Rect(prefixBox.Max.X, top, side, top+prefixHeight)
+			if colourCount(canv, rest, theme.Night.Field) == rest.Dx()*rest.Dy() {
+				t.Error("nothing was drawn after the prefix, want the mode word")
+			}
+		})
+	}
+}
+
+// samePixels reports whether two canvases agree everywhere inside box.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func samePixels(got, want *canvas.Canvas, box image.Rectangle) bool {
+	for y := box.Min.Y; y < box.Max.Y; y++ {
+		for x := box.Min.X; x < box.Max.X; x++ {
+			if got.Image().RGBAAt(x, y) != want.Image().RGBAAt(x, y) {
+				return false
+			}
+		}
+	}
+
+	return true
 }

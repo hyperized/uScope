@@ -23,6 +23,17 @@ const (
 	dotRadius = 3
 	dotGap    = 6
 
+	// locPrefix opens the receiver line, whatever the line goes on to say.
+	//
+	// Without it the line was a mode word and two numbers with nothing to say
+	// what they were of, and next to the aircraft position on the card they
+	// read as another aeroplane. LOC is what a chart calls a location, and it
+	// is drawn in the band's own ink rather than in the fix colour: the word
+	// is a label and does not change, so colouring it would be a signal that
+	// never says anything. It carries its own trailing space, the way
+	// autoPrefix and estimatePrefix carry theirs.
+	locPrefix = "LOC "
+
 	// estimatePrefix opens the receiver line when the position was worked out
 	// from the aircraft rather than sensed. The plus-minus says out loud that
 	// this is a guess with a radius, not a fix.
@@ -95,14 +106,22 @@ const (
 	capBiasTee
 )
 
-// The two cycling keys are labelled with the value they are on rather than
-// with the name of the setting. A cap reading COLOUR says there is a colour
-// mode without saying which one, which is the question it was being asked.
+// The cycling keys are labelled with the value they are on rather than with
+// the name of the setting. A cap reading COLOUR says there is a colour mode
+// without saying which one, which is the question it was being asked. The
+// trail cap is the third of them and gets its four words from
+// trailMode.label.
 const (
 	labelAltitude = "ALT"
 	labelAirline  = "AIRLINE"
 	labelNight    = "NIGHT"
 	labelPaper    = "PAPER"
+
+	// trailBarLabel is what the trail cap falls back to. It is never drawn:
+	// capLabel answers capTrails from the mode itself, and every mode has a
+	// word. It is here so the entry in keyCaps is not the one row of the
+	// table with an empty label in it.
+	trailBarLabel = "TRAILS"
 )
 
 // keyCap is one entry in the bottom bar: the cap, then what the key does, then
@@ -118,7 +137,9 @@ type keyCap struct {
 // is on the field, then the two that change how it looks.
 //
 // Ten caps and their labels come to 736 pixels of the 1248 the panel leaves
-// between its margins, so nothing here has to be shortened to fit.
+// between its margins, so nothing here has to be shortened to fit. The trail
+// cap's longest word, SHORT, is a character shorter than the TRAILS it
+// replaced, so the bar did not grow when the four modes arrived.
 //
 // The select cap is drawn as the two arrow glyphs rather than as N/P. Both are
 // bound, but the arrows are what a hand reaches for first, and all four
@@ -131,7 +152,7 @@ var keyCaps = [...]keyCap{
 	{key: "↑↓", label: "SELECT"},
 	{key: "+/-", label: "RANGE"},
 	{key: "R", label: "AUTO", state: capAuto},
-	{key: "T", label: "TRAILS", state: capTrails},
+	{key: "T", label: trailBarLabel, state: capTrails},
 	{key: "A", label: "AIRPORTS", state: capAirports},
 	{key: "M", label: "SHORE", state: capShore},
 	{key: "C", label: "COLOUR", state: capColour},
@@ -284,12 +305,18 @@ func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string, on bool) 
 
 // capOn reports whether a cap is drawn filled. Everything that is not a
 // toggle is, because there is no state for it to be in.
+//
+// The trail cap is the exception among the cycling keys. Colour and theme
+// have no off state and are always filled, but one of the four trail modes is
+// genuinely off, and a hollow box beside the word OFF says the same thing
+// twice on purpose: it is the state somebody scanning the bar has to be able
+// to spot without reading it.
 func (s *Scene) capOn(which capToggle) bool {
 	switch which {
 	case capAuto:
 		return s.autoRange
 	case capTrails:
-		return s.trails
+		return s.trail != trailOff
 	case capAirports:
 		return s.airports
 	case capShore:
@@ -326,7 +353,9 @@ func (s *Scene) capLabel(entry keyCap) string {
 		}
 
 		return labelNight
-	case capAlways, capAuto, capTrails, capAirports, capShore, capOrbit, capEnvelope, capBiasTee:
+	case capTrails:
+		return s.trail.label()
+	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee:
 		fallthrough
 	default:
 		return entry.label
@@ -494,31 +523,33 @@ func cutMarker(face *psf.Font) string {
 // drawReceiverLine says where the scope is centred and how much that is
 // worth.
 //
-// The three forms are deliberately different lengths and shapes so they
-// cannot be confused at a glance: a fix reads as a mode word and two
-// coordinates, an estimate as a radius, and nothing at all as two words.
+// Every form opens with LOC and then differs: a fix reads as a mode word and
+// two coordinates, an estimate as a radius, and nothing at all as two words.
+// The three are deliberately different lengths and shapes so they cannot be
+// confused at a glance.
 //
 // The mode takes the same colour the home marker's ring does, so the word in
 // the header and the ring on the field are one signal read twice rather than
-// two facts to reconcile. The coordinates after it stay in BandInk: they are
-// the same two numbers whatever produced them, and colouring those as well
-// would make the whole line shout.
+// two facts to reconcile. The LOC before it and the coordinates after it stay
+// in BandInk: they are the same word and the same two numbers whatever
+// produced them, and colouring those as well would make the whole line shout.
 //
 // The face is known to be present for the same reason drawWordmark's is:
 // drawHeader drops the band rather than half of it.
 func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver) {
 	face := s.faces.Small
 	ink := s.fixColour(receiver.Mode, s.pal.BandInk)
+	left := text.Draw(lay.dst, face, lay.left, top, locPrefix, s.pal.BandInk)
 
 	switch receiver.Label {
 	case source.LabelEstimate:
-		pen := text.Draw(lay.dst, face, lay.left, top, estimatePrefix, ink)
+		pen := text.Draw(lay.dst, face, left, top, estimatePrefix, ink)
 		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.ConfidenceNm), ink)
 		text.Draw(lay.dst, face, pen, top, rangeUnit, ink)
 	case source.LabelNone:
-		text.Draw(lay.dst, face, lay.left, top, noFixText, ink)
+		text.Draw(lay.dst, face, left, top, noFixText, ink)
 	default:
-		pen := text.Draw(lay.dst, face, lay.left, top, modeWord(receiver.Mode), ink) + modeGap
+		pen := text.Draw(lay.dst, face, left, top, modeWord(receiver.Mode), ink) + modeGap
 		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.BandInk)
 		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.BandInk)
 		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.BandInk)

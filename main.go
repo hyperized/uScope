@@ -175,7 +175,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 			Airports:   cfg.airports,
 			Shore:      cfg.shore,
 			RangeNm:    cfg.rangeNm,
-			NoDecay:    cfg.noDecay,
 			Recentre:   cfg.recentre,
 			View:       cfg.view,
 			Exaggerate: cfg.exaggerate,
@@ -365,12 +364,6 @@ func dongleOnlyFlags(cfg config) string {
 // live builds the real ingest, adding the operator's position when there is
 // one.
 //
-// --no-decay is what turns ghost trails on. The flag means a trail stays until
-// the operator changes the range, and until now the one thing that broke that
-// promise was the store pruning an aircraft that had gone quiet: the trail
-// went with it. Keeping the ghosts is not free, so it is tied to the flag
-// that asks for it rather than being on for everyone.
-//
 //nolint:ireturn // every branch of sourceFor returns the interface.
 func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
 	// Both are handed over whichever source this is. internal/source applies
@@ -378,7 +371,6 @@ func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
 	// as the constructor and no further; warnNoDongle has already told the
 	// operator that is what will happen.
 	opts = append(opts,
-		source.WithGhosts(cfg.noDecay),
 		source.WithBiasTee(cfg.biasTee),
 		source.WithAutoSweep(cfg.autoSweep))
 
@@ -398,7 +390,8 @@ func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
 //
 //nolint:ireturn // every branch of sourceFor returns the interface.
 func demo(cfg config) (source.Source, error) {
-	opts := []source.DemoOption{source.WithDemoGhosts(cfg.noDecay)}
+	var opts []source.DemoOption
+
 	if cfg.hasLocation {
 		opts = append(opts, source.WithDemoLocation(cfg.latitude, cfg.longitude))
 	}

@@ -283,18 +283,26 @@ func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
 // rings, the coastline, the bowl and the measured envelope are all projected
 // again on every frame, and none of that may reach the heap.
 //
-// The fourth case is a --no-decay run carrying five hundred ghosts. A ghost
-// is never freed once its aircraft goes quiet, so it is the one thing on the
+// The fourth case is the all mode carrying five hundred ghosts. A ghost is
+// never freed once its aircraft goes quiet, so it is the one thing on the
 // scope that grows without bound over a long session; this is the case that
 // would catch a per-ghost allocation in drawGhost or ghostColour if one crept
 // in.
 //
+// The last two are the aircraft models. Every scope frame draws one in the
+// row table's attitude cell and every 3D frame draws one per contact, each of
+// them fourteen vertices rotated, projected and filled. All of that runs
+// through fixed arrays on the Scene, and this is what says so: a model that
+// reached for a slice would show up here as one allocation per aircraft per
+// frame.
+//
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range []struct {
-		name   string
-		set    radar.Settings
-		ghosts bool
+		name    string
+		set     radar.Settings
+		presses int
+		ghosts  bool
 	}{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
@@ -305,18 +313,30 @@ func TestDrawAllocations(t *testing.T) {
 			},
 		},
 		{
-			name:   "no-decay run with ghosts",
-			set:    radar.Settings{Colour: radar.ColourAltitude, NoDecay: true},
-			ghosts: true,
+			name:    "the all mode with ghosts",
+			set:     radar.Settings{Colour: radar.ColourAltitude},
+			presses: pressAll,
+			ghosts:  true,
 		},
 		{
 			name: "the 3D view",
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
 		},
+		{
+			name:    "the 3D view with the short trails",
+			set:     radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			presses: pressShort,
+		},
+		{
+			name:    "the 3D view with no trails at all",
+			set:     radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			presses: pressOff,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := sceneFor(t, testCase.ghosts)
 			scene.Apply(testCase.set)
+			pressTrails(t, scene, testCase.presses)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.
@@ -335,19 +355,26 @@ func TestDrawAllocations(t *testing.T) {
 // are what the benchmark is for. Minimal mode following the traffic has no
 // furniture to draw and one more pass over the fleet.
 //
-// The last case adds five hundred ghosts at two hundred fixes each to the
-// ordinary bench frame, drawn under --no-decay because that is the only run
-// a ghost is ever drawn on at all. A ghost is kept for as long as the program
+// The ghosts case adds five hundred ghosts at two hundred fixes each to the
+// ordinary bench frame, drawn in the all mode because that is the only mode a
+// ghost is ever drawn in at all. A ghost is kept for as long as the program
 // runs rather than for as long as its aircraft does, so it is the one thing
 // on the scope that accumulates without bound over a long session: this is
 // the case that would show a per-ghost cost if drawGhost or ghostColour ever
 // grew one.
+//
+// The 3D cases are where the aircraft models are priced. 3d draws forty of
+// them over their trails; 3d-models-only turns the trails off, so the
+// difference between the two is what a frame's worth of models costs on its
+// own. The flat cases price the fortieth of that the row table's attitude
+// cells come to.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range []struct {
-		name   string
-		set    radar.Settings
-		pal    theme.Palette
-		ghosts bool
+		name    string
+		set     radar.Settings
+		pal     theme.Palette
+		presses int
+		ghosts  bool
 	}{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
 		{name: "altitude/paper", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Paper},
@@ -361,17 +388,25 @@ func BenchmarkDraw(b *testing.B) {
 			pal: theme.Night,
 		},
 		{
-			name:   "ghosts",
-			set:    radar.Settings{Colour: radar.ColourAltitude, NoDecay: true},
-			pal:    theme.Night,
-			ghosts: true,
+			name:    "ghosts",
+			set:     radar.Settings{Colour: radar.ColourAltitude},
+			pal:     theme.Night,
+			presses: pressAll,
+			ghosts:  true,
 		},
 		{name: "3d", set: radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D}, pal: theme.Night},
+		{
+			name:    "3d-models-only",
+			set:     radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			pal:     theme.Night,
+			presses: pressOff,
+		},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
 			scene, canv := sceneFor(b, testCase.ghosts)
 			scene.Apply(testCase.set)
 			scene.SetPalette(testCase.pal)
+			pressTrails(b, scene, testCase.presses)
 
 			b.ReportAllocs()
 			b.ResetTimer()

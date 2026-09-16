@@ -168,11 +168,6 @@ type Settings struct {
 	// means nobody asked, which leaves DefaultExaggerate in place.
 	Exaggerate float64
 
-	// NoDecay draws every trail segment at full strength instead of fading the
-	// tail out. Zero is off, which is the fade: on a busy field it is what says
-	// which end of a track is the aeroplane.
-	NoDecay bool
-
 	// Recentre is how often minimal mode refits itself on the traffic. Zero is
 	// off, which is the scene's own default and keeps minimal mode centred on
 	// the receiver.
@@ -192,7 +187,6 @@ func (s *Scene) Apply(set Settings) {
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
 	s.shown = set.View
-	s.noDecay = set.NoDecay
 	s.applyRange(set.RangeNm)
 	s.applyRecentre(set.Recentre)
 	s.applyExaggerate(set.Exaggerate)

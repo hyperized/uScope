@@ -1194,91 +1194,64 @@ func addAircraft(
 	)
 }
 
-// TestLiveGhostsOffByDefault pins the "off unless asked for" contract: with
-// the option omitted, or passed explicitly as false, Frame().Ghosts stays nil
-// even after an aircraft has come and gone. A source that turned ghosts on by
-// accident would cost every caller memory it never asked for.
-func TestLiveGhostsOffByDefault(t *testing.T) {
+// TestLiveGhostsRunWithoutBeingAskedFor pins the contract the ghost tracker
+// gained when the flag behind it went away: a Live nobody configured still
+// remembers the trail of an aircraft the store has pruned.
+//
+// It used to be off unless asked for, which made the tracking useless to the
+// thing that reads it. The radar only draws ghosts in one of its four trail
+// modes, and somebody who switches to that mode an hour into a session is
+// asking what they have missed. If the tracking had to be turned on first,
+// the answer would always have been nothing.
+func TestLiveGhostsRunWithoutBeingAskedFor(t *testing.T) {
 	t.Parallel()
 
 	const (
-		icao            = "GHOST01"
-		callsign        = "TESTCS"
-		altitude        = 5000.0
-		latitude        = 52.1
-		longitude       = 4.2
-		caseOmitted     = "option omitted"
-		caseExplicitOff = "option explicitly false"
+		icao      = "GHOST01"
+		callsign  = "TESTCS"
+		altitude  = 5000.0
+		latitude  = 52.1
+		longitude = 4.2
 	)
 
-	for _, testCase := range []struct {
-		name string
-		opts []source.LiveOption
-	}{
-		{name: caseOmitted, opts: nil},
-		{name: caseExplicitOff, opts: []source.LiveOption{source.WithGhosts(false)}},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+	live, store := startLiveIngest(t)
 
-			live, store := startLiveIngest(t, testCase.opts...)
+	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
+	live.Frame()
 
-			addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
-			live.Frame()
+	store.Prune(0)
 
-			store.Prune(0)
+	frame := live.Frame()
+	if len(frame.Ghosts) != 1 {
+		t.Fatalf("Frame().Ghosts = %v, want one trail from a Live nobody configured", frame.Ghosts)
+	}
 
-			frame := live.Frame()
-			if frame.Ghosts != nil {
-				t.Errorf("Frame().Ghosts = %v, want nil with ghosts off", frame.Ghosts)
-			}
-		})
+	if frame.Ghosts[0].ICAO != icao {
+		t.Errorf("Frame().Ghosts[0].ICAO = %q, want %q", frame.Ghosts[0].ICAO, icao)
 	}
 }
 
-// TestDemoGhostsOffByDefault is TestLiveGhostsOffByDefault's Demo half: the
-// fleet's own quiet aircraft goes through the same disappearance, and
-// Frame().Ghosts must still stay nil with the option omitted or off.
-func TestDemoGhostsOffByDefault(t *testing.T) {
+// TestDemoGhostsRunWithoutBeingAskedFor is the Demo half of the same
+// contract: the fleet's own quiet aircraft leaves a ghost on a Demo built
+// with nothing but a clock.
+func TestDemoGhostsRunWithoutBeingAskedFor(t *testing.T) {
 	t.Parallel()
 
-	const (
-		pastQuiet       = 90*time.Second + time.Second
-		caseOmitted     = "option omitted"
-		caseExplicitOff = "option explicitly false"
-	)
+	const pastQuiet = 90*time.Second + time.Second
 
 	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := sequentialClock([]time.Time{start, start.Add(pastQuiet)})
 
-	for _, testCase := range []struct {
-		name string
-		opt  source.DemoOption
-	}{
-		{name: caseOmitted, opt: nil},
-		{name: caseExplicitOff, opt: source.WithDemoGhosts(false)},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+	demo, err := source.NewDemo(source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
 
-			clock := sequentialClock([]time.Time{start, start.Add(pastQuiet)})
+	demo.Frame()
 
-			opts := []source.DemoOption{source.WithDemoClock(clock)}
-			if testCase.opt != nil {
-				opts = append(opts, testCase.opt)
-			}
-
-			demo, err := source.NewDemo(opts...)
-			if err != nil {
-				t.Fatalf("NewDemo: %v", err)
-			}
-
-			demo.Frame()
-
-			frame := demo.Frame()
-			if frame.Ghosts != nil {
-				t.Errorf("Frame().Ghosts = %v, want nil with ghosts off", frame.Ghosts)
-			}
-		})
+	frame := demo.Frame()
+	if len(frame.Ghosts) != 1 {
+		t.Fatalf("Frame().Ghosts = %v, want one trail from a Demo nobody configured", frame.Ghosts)
 	}
 }
 
@@ -1296,7 +1269,7 @@ func TestLiveGhostAircraftDisappearingLeavesGhost(t *testing.T) {
 		longitude = 4.9
 	)
 
-	live, store := startLiveIngest(t, source.WithGhosts(true))
+	live, store := startLiveIngest(t)
 
 	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
 
@@ -1347,7 +1320,7 @@ func TestLiveGhostAircraftReappearingStopsBeingGhost(t *testing.T) {
 		longitude = 4.4
 	)
 
-	live, store := startLiveIngest(t, source.WithGhosts(true))
+	live, store := startLiveIngest(t)
 
 	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
 	live.Frame()
@@ -1394,7 +1367,7 @@ func TestDemoQuietAircraftBecomesGhost(t *testing.T) {
 		start.Add(wellPastQuiet),
 	})
 
-	demo, err := source.NewDemo(source.WithDemoClock(clock), source.WithDemoGhosts(true))
+	demo, err := source.NewDemo(source.WithDemoClock(clock))
 	if err != nil {
 		t.Fatalf("NewDemo: %v", err)
 	}
@@ -1455,7 +1428,7 @@ func TestDemoFleetWholeBeforeQuietBoundary(t *testing.T) {
 	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	clock := sequentialClock([]time.Time{start, start.Add(beforeQuiet)})
 
-	demo, err := source.NewDemo(source.WithDemoClock(clock), source.WithDemoGhosts(true))
+	demo, err := source.NewDemo(source.WithDemoClock(clock))
 	if err != nil {
 		t.Fatalf("NewDemo: %v", err)
 	}
@@ -1484,7 +1457,7 @@ func TestFrameGhostsSurvivesBeingRead(t *testing.T) {
 	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	clock := sequentialClock([]time.Time{start, start.Add(pastQuiet)})
 
-	demo, err := source.NewDemo(source.WithDemoClock(clock), source.WithDemoGhosts(true))
+	demo, err := source.NewDemo(source.WithDemoClock(clock))
 	if err != nil {
 		t.Fatalf("NewDemo: %v", err)
 	}

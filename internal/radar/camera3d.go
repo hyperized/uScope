@@ -122,6 +122,13 @@ type camera3 struct {
 	// point may land before it is culled. See guardBoxes.
 	limitX float64
 	limitY float64
+
+	// modelSpan is how wide an aircraft model drawn through this camera comes
+	// out, wingtip to wingtip, in pixels. It belongs to the camera rather than
+	// to the model because it is a property of the picture being drawn and not
+	// of the aeroplane: the same model goes into a 24-pixel table cell and
+	// into the perspective view, and only the camera knows which.
+	modelSpan float64
 }
 
 // newCamera3 frames the outer range ring inside the scope box.
@@ -178,11 +185,12 @@ func newCamera3(box image.Rectangle, scopeNm, azimuthDeg, elevationDeg, topNm fl
 		right: point3{east: cosAz, north: -sinAz},
 		above: point3{east: sinAz * sinEl, north: cosAz * sinEl, up: cosEl},
 
-		focal:   focal,
-		centerX: box.Min.X + box.Dx()/2,
-		centerY: box.Min.Y + box.Dy()/2,
-		limitX:  guardBoxes * width,
-		limitY:  guardBoxes * float64(box.Dy()),
+		focal:     focal,
+		centerX:   box.Min.X + box.Dx()/2,
+		centerY:   box.Min.Y + box.Dy()/2,
+		limitX:    guardBoxes * width,
+		limitY:    guardBoxes * float64(box.Dy()),
+		modelSpan: modelSpanPx,
 	}, true
 }
 

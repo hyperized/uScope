@@ -25,7 +25,7 @@
 // transfer ever happens on the goroutine that draws.
 //
 // Both implementations can also keep the trail of an aircraft that stops
-// transmitting, which is what --no-decay asks for and what ghosts.go holds.
+// transmitting, which is what the trail modes reach for and ghosts.go holds.
 // It is off unless the source is built with it on, and off it costs nothing.
 package source
 

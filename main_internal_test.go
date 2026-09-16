@@ -78,7 +78,6 @@ const (
 	flagShore      = "--shore"
 	flagRange      = "--range"
 	flagMinimal    = "--minimal"
-	flagNoDecay    = "--no-decay"
 	flagRecenter   = "--recenter"
 	flagDemoSector = "--demo-sector"
 	flagView       = "--view"
@@ -2461,10 +2460,10 @@ func TestParseFlagsExaggerateRejections(t *testing.T) {
 	}
 }
 
-// TestParseFlagsBooleans covers the two flags that are a bare switch: each
-// in its default state, given on its own, and given with an explicit value,
-// because the flag package accepts all three spellings and a switch that only
-// worked as --flag would be a surprise to anyone scripting it.
+// TestParseFlagsBooleans covers the flags that are a bare switch: each in its
+// default state, given on its own, and given with an explicit value, because
+// the flag package accepts all three spellings and a switch that only worked
+// as --flag would be a surprise to anyone scripting it.
 func TestParseFlagsBooleans(t *testing.T) {
 	t.Parallel()
 
@@ -2472,7 +2471,6 @@ func TestParseFlagsBooleans(t *testing.T) {
 		flag  string
 		apply func(*config, bool)
 	}{
-		{flag: flagNoDecay, apply: func(cfg *config, on bool) { cfg.noDecay = on }},
 		{flag: flagDemoSector, apply: func(cfg *config, on bool) { cfg.demoSector = on }},
 	} {
 		for _, testCase := range []struct {

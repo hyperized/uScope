@@ -1163,8 +1163,9 @@ func TestView3DMoreGuards(t *testing.T) {
 		canv := blankCanvas(t)
 		blank := blankCanvas(t)
 
-		scene.drawPath3(canv, view, []airplane.PositionEntry{{Latitude: layerBaseLat, Longitude: layerBaseLon}},
-			theme.Night.AltLow, trailMaxAlpha)
+		scene.trail = trailAll
+		scene.drawTrail3(canv, view, []airplane.PositionEntry{{Latitude: layerBaseLat, Longitude: layerBaseLon}},
+			theme.Night.AltLow)
 
 		if !identicalPixels(canv, blank) {
 			t.Error("a one-fix trail drew something, want nothing")

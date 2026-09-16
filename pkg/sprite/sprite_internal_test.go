@@ -68,20 +68,6 @@ func TestAirplaneSingleton(t *testing.T) {
 	}
 }
 
-// TestArrowSingleton checks that the sync.OnceValue memoization actually
-// memoizes: two calls must return the same pointer, not two separately built
-// bitmaps.
-func TestArrowSingleton(t *testing.T) {
-	t.Parallel()
-
-	first := arrow()
-	second := arrow()
-
-	if first != second {
-		t.Error("arrow() returned different pointers across calls")
-	}
-}
-
 // TestNewPixelLayout checks the packed pixel slice directly against a known
 // small pattern, white-box, rather than only through At.
 func TestNewPixelLayout(t *testing.T) {

@@ -69,7 +69,7 @@ func (s *Scene) handleRune(value rune) bool {
 	case 'r', 'R':
 		s.autoRange = !s.autoRange
 	case 't', 'T':
-		s.trails = !s.trails
+		s.trail = s.trail.next()
 	case 'a', 'A':
 		s.toggleAirports()
 	case 'm', 'M':

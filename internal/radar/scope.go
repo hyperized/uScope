@@ -643,20 +643,21 @@ func (s *Scene) overlapsRangeLabel(box image.Rectangle) bool {
 // silhouettes on top of them, then the selection marker on top of everything.
 //
 // Ghosts go under the live trails so an aeroplane is never hidden by the
-// track of one that is no longer there. They are drawn only while trails are
-// drawn at all: a ghost is a trail, so the t key that turns trails off has to
-// take them with it, or the key would be lying about what it does.
+// track of one that is no longer there. Which of the two is drawn at all is
+// the t key's business rather than this function's: a mode that has no trail
+// for an aircraft has none for a ghost either, and both ask trailMode.plan
+// the same question.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
-	if s.trails {
+	if s.trail.ghostsDrawn() {
 		for _, ghost := range frame.Ghosts {
 			s.drawGhost(lay.dst, proj, ghost)
 		}
+	}
 
-		for _, plane := range frame.Planes {
-			s.drawTrail(lay.dst, proj, plane)
-		}
+	for _, plane := range frame.Planes {
+		s.drawTrail(lay.dst, proj, plane)
 	}
 
 	for _, plane := range frame.Planes {
@@ -677,27 +678,41 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 	}
 }
 
-// drawTrail draws one aircraft's history as a polyline.
+// drawTrail draws one aircraft's history as a polyline, or nothing at all
+// when the mode on screen has no trail for it.
 func (s *Scene) drawTrail(dst *canvas.Canvas, proj projector, plane airplane.Snapshot) {
-	s.drawPath(dst, proj, plane.PositionHistory, s.aircraftColour(plane), s.trailFloor())
+	plan, drawn := s.trail.plan(len(plane.PositionHistory))
+	if !drawn {
+		return
+	}
+
+	s.drawPath(dst, proj, plane.PositionHistory, s.aircraftColour(plane), plan)
 }
 
 // drawGhost draws the track of an aircraft that has stopped transmitting.
 //
-// It is the same polyline as a live trail, at full strength the whole way
-// along and with nothing at the head of it: no silhouette, no label, no
-// selection ring. There is no aeroplane to mark and no heading to turn one
-// to, and a marker on the end of a ghost would read as a contact.
+// It is the same polyline as a live trail, with nothing at the head of it: no
+// silhouette, no label, no selection ring. There is no aeroplane to mark and
+// no heading to turn one to, and a marker on the end of a ghost would read as
+// a contact.
 //
-// The fade is never applied, whatever --no-decay says. A ghost is only ever
-// drawn because --no-decay is on, and a track with no aircraft on it has no
-// head for a fade to point at.
+// It runs the mode's own plan rather than a rule of its own, which comes to
+// the same picture it always drew: trailAll is the only mode that draws a
+// ghost at all, and trailAll's floor is full strength. A track with no
+// aeroplane on it has no head for a fade to point at, and under trailAll
+// nothing fades anyway.
 func (s *Scene) drawGhost(dst *canvas.Canvas, proj projector, ghost source.Trail) {
-	s.drawPath(dst, proj, ghost.Points, s.ghostColour(ghost), trailMaxAlpha)
+	plan, drawn := s.trail.plan(len(ghost.Points))
+	if !drawn {
+		return
+	}
+
+	s.drawPath(dst, proj, ghost.Points, s.ghostColour(ghost), plan)
 }
 
-// drawPath draws a run of fixes as a polyline, oldest to newest, brightening
-// from floor at the tail to full strength at the head.
+// drawPath draws the part of a run of fixes the plan asks for, oldest to
+// newest, brightening from the plan's floor at the tail to full strength at
+// the head.
 //
 // A segment with either end outside the range is dropped rather than clipped.
 // Clipping would be more correct, but a dropped segment leaves a gap at the
@@ -706,12 +721,11 @@ func (s *Scene) drawGhost(dst *canvas.Canvas, proj projector, ghost source.Trail
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawPath(
-	dst *canvas.Canvas, proj projector, fixes []airplane.PositionEntry, col color.RGBA, floor float64,
+	dst *canvas.Canvas, proj projector, fixes []airplane.PositionEntry, col color.RGBA, plan trailPlan,
 ) {
-	if len(fixes) < 2 {
-		return
-	}
-
+	// plan reported the run drawable, which means at least two fixes survive
+	// the cut, so there is nothing to check here that it has not checked.
+	fixes = fixes[plan.from:]
 	span := float64(len(fixes) - 1)
 
 	prevX, prevY, prevInside := proj.at(fixes[0].Latitude, fixes[0].Longitude)
@@ -721,26 +735,11 @@ func (s *Scene) drawPath(
 
 		if inside && prevInside {
 			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y),
-				s.fade(col, segmentAlpha(floor, index, span)))
+				s.fade(col, segmentAlpha(plan.floor, index, span)))
 		}
 
 		prevX, prevY, prevInside = x, y, inside
 	}
-}
-
-// trailFloor is how strongly the oldest segment of a live trail is drawn.
-//
-// With --no-decay it is full strength, so the whole track reads as one line
-// rather than as a line that arrives from nowhere. The fade is the default
-// because on a busy field it says which end of a track is the aeroplane;
-// turning it off is for looking at the shapes the traffic makes, where an
-// even line is easier to follow across the scope.
-func (s *Scene) trailFloor() float64 {
-	if s.noDecay {
-		return trailMaxAlpha
-	}
-
-	return trailMinAlpha
 }
 
 // segmentAlpha is how strongly one segment is drawn, where 1 is the

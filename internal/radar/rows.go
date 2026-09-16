@@ -58,6 +58,13 @@ const (
 	rowSpeedChars    = 3 // "999"
 	rowDistanceChars = 5 // "999.9"
 	rowBearingChars  = 8 // "359" and the arrow, in the room "359 / NW" had
+
+	// attCell is the attitude column's width in pixels. It is the one column
+	// measured in pixels rather than in characters, because what goes in it is
+	// a shape and not a value: twenty-four is the model's fourteen-pixel span
+	// plus the room a wing needs to swing into as an aircraft banks through a
+	// turn.
+	attCell = 24
 )
 
 // The columns, in the order they are drawn.
@@ -69,6 +76,7 @@ const (
 	colSpeed
 	colDistance
 	colBearing
+	colAttitude
 
 	// colCount is the number of columns, which is what every loop over them
 	// runs to.
@@ -80,9 +88,10 @@ type rowColumn struct {
 	title string
 	chars int
 
-	// extra is room ahead of the value that is not part of it. Only the
-	// altitude column has any: it is where the climb and descent triangle
-	// goes.
+	// extra is room beside the value that is not part of it. The altitude
+	// column uses it for the climb and descent triangle, and the attitude
+	// column is nothing but extra: it holds a drawing and no characters at
+	// all, so its whole width is here and its chars is zero.
 	extra int
 
 	// right says the column's values end on its edge rather than start there.
@@ -102,19 +111,23 @@ var rowColumns = [colCount]rowColumn{
 	colSpeed:    {title: "SPD", chars: rowSpeedChars, right: true},
 	colDistance: {title: "DIST", chars: rowDistanceChars, right: true},
 	colBearing:  {title: "BRG", chars: rowBearingChars, right: true},
+	colAttitude: {title: "ATT", extra: attCell, right: true},
 }
 
 // rowDropOrder is the order columns are given up as the column narrows.
 //
-// Bearing goes first because the scope itself shows which way an aircraft is,
-// so the figure is the one that repeats something already on screen. Speed
-// next, then the ICAO hex, which only matters when a callsign is missing and
-// the callsign column already falls back to it. Altitude and distance are last
-// because they are what the list is for, and past those two there is nothing
-// left to drop but the identity.
+// Attitude goes first. It is the newest column and the most decorative: it
+// says which way an aeroplane is pointing, which the scope beside it already
+// draws, and unlike every other cell it carries no figure anyone could read
+// back. Bearing next, for the same reason one step weaker: the scope shows
+// where an aircraft is, so the number repeats it. Then speed, then the ICAO
+// hex, which only matters when a callsign is missing and the callsign column
+// already falls back to it. Altitude and distance are last because they are
+// what the list is for, and past those two there is nothing left to drop but
+// the identity.
 //
 //nolint:gochecknoglobals // an order is data, and an array cannot be const.
-var rowDropOrder = [...]int{colBearing, colSpeed, colICAO, colAltitude, colDistance}
+var rowDropOrder = [...]int{colAttitude, colBearing, colSpeed, colICAO, colAltitude, colDistance}
 
 // rowPlan is which columns are being drawn and where each one ends.
 type rowPlan struct {
@@ -432,6 +445,39 @@ func (s *Scene) drawRow(
 	pen.right(colDistance, s.distance(away), s.pal.Muted)
 
 	s.drawRowBearing(pen, receiver, plane)
+	s.drawRowAttitude(pen, plane)
+}
+
+// drawRowAttitude draws the little aeroplane at the right end of the row,
+// posed by the same rules the perspective view poses the large one with.
+//
+// It goes through a camera of its own rather than the view's. The 3D view's
+// camera orbits, so an aircraft in it is seen from wherever the orbit has got
+// to; a column of these has to be readable down the page, which means every
+// row seen from the same angle whatever the picture beside it is doing. The
+// model and the projection are shared, the camera is not: see newCellCamera3.
+//
+// The cell is centred on its own width rather than hung off the column edge
+// the way a figure is. A drawing has no baseline and no last digit to line up,
+// and a shape that leaned on one side of its cell would read as an aircraft
+// drifting rather than as one pointing.
+//
+// It takes the aircraft's own colour in both colour modes, and the selected
+// row is no exception: the callsign beside it already carries the selection,
+// and the point of the cell is that reading the table and reading the scope
+// are the same act of recognition. A row whose aeroplane changed colour when
+// it was selected would break that for the one row it matters most on.
+func (s *Scene) drawRowAttitude(pen rowPen, plane airplane.Snapshot) {
+	if !pen.plan.on[colAttitude] {
+		return
+	}
+
+	centre := image.Pt(
+		pen.plan.edge[colAttitude]-attCell/2,
+		pen.top+pen.face.Height()/2,
+	)
+
+	s.drawShape3(pen.dst, newCellCamera3(centre), plane, point3{}, centre, s.aircraftColour(plane))
 }
 
 // drawRowAltitude sets the altitude cell with the same climb and descent

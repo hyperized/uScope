@@ -127,6 +127,16 @@ func (v scene3) inRange(point point3) bool {
 	return math.Hypot(point.east, point.north) <= v.scopeNm
 }
 
+// world is where one aircraft fix sits in the 3D view's world: its shadow on
+// the ground, lifted by whatever the altitude is worth after the
+// exaggeration.
+func (v scene3) world(latitude, longitude, altitudeFt float64) point3 {
+	point := v.ground(latitude, longitude)
+	point.up = v.height(altitudeFt)
+
+	return point
+}
+
 // project is where one aircraft fix lands on the canvas: refused when it has
 // no position, when it is outside the range, or when the camera cannot see it.
 func (v scene3) project(latitude, longitude, altitudeFt float64) (int, int, bool) {
@@ -134,9 +144,7 @@ func (v scene3) project(latitude, longitude, altitudeFt float64) (int, int, bool
 		return 0, 0, false
 	}
 
-	point := v.ground(latitude, longitude)
-	point.up = v.height(altitudeFt)
-
+	point := v.world(latitude, longitude, altitudeFt)
 	if !v.inRange(point) {
 		return 0, 0, false
 	}
@@ -422,14 +430,14 @@ func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airpor
 // label, because the column beside the picture is still on screen for them to
 // refer to.
 func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
-	if s.trails {
+	if s.trail.ghostsDrawn() {
 		for _, ghost := range frame.Ghosts {
-			s.drawPath3(lay.dst, view, ghost.Points, s.ghostColour(ghost), trailMaxAlpha)
+			s.drawTrail3(lay.dst, view, ghost.Points, s.ghostColour(ghost))
 		}
+	}
 
-		for _, plane := range frame.Planes {
-			s.drawPath3(lay.dst, view, plane.PositionHistory, s.aircraftColour(plane), s.trailFloor())
-		}
+	for _, plane := range frame.Planes {
+		s.drawTrail3(lay.dst, view, plane.PositionHistory, s.aircraftColour(plane))
 	}
 
 	for _, plane := range frame.Planes {
@@ -437,9 +445,25 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 	}
 }
 
-// drawPath3 draws a run of fixes as a polyline in the air, each fix at the
-// altitude it was reported at, brightening from floor at the tail to full
-// strength at the head.
+// drawTrail3 draws one run of fixes under whatever the t key has the trails
+// set to, or nothing at all when that mode has no trail for it.
+//
+// It takes the fixes rather than the aircraft so a ghost and a live trail go
+// through the same door: the mode decides how far back the track runs and how
+// faint it starts, and neither answer depends on whether there is still an
+// aeroplane on the end of it.
+func (s *Scene) drawTrail3(dst *canvas.Canvas, view scene3, fixes []airplane.PositionEntry, col color.RGBA) {
+	plan, drawn := s.trail.plan(len(fixes))
+	if !drawn {
+		return
+	}
+
+	s.drawPath3(dst, view, fixes, col, plan)
+}
+
+// drawPath3 draws the part of a run of fixes the plan asks for as a polyline
+// in the air, each fix at the altitude it was reported at, brightening from
+// the plan's floor at the tail to full strength at the head.
 //
 // It is drawPath with the third dimension and nothing else changed: the same
 // fade, and the same rule that a segment with either end off the picture is
@@ -447,12 +471,10 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawPath3(
-	dst *canvas.Canvas, view scene3, fixes []airplane.PositionEntry, col color.RGBA, floor float64,
+	dst *canvas.Canvas, view scene3, fixes []airplane.PositionEntry, col color.RGBA, plan trailPlan,
 ) {
-	if len(fixes) < 2 {
-		return
-	}
-
+	// plan reported the run drawable, so at least two fixes survive the cut.
+	fixes = fixes[plan.from:]
 	span := float64(len(fixes) - 1)
 	prevX, prevY, prevOK := view.project(fixes[0].Latitude, fixes[0].Longitude, fixes[0].Altitude)
 
@@ -461,7 +483,7 @@ func (s *Scene) drawPath3(
 
 		if ok && prevOK {
 			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y),
-				s.fade(col, segmentAlpha(floor, index, span)))
+				s.fade(col, segmentAlpha(plan.floor, index, span)))
 		}
 
 		prevX, prevY, prevOK = x, y, ok
@@ -469,15 +491,16 @@ func (s *Scene) drawPath3(
 }
 
 // drawContact3 draws one aircraft: the stalk from its shadow on the ground up
-// to where it is flying, the silhouette on the end of it, and the selection
-// marker when it is the one the panel is about.
+// to where it is flying, the shape on the end of it, and the selection marker
+// when it is the one the panel is about.
 //
-// The silhouette is turned by its heading less the camera's azimuth. That is
-// an approximation and not a projection of the aircraft's own axis: a real one
-// would foreshorten the shape as it turned away from the camera, and a
-// fifteen-pixel bitmap has nothing to foreshorten with. Subtracting the
-// azimuth keeps a northbound aircraft pointing the same way as the N on the
-// ground, which is what the shape is being read for.
+// The shape is a model rather than the flat scope's rotated bitmap. A sprite
+// is a picture of an aeroplane seen from directly above, and this camera is
+// never directly above anything: turning it to a heading put a plan view in a
+// perspective scene, which read as a sticker on the glass rather than as
+// something flying in the picture. The model is posed in the world and goes
+// through the same camera as the rings under it, so it foreshortens with
+// everything else.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) {
@@ -490,11 +513,8 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot) 
 
 	col := s.aircraftColour(plane)
 
-	if knownHeading(plane.Heading) {
-		s.icon.Draw(lay.dst, x, y, plane.Heading-view.azimuth, col)
-	} else {
-		lay.dst.Circle(x, y, noHeadingRadius, col)
-	}
+	centre := view.world(plane.Latitude, plane.Longitude, plane.Altitude)
+	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col)
 
 	if plane.ICAO == s.selICAO {
 		s.drawSelection(lay, x, y, plane)

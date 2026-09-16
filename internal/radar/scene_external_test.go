@@ -82,6 +82,36 @@ func scenePlane(icao, callsign string, bearing, distanceNm, altitude, heading fl
 	}
 }
 
+// denseTrail rebuilds an aircraft's history with more fixes over the same
+// ground it already covers.
+//
+// It exists because scenePlane gives an aircraft six fixes, and the short
+// trail mode keeps twelve: with a history that short the two modes draw the
+// identical line, so a test could not tell them apart. Filling the same run
+// with thirty fixes leaves the aeroplane and the head of its track exactly
+// where they were, and gives the short mode a window it can actually cut
+// something out of.
+func denseTrail(plane airplane.Snapshot, fixes int) airplane.Snapshot {
+	history := plane.PositionHistory
+	first, last := history[0], history[len(history)-1]
+	span := float64(fixes - 1)
+
+	dense := make([]airplane.PositionEntry, 0, fixes)
+
+	for index := range fixes {
+		along := float64(index) / span
+		dense = append(dense, airplane.PositionEntry{
+			Latitude:  first.Latitude + (last.Latitude-first.Latitude)*along,
+			Longitude: first.Longitude + (last.Longitude-first.Longitude)*along,
+			Altitude:  first.Altitude,
+		})
+	}
+
+	plane.PositionHistory = dense
+
+	return plane
+}
+
 // sceneFrame wraps a list of aircraft in a frame with a known receiver.
 func sceneFrame(planes ...airplane.Snapshot) source.Frame {
 	return source.Frame{
@@ -191,6 +221,31 @@ var scopeBox = image.Rect(16, 77, 609, 670)
 // press sends a rune through Handle.
 func press(scene *radar.Scene, value rune) bool {
 	return scene.Handle(input.Key{Kind: input.Rune, Rune: value})
+}
+
+// How many presses of t it takes to reach each trail mode from the one a
+// scene starts in.
+//
+// The mode is unexported and no Setting carries it, so the key is the only
+// way in from outside the package, which is also the only way an operator has.
+// A test that reaches the mode the way the operator does is a test of the
+// thing that ships.
+const (
+	pressAll   = 1
+	pressOff   = 2
+	pressShort = 3
+)
+
+// pressTrails cycles the trail mode with the t key and fails the test if the
+// scene ever declines the key.
+func pressTrails(tb testing.TB, scene *radar.Scene, times int) {
+	tb.Helper()
+
+	for step := range times {
+		if !press(scene, 't') {
+			tb.Fatalf("press %d of t was not handled, want the trail key to take it", step+1)
+		}
+	}
 }
 
 func TestDrawAtEverySize(t *testing.T) {
@@ -437,35 +492,68 @@ func TestDrawWithNoAircraft(t *testing.T) {
 	}
 }
 
-func TestTrailToggle(t *testing.T) {
+// TestTrailCycle walks the t key all the way round the four modes and back to
+// the one the scene started in.
+//
+// The picture is read at each stop rather than only at the ends, because the
+// modes are ordered by how much track they draw: off is nothing, short is the
+// last twelve fixes, and long and all are the whole history. Anything that
+// broke the order, or left a mode drawing the mode before it, would show up
+// as two stops painting the same number of pixels.
+//
+// The last press has to restore the opening picture exactly. A cycle that came
+// back to a different frame would be one that lost state on the way round.
+func TestTrailCycle(t *testing.T) {
 	t.Parallel()
 
+	const denseFixes = 30
+
 	frame := sceneFrame(
-		scenePlane("484AC1", "KLM123", 45, 12, 2400, 41),
-		scenePlane("3C6745", "DLH4EA", 200, 30, 36000, 268),
+		denseTrail(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41), denseFixes),
+		denseTrail(scenePlane("3C6745", "DLH4EA", 200, 30, 36000, 268), denseFixes),
 	)
 
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Apply(bareScope())
 	scene.Draw(canv, 0)
 
-	withTrails := painted(canv, scopeBox)
+	long := painted(canv, scopeBox)
 
-	if !press(scene, 't') {
-		t.Fatal("Handle('t') = false, want the scene to take it")
+	stop := func(tb testing.TB, key rune) int {
+		tb.Helper()
+
+		if !press(scene, key) {
+			tb.Fatalf("Handle(%q) = false, want the scene to take it", key)
+		}
+
+		scene.Draw(canv, 0)
+
+		return painted(canv, scopeBox)
 	}
 
-	scene.Draw(canv, 0)
+	// Both letter cases are bound, so the walk uses one of each.
+	all := stop(t, 't')
+	off := stop(t, 'T')
+	short := stop(t, 't')
+	back := stop(t, 'T')
 
-	withoutTrails := painted(canv, scopeBox)
-	if withoutTrails >= withTrails {
-		t.Errorf("scope pixels with trails off = %d, with them on = %d, want fewer", withoutTrails, withTrails)
+	// The all mode covers the same ground as long and differs only in that
+	// nothing fades, so the count can only hold or rise. What the fade
+	// actually does to the colours is TestTrailAllDrawsTheWholeTrailInOneColour.
+	if all < long {
+		t.Errorf("the all mode painted %d pixels against long's %d, want at least as many", all, long)
 	}
 
-	press(scene, 'T')
-	scene.Draw(canv, 0)
+	if off >= short {
+		t.Errorf("the off mode painted %d pixels against short's %d, want fewer", off, short)
+	}
 
-	if painted(canv, scopeBox) != withTrails {
-		t.Error("turning trails back on did not restore the picture")
+	if short >= long {
+		t.Errorf("the short mode painted %d pixels against long's %d, want fewer", short, long)
+	}
+
+	if back != long {
+		t.Errorf("four presses of t painted %d pixels, want the %d it started with", back, long)
 	}
 }
 
@@ -2073,10 +2161,10 @@ func trailRun(canv *canvas.Canvas, row, fromX, toX int) []color.RGBA {
 	return out
 }
 
-// TestNoDecayDrawsTheWholeTrailInOneColour is what --no-decay is for: every
-// segment carries the aircraft's own colour instead of fading towards the
-// field, so the tail reads exactly as the head does.
-func TestNoDecayDrawsTheWholeTrailInOneColour(t *testing.T) {
+// TestTrailAllDrawsTheWholeTrailInOneColour is what the all mode is for:
+// every segment carries the aircraft's own colour instead of fading towards
+// the field, so the tail reads exactly as the head does.
+func TestTrailAllDrawsTheWholeTrailInOneColour(t *testing.T) {
 	t.Parallel()
 
 	// The row the eastbound trail projects onto, and a window along it that
@@ -2085,17 +2173,15 @@ func TestNoDecayDrawsTheWholeTrailInOneColour(t *testing.T) {
 	fromX := scopeBox.Min.X + scopeBox.Dx()/2 + 20
 	toX := scopeBox.Max.X - 20
 
-	draw := func(tb testing.TB, noDecay bool) []color.RGBA {
+	draw := func(tb testing.TB, presses int) []color.RGBA {
 		tb.Helper()
 
 		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, sceneFrame(eastboundTrail()))
 
 		// The airfield markers and their ICAO labels are the only other thing
 		// that lands on this row, so they go: what is left is the trail.
-		scene.Apply(radar.Settings{
-			RangeNm: sceneRangeNm, NoDecay: noDecay,
-			Airports: radar.ToggleOff, Shore: radar.ToggleOff,
-		})
+		scene.Apply(bareScope())
+		pressTrails(tb, scene, presses)
 		scene.Draw(canv, 0)
 
 		run := trailRun(canv, row, fromX, toX)
@@ -2106,19 +2192,19 @@ func TestNoDecayDrawsTheWholeTrailInOneColour(t *testing.T) {
 		return run
 	}
 
-	flat := draw(t, true)
-	fading := draw(t, false)
+	flat := draw(t, pressAll)
+	fading := draw(t, 0)
 
 	if flat[0] != flat[len(flat)-1] {
-		t.Errorf("--no-decay tail %v, head %v, want the same colour", flat[0], flat[len(flat)-1])
+		t.Errorf("the all mode's tail %v, head %v, want the same colour", flat[0], flat[len(flat)-1])
 	}
 
 	if flat[0] != theme.Night.AltLow {
-		t.Errorf("--no-decay tail = %v, want the aircraft's own band colour %v", flat[0], theme.Night.AltLow)
+		t.Errorf("the all mode's tail = %v, want the aircraft's own band colour %v", flat[0], theme.Night.AltLow)
 	}
 
 	if fading[0] == fading[len(fading)-1] {
-		t.Error("the default trail drew its tail in the head's colour, want it faded towards the field")
+		t.Error("the long mode drew its tail in the head's colour, want it faded towards the field")
 	}
 }
 
@@ -2266,10 +2352,14 @@ var (
 	// fixed caps in keyCaps, so its left edge is where the bar's painted
 	// extent ends when the cap is not there at all, and its width is one
 	// small glyph plus the cap's own padding on both sides. Verified against
-	// a rendered PNG: at (734, 686) to (750, 704) the cap is solid ink when
+	// a rendered PNG: at (722, 686) to (738, 704) the cap is solid ink when
 	// the bias-tee is on and a hollow outline when it is off, the same
 	// pattern autoCapBox checks for AUTO.
-	biasCapBox = image.Rect(734, 686, 750, 704)
+	//
+	// It moved twelve pixels left when the T cap stopped saying TRAILS and
+	// started naming the trail mode: LONG is two characters shorter, and the
+	// bar is laid out left to right, so everything after T came with it.
+	biasCapBox = image.Rect(722, 686, 738, 704)
 )
 
 // TestKeyCapsShowToggleState checks the one thing the bar could not say
@@ -3128,16 +3218,21 @@ func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
 }
 
 // The first compact row's bearing cell at the panel's resolution, split into
-// the three digits and the arrow that follows them.
+// the three digits and the arrow that follows them, plus the attitude cell
+// beyond it.
 //
 // The numbers are read off a render rather than recomputed here, the same way
 // the row band above them is: the card and the header are sized from font
 // metrics alone, so the first row lands on the same pixels every time.
 //
+// All three moved left when the attitude column arrived and took 24 pixels
+// off the right-hand end of the table.
+//
 //nolint:gochecknoglobals // rectangles are data, and image.Rectangle cannot be const.
 var (
-	rowBearingDigits = image.Rect(1100, 313, 1136, 330)
-	rowBearingArrow  = image.Rect(1136, 313, 1152, 330)
+	rowBearingDigits = image.Rect(1053, 313, 1089, 330)
+	rowBearingArrow  = image.Rect(1089, 313, 1105, 330)
+	rowAttitudeCell  = image.Rect(1126, 313, 1150, 330)
 )
 
 // cardTrackArrow is the panel's TRACK line to the right of its degrees, which
@@ -3177,10 +3272,14 @@ func ghostFrame(ghosts []source.Trail, planes ...airplane.Snapshot) source.Frame
 
 // bareScope is the settings a trail test draws under: a fixed range, and the
 // two overlays off so the only thing left on the row being read is a track.
-func bareScope(noDecay bool) radar.Settings {
+//
+// The trail mode is not in here because it is not in Settings: a test that
+// wants one other than the default presses t for it, through pressTrails.
+func bareScope() radar.Settings {
 	return radar.Settings{
-		RangeNm: sceneRangeNm, NoDecay: noDecay,
-		Airports: radar.ToggleOff, Shore: radar.ToggleOff,
+		RangeNm:  sceneRangeNm,
+		Airports: radar.ToggleOff,
+		Shore:    radar.ToggleOff,
 	}
 }
 
@@ -3199,42 +3298,30 @@ func trailWindow() (int, int, int) {
 // gone, so there is no head for a fade to point at, and the whole track is
 // drawn in the colour its last altitude earned it.
 //
-// The fade setting is tried both ways on purpose. A ghost only ever reaches
-// the scene on a run with --no-decay on, but the scene must not be relying on
-// that: the rule is a property of the ghost, not of the flag that produced it.
+// The all mode is the only one that draws a ghost at all, and it is also the
+// only one with no fade in it, so the two halves of the rule land on the same
+// picture and this reads both of them at once.
 func TestGhostTrailDrawsAtFullStrength(t *testing.T) {
 	t.Parallel()
 
 	row, fromX, toX := trailWindow()
+	frame := ghostFrame([]source.Trail{ghostOf(eastboundTrail())})
 
-	for _, testCase := range []struct {
-		name    string
-		noDecay bool
-	}{
-		{name: "with the fade off", noDecay: true},
-		{name: "with the fade on", noDecay: false},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Apply(bareScope())
+	pressTrails(t, scene, pressAll)
+	scene.Draw(canv, 0)
 
-			frame := ghostFrame([]source.Trail{ghostOf(eastboundTrail())})
+	run := trailRun(canv, row, fromX, toX)
+	if len(run) < 2 {
+		t.Fatalf("the ghost drew %d pixels on row %d, want a run to read", len(run), row)
+	}
 
-			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
-			scene.Apply(bareScope(testCase.noDecay))
-			scene.Draw(canv, 0)
-
-			run := trailRun(canv, row, fromX, toX)
-			if len(run) < 2 {
-				t.Fatalf("the ghost drew %d pixels on row %d, want a run to read", len(run), row)
-			}
-
-			for index, col := range run {
-				if col != theme.Night.AltLow {
-					t.Fatalf("ghost pixel %d = %v, want the band colour %v at full strength",
-						index, col, theme.Night.AltLow)
-				}
-			}
-		})
+	for index, col := range run {
+		if col != theme.Night.AltLow {
+			t.Fatalf("ghost pixel %d = %v, want the band colour %v at full strength",
+				index, col, theme.Night.AltLow)
+		}
 	}
 }
 
@@ -3258,7 +3345,8 @@ func TestGhostTrailDrawsUnderTheLiveOnes(t *testing.T) {
 	ghost.ICAO, ghost.Altitude = "3C6745", ghostAltitude
 
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, ghostFrame([]source.Trail{ghost}, live))
-	scene.Apply(bareScope(true))
+	scene.Apply(bareScope())
+	pressTrails(t, scene, pressAll)
 	scene.Draw(canv, 0)
 
 	run := trailRun(canv, row, fromX, toX)
@@ -3274,14 +3362,15 @@ func TestGhostTrailDrawsUnderTheLiveOnes(t *testing.T) {
 	}
 }
 
-// TestGhostTrailsGoWithTheTrailToggle checks the two ways the scope ends up
-// with no ghost on it.
+// TestGhostsAreDrawnOnlyByTheAllMode checks which of the four trail modes puts
+// a lost contact on the field.
 //
-// A ghost is a trail, so the t key has to take it with the rest of them, or
-// the cap would be saying something the scope is not doing. The other way is
-// the ordinary one: a run without --no-decay produces no ghosts at all, and
-// the frame carries none.
-func TestGhostTrailsGoWithTheTrailToggle(t *testing.T) {
+// Only the all mode does. The other three are about the traffic that is
+// flying, and a track with no aeroplane on the end of it under a trail that
+// is itself cut short or turned off would be a line with nothing to explain
+// it. The last case is the ordinary one: a frame that carries no ghosts draws
+// none whatever the mode says.
+func TestGhostsAreDrawnOnlyByTheAllMode(t *testing.T) {
 	t.Parallel()
 
 	row, fromX, toX := trailWindow()
@@ -3290,23 +3379,29 @@ func TestGhostTrailsGoWithTheTrailToggle(t *testing.T) {
 	for _, testCase := range []struct {
 		name        string
 		ghosts      []source.Trail
-		hideTrails  bool
+		presses     int
 		wantPainted bool
 	}{
-		{name: "a ghost with trails on", ghosts: ghosts, wantPainted: true},
-		{name: "the same ghost with trails off", ghosts: ghosts, hideTrails: true},
-		{name: "a frame that kept no ghosts", ghosts: nil},
+		{name: "the all mode", ghosts: ghosts, presses: pressAll, wantPainted: true},
+		{name: "the long mode it starts in", ghosts: ghosts},
+		{name: "the short mode", ghosts: ghosts, presses: pressShort},
+		{name: "the off mode", ghosts: ghosts, presses: pressOff},
+		{name: "a frame that kept no ghosts", ghosts: nil, presses: pressAll},
+		{
+			// An aircraft heard once, with a single position decoded before it
+			// went quiet, left one point and no line. There is nothing to draw
+			// and nothing wrong.
+			name:    "a ghost of one fix",
+			ghosts:  []source.Trail{{ICAO: "4951BA", Points: eastboundTrail().PositionHistory[:1]}},
+			presses: pressAll,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
 			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, ghostFrame(testCase.ghosts))
-			scene.Apply(bareScope(true))
-
-			if testCase.hideTrails && !press(scene, 't') {
-				t.Fatal("the t key was not handled, want the trail toggle to take it")
-			}
-
+			scene.Apply(bareScope())
+			pressTrails(t, scene, testCase.presses)
 			scene.Draw(canv, 0)
 
 			got := len(trailRun(canv, row, fromX, toX)) > 0
@@ -3335,7 +3430,8 @@ func TestGhostTrailIsClippedToTheRing(t *testing.T) {
 		tb.Helper()
 
 		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, ghostFrame(ghosts))
-		scene.Apply(bareScope(true))
+		scene.Apply(bareScope())
+		pressTrails(tb, scene, pressAll)
 		scene.Draw(canv, 0)
 
 		return canv
@@ -3357,7 +3453,8 @@ func TestGhostTrailsDrawInMinimalMode(t *testing.T) {
 	frame := ghostFrame([]source.Trail{ghostOf(eastboundTrail())})
 
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
-	scene.Apply(bareScope(true))
+	scene.Apply(bareScope())
+	pressTrails(t, scene, pressAll)
 
 	if !press(scene, 'v') {
 		t.Fatal("the v key was not handled, want the view toggle to take it")
@@ -3386,11 +3483,12 @@ func TestGhostColourFollowsTheColourMode(t *testing.T) {
 		// The mode goes into the settings rather than into an option, because
 		// Apply sets every field of the block and would put an option's colour
 		// mode straight back to the default.
-		set := bareScope(true)
+		set := bareScope()
 		set.Colour = mode
 
 		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, frame)
 		scene.Apply(set)
+		pressTrails(tb, scene, pressAll)
 		scene.Draw(canv, 0)
 
 		run := trailRun(canv, row, fromX, toX)

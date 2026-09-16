@@ -278,10 +278,14 @@ func TestView3DAirportsToggle(t *testing.T) {
 	}
 }
 
-// TestView3DTrailsToggle checks that t takes the trails and the ghosts off the
-// perspective picture the same way it does on the flat one. A ghost is a
-// trail, so the key that turns trails off has to take them with it.
-func TestView3DTrailsToggle(t *testing.T) {
+// TestView3DTrailModes checks that t moves the perspective picture through the
+// same four modes it moves the flat one through.
+//
+// The all mode is what puts a ghost in the picture, here as everywhere else,
+// and the off mode takes every track with it. The aircraft themselves stay in
+// all four: the key is about trails, and a model on the end of nothing is
+// still an aeroplane the scope has heard.
+func TestView3DTrailModes(t *testing.T) {
 	t.Parallel()
 
 	plane := scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)
@@ -291,13 +295,28 @@ func TestView3DTrailsToggle(t *testing.T) {
 	scene.Apply(view3DSettings())
 	scene.Draw(canv, 0)
 
-	withTrails := painted(canv, view3DBox)
+	long := painted(canv, view3DBox)
 
-	press(scene, 't')
+	pressTrails(t, scene, pressAll)
 	scene.Draw(canv, 0)
 
-	if got := painted(canv, view3DBox); got >= withTrails {
-		t.Errorf("t left %d painted pixels against the original %d, want fewer", got, withTrails)
+	all := painted(canv, view3DBox)
+	if all <= long {
+		t.Errorf("the all mode painted %d pixels against long's %d, want the ghost as well", all, long)
+	}
+
+	// pressAll to pressOff is one more press, so the walk carries on from
+	// where it is rather than starting again.
+	pressTrails(t, scene, pressOff-pressAll)
+	scene.Draw(canv, 0)
+
+	off := painted(canv, view3DBox)
+	if off >= long {
+		t.Errorf("the off mode painted %d pixels against long's %d, want fewer", off, long)
+	}
+
+	if off == 0 {
+		t.Error("the off mode painted nothing at all, want the aircraft without their trails")
 	}
 }
 
@@ -521,10 +540,10 @@ func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	orbitCapBox    = image.Rect(734, 686, 750, 704)
-	envelopeCapBox = image.Rect(804, 686, 820, 704)
-	turnCapBox     = image.Rect(892, 686, 914, 704)
-	tiltCapBox     = image.Rect(962, 686, 990, 704)
+	orbitCapBox    = image.Rect(722, 686, 738, 704)
+	envelopeCapBox = image.Rect(792, 686, 808, 704)
+	turnCapBox     = image.Rect(880, 686, 902, 704)
+	tiltCapBox     = image.Rect(950, 686, 978, 704)
 
 	// scopeBarTail is the part of the bar row the ten shared caps never reach,
 	// which is where all four of the boxes above sit.

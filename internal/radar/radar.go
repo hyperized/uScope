@@ -164,21 +164,10 @@ type Scene struct {
 	icon       *sprite.Bitmap
 	now        func() time.Time
 
-	// arrow is the small direction arrow drawn after the rows' bearing and
-	// after the panel's track, turned to the angle the figure beside it just
-	// gave. It is not replaceable the way the silhouette is: the silhouette is
-	// what an aircraft looks like and the arrow is a piece of punctuation.
-	arrow *sprite.Bitmap
-
-	// trails and autoRange are what the t and a keys toggle.
-	trails    bool
+	// trail is how much of each aircraft's track is drawn, which the t key
+	// cycles, and autoRange is what the r key toggles.
+	trail     trailMode
 	autoRange bool
-
-	// noDecay draws every trail segment at full strength instead of fading
-	// the tail out. It is a flag with no key: it changes what a trail means
-	// rather than whether there is one, and a setting you can flip by
-	// accident mid-flight is one you have to re-read the screen to trust.
-	noDecay bool
 
 	// colour is what an aircraft's colour means, which the c key cycles.
 	colour ColourMode
@@ -249,6 +238,13 @@ type Scene struct {
 	clip    *canvas.Canvas
 	clipOf  *canvas.Canvas
 	clipBox image.Rectangle
+
+	// posed is the 3D view's scratch for one aircraft's model: where each of
+	// its vertices landed on the canvas and which way round it is to the
+	// camera. It is a field for the reason the format buffers below are, and
+	// one is enough because an aircraft is projected, drawn and done with
+	// before the next one is started.
+	posed posed
 
 	// light is whether the palette draws on a light field. It is kept beside
 	// the palette rather than worked out per aircraft because an airline's
@@ -428,9 +424,9 @@ func WithSprite(icon *sprite.Bitmap) Option {
 //
 // Those three are parameters rather than options because a radar without them
 // has nothing to draw; the options are the things that have a useful default.
-// Trails, auto range, the airfield markers and the shore all start on and the
-// colour mode starts on altitude, which is the state the scope is most useful
-// in when nobody has touched a key yet. The view starts on the scope: the
+// Auto range, the airfield markers and the shore all start on, the trails
+// start on trailLong and the colour mode on altitude, which is the state the
+// scope is most useful in when nobody has touched a key yet. The view starts on the scope: the
 // other two are views to switch to, not ones to explain on first sight. The
 // camera starts orbiting with its envelope drawn, because a 3D view arrived at
 // by pressing v twice should be doing the thing it was added for.
@@ -441,9 +437,8 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		src:        src,
 		scopeRange: scopeRange,
 		icon:       sprite.Airplane(),
-		arrow:      sprite.Arrow(),
 		now:        time.Now,
-		trails:     true,
+		trail:      trailLong,
 		autoRange:  true,
 		airports:   true,
 		shoreOn:    true,

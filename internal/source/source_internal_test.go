@@ -847,7 +847,7 @@ func TestGhostsEvictByTrailCount(t *testing.T) {
 		trailPoints = 2
 	)
 
-	tracker := newGhosts(true)
+	tracker := newGhosts()
 	tracker.maxTrails = trailCap
 
 	var last []Trail
@@ -881,7 +881,7 @@ func TestGhostsEvictByPointCount(t *testing.T) {
 		trailPoints = 4
 	)
 
-	tracker := newGhosts(true)
+	tracker := newGhosts()
 	tracker.maxPoints = pointCap
 
 	var last []Trail
@@ -908,7 +908,7 @@ func TestGhostsNoPointsNeverPushed(t *testing.T) {
 
 	const emptyHistory = 0
 
-	tracker := newGhosts(true)
+	tracker := newGhosts()
 
 	got := loseGhost(&tracker, "C00001", emptyHistory)
 
@@ -925,7 +925,7 @@ func TestGhostsEmptyICAOIgnored(t *testing.T) {
 
 	const points = 3
 
-	tracker := newGhosts(true)
+	tracker := newGhosts()
 
 	got := loseGhost(&tracker, "", points)
 
@@ -953,7 +953,7 @@ func TestGhostsSweepOrderIsSortedAndStable(t *testing.T) {
 	)
 
 	for attempt := range repeats {
-		tracker := newGhosts(true)
+		tracker := newGhosts()
 
 		tracker.observe(airplanes.List{
 			snapshotWithHistory("ZULU01", points),
@@ -978,7 +978,7 @@ func TestGhostsReviveLeavesHoleWithoutShifting(t *testing.T) {
 
 	const points = 2
 
-	tracker := newGhosts(true)
+	tracker := newGhosts()
 
 	loseGhost(&tracker, "D00001", points)
 	loseGhost(&tracker, "D00002", points)

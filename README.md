@@ -104,23 +104,45 @@ trails are the reason this project exists. A character cell cannot draw one,
 and a scope full of them says in one glance what a scope full of dots cannot:
 who is turning and who came from where.
 
-`--no-decay` changes two things about a trail. Every segment is drawn at full
-strength instead of fading towards the tail, which trades "which end is the
-aeroplane" for a track that is easier to follow across a busy field. And a
-trail now outlives the aircraft that drew it: when a contact goes quiet and
-the store drops it, its track stays on the scope as a ghost, at full strength
-and with nothing at the head of it. There is no silhouette, no label and no
-selection ring on a ghost, because there is no aeroplane there to mark and no
-heading to point one at. Ghosts go under the live trails, so an aeroplane is
-never hidden by the track of one that has gone. They take no part in the auto
-range or in minimal mode's centring, both of which are about where the
-receiver can hear right now, and the `t` key takes them away with the rest of
-the trails. They are kept for the life of the process, up to two thousand
-tracks or a million fixes between them, oldest given up first.
+`t` cycles four trail modes, and the key cap names the one you are in rather
+than the setting, so the bar answers the question instead of restating it.
+
+| Cap | Draws |
+|---|---|
+| `T OFF` | nothing |
+| `T SHORT` | the last twelve fixes, fading to nothing at the tail |
+| `T LONG` | the whole history, fading to a quarter strength at the tail |
+| `T ALL` | the whole history at full strength, and the ghosts with it |
+
+`LONG` is where a run starts and it is what the scope has always drawn. `SHORT`
+is twelve fixes because uAirwaves samples one position every ten seconds, so
+it is about the last two minutes: it answers "where is this one going" and not
+"where has it been", which is what you want on a field of eighty aircraft where
+the trails cross each other more than they tell you anything.
+`ALL` goes the other way. Nothing fades, so the whole track reads as one line
+rather than as a line arriving from nowhere, which is the mode for looking at
+the shapes the traffic makes rather than at the traffic.
+
+`ALL` is also the only mode that draws ghosts. When a contact goes quiet and
+the store drops it, its track stays as a ghost with nothing at the head of it:
+no silhouette, no label, no selection ring, because there is no aeroplane there
+to mark and no heading to point one at. Ghosts go under the live trails, so an
+aeroplane is never hidden by the track of one that has gone. They take no part
+in the auto range or in minimal mode's centring, both of which are about where
+the receiver can hear right now.
+
+The tracking runs on every session whether or not the mode that draws them is
+on. It used to be tied to a flag, which made it useless to anyone who did not
+know in advance that they would want it: switching to `ALL` an hour in is a way
+of asking what you have missed, and the answer is nothing at all unless
+something was already keeping it. Ghosts are kept for the life of the process,
+up to two thousand tracks or a million fixes between them, oldest given up
+first, which is what bounds the cost of leaving it on.
 
 That is also the one place the demo fleet behaves like a real feed. Ninety
 seconds in, the aircraft with no callsign stops transmitting and never comes
-back, so `--demo --no-decay` leaves a ghost on the field to look at.
+back, so `--demo` and three presses of `t` leave a ghost on the field to look
+at.
 
 The right column runs panel, rows, legend, top to bottom.
 
@@ -141,14 +163,29 @@ An aircraft with no callsign has its ICAO hex set in the large face, so the
 corner drops the hex rather than printing the same six characters twice.
 
 Under it is the row table, nearest aircraft first, with a small header line
-naming its columns: number, callsign, ICAO hex, altitude, speed, distance and
-bearing from the receiver, and the aircraft count right-aligned at the end of
-that same line. The selected row carries the accent bar. Bearing is three
-digits followed by a small arrow turned to the exact angle, and the panel's
-`TRACK` line is written the same way. An arrow rather than a compass point,
-because eight letters are eight sectors and `NE` says the same thing about 23
-degrees as about 67, where the arrow says the angle itself. A row with no
-bearing to show keeps its dashes and draws no arrow. Altitude
+naming its columns: number, callsign, ICAO hex, altitude, speed, distance,
+bearing from the receiver and attitude, and the aircraft count right-aligned at
+the end of that same line. The selected row carries the accent bar. Bearing is
+three digits followed by a small arrow turned to the exact angle, and the
+panel's `TRACK` line is written the same way. An arrow rather than a compass
+point, because eight letters are eight sectors and `NE` says the same thing
+about 23 degrees as about 67, where the arrow says the angle itself. The arrow
+is a filled triangle worked out from the angle, not a bitmap turned to it: a
+nine-pixel sprite rotated by nearest neighbour lost a pixel out of its shaft at
+most angles, so the one thing it existed to say was the thing it said worst. A
+row with no bearing to show keeps its dashes and draws no arrow.
+
+`ATT` is the last column and it is a picture rather than a figure: the same
+low-polygon aeroplane the 3D view draws, in a 24-pixel cell, yawed to the
+aircraft's heading and pitched and banked by the same rules. Its camera is
+fixed, north up and looking down from due south, so every row is seen from the
+same angle and the column can be read down the page. An aircraft with no
+decoded heading gets the disc, the same as in the picture. It is the first
+column to go as the right column narrows, before bearing, because it is the
+only cell with no figure in it: everything else on the row is a number somebody
+might read out.
+
+Altitude
 gets a small triangle beside it when the aircraft is climbing or descending,
 and both the figure and the triangle are set in that aircraft's altitude band
 whichever colour mode is on. That is the one column where a number and a
@@ -267,13 +304,41 @@ side of the orbit.
 
 Every aircraft gets a thin stalk from its shadow on the ground up to where it
 is flying. The stalk is the only thing in the picture that says how high an
-aeroplane is: a sprite on its own floats at a height the eye cannot measure,
-and two aircraft on the same bearing at different levels draw at nearly the
-same place. Trails are drawn in the air at the altitude each fix was reported
-at, so a descent reads as a descent. The silhouette is turned by its heading
-less the camera's azimuth, which is an approximation rather than a projection
-of the aircraft's own axis, and at fifteen pixels a side there is nothing to
-foreshorten anyway.
+aeroplane is: a shape on its own floats at a height the eye cannot measure, and
+two aircraft on the same bearing at different levels draw at nearly the same
+place. Trails are drawn in the air at the altitude each fix was reported at, so
+a descent reads as a descent.
+
+On the end of each stalk is a model rather than the flat scope's rotated
+sprite. It is fourteen vertices in the aircraft's own axes, a thin hull from
+nose to tail, swept wings, a tailplane and a fin, filled as triangles with the
+fuselage centreline stroked over them so the shape survives at sixteen pixels.
+The sprite was a plan view, and this camera is never directly above anything:
+turning a plan view to a heading in a perspective scene read as a sticker on
+the glass. The model is posed in the world and goes through the same camera as
+the rings under it, so it foreshortens with everything else.
+
+The pose is three angles and all three come off what the receiver has decoded.
+Yaw is the heading. Pitch is eight degrees nose-up above 300 feet a minute and
+eight down below minus 300, level in between: three states and not a
+measurement, because at this size there is nothing to draw between five hundred
+feet a minute and two thousand.
+Bank comes off the last two legs of the trail, up to fifteen degrees, which is
+a standard-rate turn at uAirwaves' ten-second sampling. It is taken from two
+legs rather than from one leg against the reported heading because heading and
+track differ by the drift angle the wind puts on them, and between two legs
+flown a minute apart the drift is the same in both and cancels.
+
+The wing on the far side of the camera is mixed forty per cent into the field
+and the near one drawn at full strength, which is the only cue a shape this
+small has for which way up it is. Within one aircraft the order is far wing,
+fin, fuselage, near wing; there is no depth buffer, because an aeroplane is
+convex enough that the order is the sort. The whole model is a constant sixteen
+pixels across whatever the range, scaled per aircraft from the projected length
+of a unit vector at its own depth, and an aircraft with no decoded heading gets
+a small filled disc instead: there is no attitude to pose a model in, and a
+model drawn pointing north anyway would be the one thing in the picture stating
+a fact nobody has.
 
 Altitude is stretched by `--exaggerate`, 1 to 20, and 8 unless you say. At life
 size the whole fleet lies in a film on the floor: forty thousand feet is six
@@ -374,8 +439,12 @@ the frame moves for it.
 
 The wordmark and the ingest source on the left, with a filled dot when the
 source is connected and a hollow one when it is not. The receiver's position
-under them, or `EST ±22 NM` when it was worked out from the aircraft, or
-`NO FIX`.
+under them, opening with `LOC`: `LOC MANUAL 52.3100 N / 4.7700 E`, or
+`LOC EST ±22 NM` when it was worked out from the aircraft, or `LOC NO FIX`.
+Without the prefix the line was a mode word and two numbers with nothing saying
+what they were of, and next to the aircraft position on the card it read as
+another aeroplane. `LOC` is drawn in the band's own ink whatever the fix mode
+is; only the mode word after it carries the fix colour.
 
 While `--auto-sweep` is walking the gain grid the source label picks up a
 `SWEEP` suffix in the accent colour. A sweep decodes nothing for the few
@@ -434,8 +503,9 @@ ignores the flag.
 latitude with no longitude is half an answer. Without them uScope works its
 own position out from the aircraft it can hear, by intersecting their radio
 horizons, which takes about thirty position reports and lands within tens of
-nautical miles. The header says which of the three it is showing: coordinates
-for a known position, `EST ±22 NM` for an estimate, `NO FIX` for neither.
+nautical miles. The header says which of the three it is showing:
+`LOC MANUAL` or `LOC GPS 3D` and the coordinates for a known position,
+`LOC EST ±22 NM` for an estimate, `LOC NO FIX` for neither.
 
 A known position is worth giving if you have one. With a reference nearby a
 single CPR frame resolves to a position; without one the decoder waits for the
@@ -663,7 +733,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `+`, `=` | widen the range by one step, and turn auto off |
 | `-`, `_` | narrow it by one step, and turn auto off |
 | `r`, `R` | auto range on or off |
-| `t`, `T` | trails on or off |
+| `t`, `T` | cycle the trail mode: off, short, long, all |
 | `a`, `A` | airfield markers on or off; minimal keeps its own |
 | `m`, `M` | coastline on or off; minimal keeps its own |
 | `c`, `C` | cycle the colour mode: altitude or airline |
@@ -730,7 +800,6 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--shore` | `on` | draw the coastline: `on` or `off` |
 | `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` to stay on the receiver |
-| `--no-decay` | off | draw every trail segment at full strength, and keep the trail of an aircraft that goes quiet |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
 | `--bias-t` | off | power an external LNA over the coax from the dongle's bias-tee; local SDR only |
 | `--auto-sweep` | off | walk the gain grid once before the first frame and keep the best cell; local SDR only |
@@ -878,6 +947,14 @@ The 3D view has been looked at on a monitor and on a live feed, and not on the
 panel. Its two open questions are whether an exaggeration of 8 still reads at a
 third the size, and whether the theoretical bowl is worth drawing at a range
 where every altitude it covers is over the horizon anyway.
+
+The aircraft models add a third and the attitude column a fourth. Sixteen
+pixels of span was picked against eighty real aircraft on a 1280-pixel monitor,
+where the shapes are distinct without crowding; at a third the size the fin and
+the tailplane are a pixel each, and whether what is left still reads as an
+aeroplane or as a smear is a question for the panel. The `ATT` cell is the same
+model at fourteen pixels in a 20-pixel row, so it is the same question asked
+where there is even less room to answer it.
 
 Nobody has looked at the radar on the panel yet. That is `make radar`. The
 battery indicator has been checked two ways, neither of them on the device: on

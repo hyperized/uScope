@@ -6,6 +6,13 @@
 // code that builds it. The one built in here is a top-down airplane
 // silhouette, used to draw aircraft on the radar scope turned to face the
 // heading they are actually flying.
+//
+// There used to be a second, a nine-pixel arrow for the scene's bearing and
+// track figures. It was withdrawn because nearest-neighbour rotation is a
+// poor way to turn a shape that small: the arrow broke up at most angles, and
+// internal/radar now computes that triangle from the angle instead. A sprite
+// earns its keep at fifteen pixels with a silhouette to carry; below that,
+// work the shape out in floating point.
 package sprite
 
 import (
@@ -177,56 +184,6 @@ var airplane = sync.OnceValue(func() *Bitmap {
 // Airplane is a 15x15 top-down airplane silhouette, nose up.
 func Airplane() *Bitmap {
 	return airplane()
-}
-
-// arrow is the package's Arrow singleton, built once on first use. See the
-// comment on airplane for why sync.OnceValue is used instead of an init
-// function or a plain package variable.
-//
-//nolint:gochecknoglobals // memoization idiom, not mutable state; see the comment above.
-var arrow = sync.OnceValue(func() *Bitmap {
-	// Point up, 9x9, read top row first. A bearing or a track is drawn as the
-	// angle itself, turned to face it, instead of picked from one of eight
-	// compass letters; the sprite only has to look right as an arrow, not
-	// spell a direction out in a font.
-	//
-	// Every part of it is at least three pixels across, and the head is only
-	// one pixel wider on each side than the shaft. Both of those are what
-	// nine pixels a side and nearest-neighbour rotation will carry. A thinner
-	// stroke breaks into a dotted line off the four axis-aligned headings,
-	// and a broader head turns into a lump with a stub behind it, which says
-	// less about the angle than an even taper does. The shapes were compared
-	// at every fifteen degrees before this one was picked.
-	//
-	//	....#....
-	//	...###...
-	//	..#####..
-	//	...###...
-	//	...###...
-	//	...###...
-	//	...###...
-	//	...###...
-	//	...###...
-	//
-	//nolint:goconst // ascii art rows repeat on purpose; naming them would hide the shape.
-	rows := []string{
-		"....#....",
-		"...###...",
-		"..#####..",
-		"...###...",
-		"...###...",
-		"...###...",
-		"...###...",
-		"...###...",
-		"...###...",
-	}
-
-	return mustBitmap(rows)
-})
-
-// Arrow is a 9x9 arrow silhouette, point up.
-func Arrow() *Bitmap {
-	return arrow()
 }
 
 // invRotate returns the source offset that lands at destination offset (dx,

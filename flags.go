@@ -129,7 +129,6 @@ type config struct {
 	airports    radar.Toggle
 	shore       radar.Toggle
 	rangeNm     float64
-	noDecay     bool
 	recentre    time.Duration
 	view        radar.View
 	exaggerate  float64
@@ -188,7 +187,6 @@ type rawFlags struct {
 	fps         int
 	frames      int
 	testPattern bool
-	noDecay     bool
 	demo        bool
 	demoSector  bool
 	biasTee     bool
@@ -254,8 +252,6 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"which view the radar starts on: scope, minimal or 3d. v cycles them while it runs")
 	set.Float64Var(&raw.exaggerate, "exaggerate", radar.DefaultExaggerate,
 		"how far the 3d view stretches altitude into height, 1 to 20")
-	set.BoolVar(&raw.noDecay, "no-decay", false,
-		"draw every trail segment at full strength instead of fading the tail out")
 	set.StringVar(&raw.battery, "battery", "",
 		"power-supply uevent file to read the battery from; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
@@ -371,7 +367,6 @@ func (raw rawFlags) display() (display, error) {
 			Airports: airports,
 			Shore:    shoreToggle,
 			RangeNm:  rangeNm,
-			NoDecay:  raw.noDecay,
 			Recentre: recentre,
 
 			View:       view,
@@ -435,7 +430,6 @@ func (raw rawFlags) validated() (config, error) {
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
 		rangeNm:     show.radar.RangeNm,
-		noDecay:     show.radar.NoDecay,
 		recentre:    show.radar.Recentre,
 		view:        show.radar.View,
 		exaggerate:  show.radar.Exaggerate,

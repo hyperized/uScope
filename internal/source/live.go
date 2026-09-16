@@ -75,11 +75,11 @@ type dongleOpener func(opts ...rtl2832u.Option) (*rtl2832u.Receiver, error)
 // Live is safe for concurrent use. Everything it reads from uAirwaves is
 // already locked there, and its own mutable state sits behind mu.
 //
-// With ghosts on, the Ghosts in a Frame alias the tracker's own slice and are
-// only valid until the next Frame call, the same caveat Demo carries about
-// its Planes. Frame is called once per drawn frame from the run loop, so
-// there is one reader; two goroutines drawing from one Live would need a copy
-// each, and nothing here makes one.
+// The Ghosts in a Frame alias the tracker's own slice and are only valid until
+// the next Frame call, the same caveat Demo carries about its Planes. Frame is
+// called once per drawn frame from the run loop, so there is one reader; two
+// goroutines drawing from one Live would need a copy each, and nothing here
+// makes one.
 type Live struct {
 	in      ingest
 	planes  *airplanes.Airplanes
@@ -122,7 +122,8 @@ type Live struct {
 
 	// ghosts keeps the trail of an aircraft the store has pruned, so a lost
 	// contact leaves its track behind. It sits under mu with the rest of the
-	// mutable state and is inert unless WithGhosts turned it on.
+	// mutable state, and it runs on every session: see the note on the type
+	// for why it is not something to be switched on when it is wanted.
 	ghosts ghosts
 
 	// coverage accumulates where the antenna has heard an aircraft, which is
@@ -232,22 +233,6 @@ func withDongleOpener(open dongleOpener) LiveOption {
 	}
 }
 
-// WithGhosts keeps the trail of an aircraft that stops transmitting.
-//
-// uAirwaves prunes an aircraft from the store once it has been quiet long
-// enough, and without this the track it flew in on goes with it. With it on,
-// the frame the aircraft disappears from carries its last trail in Ghosts and
-// the radar keeps drawing it. --no-decay is what turns it on: the flag means
-// a trail stays until the operator changes the range, and a trail that
-// vanishes because the aeroplane went quiet is the one case that never
-// honoured that.
-//
-// It is off by default because it is not free. A ghost holds its fixes for
-// the life of the process, up to the caps in ghosts.go.
-func WithGhosts(on bool) LiveOption {
-	return func(l *Live) { l.ghosts = newGhosts(on) }
-}
-
 // WithEstimateInterval replaces how often the self-locator is consulted. A
 // value of zero or less leaves the default alone.
 func WithEstimateInterval(interval time.Duration) LiveOption {
@@ -263,6 +248,7 @@ func WithEstimateInterval(interval time.Duration) LiveOption {
 func NewLive(opts ...LiveOption) (*Live, error) {
 	live := &Live{
 		planes:           airplanes.New(),
+		ghosts:           newGhosts(),
 		now:              time.Now,
 		stderr:           os.Stderr,
 		estimateInterval: defaultEstimateInterval,

@@ -53,9 +53,9 @@ const (
 	//
 	// The invented fleet used to fly for ever, which is the one way it was
 	// unlike every real feed: on a live scope contacts are lost all the time,
-	// and with --no-decay on, a lost contact is the only thing that leaves a
-	// ghost. Ninety seconds is long enough that the first minute of a demo is
-	// the fleet as it always was, and short enough to watch happen.
+	// and a lost contact is the only thing that leaves a ghost. Ninety seconds
+	// is long enough that the first minute of a demo is the fleet as it always
+	// was, and short enough to watch happen.
 	//
 	// It is the aircraft with no callsign, which is the one the rest of the
 	// scene already treats as the awkward case, and it never comes back.
@@ -234,7 +234,7 @@ type Demo struct {
 	start time.Time
 
 	// ghosts keeps the trail of that aircraft once it has, so --demo shows
-	// what --no-decay does on a live feed.
+	// what a lost contact looks like on a live feed.
 	ghosts ghosts
 
 	// coverage accumulates where the invented fleet has been heard, so the 3D
@@ -275,17 +275,6 @@ func WithSeed(seed uint64) DemoOption {
 	return func(d *Demo) { d.seed = seed }
 }
 
-// WithDemoGhosts keeps the trail of the fleet's one aircraft that goes quiet,
-// the same way WithGhosts does for a real feed.
-//
-// It is spelled differently from WithGhosts for the reason the whole option
-// split exists: a LiveOption and a DemoOption are separate types on purpose,
-// so a beast address cannot be handed to the demo fleet, and two functions
-// cannot share one name in one package.
-func WithDemoGhosts(on bool) DemoOption {
-	return func(d *Demo) { d.ghosts = newGhosts(on) }
-}
-
 // WithDemoSector crowds the whole fleet into the north-west quadrant instead
 // of scattering it all the way round the receiver, so a directional-antenna
 // situation can be reproduced at a desk. There is no corresponding "off"
@@ -298,6 +287,7 @@ func WithDemoSector() DemoOption {
 // already has something on it.
 func NewDemo(opts ...DemoOption) (*Demo, error) {
 	demo := &Demo{
+		ghosts:   newGhosts(),
 		now:      time.Now,
 		seed:     defaultSeed,
 		lat:      demoLatitude,

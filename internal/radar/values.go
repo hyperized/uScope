@@ -68,6 +68,22 @@ const (
 	// their figures by the same amount.
 	arrowGap = vertGap
 
+	// arrowCell is the room the arrow is drawn in, and the three numbers that
+	// shape it, all in pixels from its centre: the apex runs arrowApex ahead
+	// along the bearing, and the two base corners sit arrowBase behind it,
+	// arrowHalf either side.
+	//
+	// The cell is nine because that is what the 9x9 bitmap this replaced took,
+	// and the columns beside it are laid out against that width. The needle
+	// inside it is deliberately long and narrow: a five-pixel point against a
+	// five-pixel base is a shape whose direction can be read at a glance,
+	// where an equilateral triangle of the same area reads as a blob with a
+	// corner.
+	arrowCell = 9
+	arrowApex = 5.0
+	arrowBase = 3.0
+	arrowHalf = 2.5
+
 	// levelBand is how small a vertical rate has to be before the aircraft
 	// counts as level. Mode S reports a rate on every velocity message and it
 	// is rarely a flat zero in the cruise, so a raw figure would show a few
@@ -253,11 +269,11 @@ func (s *Scene) drawVertMarker(dst *canvas.Canvas, left, top int, rate float64, 
 
 // arrowWidth is the room the direction arrow takes beside a figure, the gap
 // before it included.
-func (s *Scene) arrowWidth() int {
-	return arrowGap + s.arrow.Side()
+func (*Scene) arrowWidth() int {
+	return arrowGap + arrowCell
 }
 
-// drawArrow stamps the direction arrow at left, turned to the angle the
+// drawArrow draws the direction arrow at left, pointing at the angle the
 // figure beside it has just given, and centred vertically on middle.
 //
 // Both places the scene writes a direction use it: the rows' BRG column and
@@ -265,13 +281,42 @@ func (s *Scene) arrowWidth() int {
 // letters are eight sectors and NE says the same thing about 23 degrees as
 // about 67, where the arrow says the angle itself.
 //
+// It is a triangle computed from the angle rather than a bitmap turned to it.
+// The bitmap was rotated by nearest neighbour, which on a nine-pixel sprite
+// meant most angles lost a pixel out of the shaft or grew a step in the head,
+// so the one thing the arrow existed to say was the thing it said worst. Three
+// corners worked out in float64 and handed to FillTriangle come out solid at
+// every angle, and cost less than walking a sprite's bounding box.
+//
 // It is centred on the line rather than set on its baseline, the same way the
 // climb triangle is. It is a shape beside type and not a glyph in it.
 //
 //nolint:varnamelen // middle is the line's vertical centre, the pixel idiom used throughout uScope.
-func (s *Scene) drawArrow(dst *canvas.Canvas, left, middle int, degrees float64, ink color.RGBA) {
-	s.arrow.Draw(dst, left+s.arrow.Side()/2, middle, degrees, ink)
+func (*Scene) drawArrow(dst *canvas.Canvas, left, middle int, degrees float64, ink color.RGBA) {
+	centreX, centreY := float64(left+arrowCell/2), float64(middle)
+
+	// The compass, on a canvas whose y grows downward: zero points up the
+	// screen and increasing turns clockwise. forward is the way the arrow
+	// points and side is a quarter turn clockwise from it, which is what puts
+	// the two base corners either side of the shaft whatever the angle.
+	sin, cos := math.Sincos(degrees * math.Pi / halfCircle)
+	forwardX, forwardY := sin, -cos
+	sideX, sideY := cos, sin
+
+	apexX, apexY := centreX+forwardX*arrowApex, centreY+forwardY*arrowApex
+	backX, backY := centreX-forwardX*arrowBase, centreY-forwardY*arrowBase
+
+	dst.FillTriangle(
+		round(apexX), round(apexY),
+		round(backX-sideX*arrowHalf), round(backY-sideY*arrowHalf),
+		round(backX+sideX*arrowHalf), round(backY+sideY*arrowHalf),
+		ink,
+	)
 }
+
+// round is math.Round with the conversion the canvas wants, which is the same
+// three lines at six call sites otherwise.
+func round(value float64) int { return int(math.Round(value)) }
 
 // bearingTo is the compass bearing from the receiver to an aircraft, which is
 // what the compact rows' BRG column reads.
