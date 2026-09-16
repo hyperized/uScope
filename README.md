@@ -143,51 +143,85 @@ seconds in, the aircraft with no callsign stops transmitting and never comes
 back, so `--demo` and three presses of `t` leave a ghost on the field to look
 at.
 
-The right column runs the count line, the flight strip board, then the legend,
-top to bottom.
+The right column runs the status line, the selected aircraft's panel, the
+flight strip board, then the legend, top to bottom.
 
-The count line sits above the board, right-aligned and set in the data colour
+The status line sits above the lot, right-aligned and set in the data colour
 because it is a reading about the machine rather than about any one aeroplane:
-`81 AIRCRAFT`, or `12 OF 81 AIRCRAFT` while a filter is narrowing the field.
+`SEL 07 · 81 AIRCRAFT`, or `SEL 07 · 12 OF 81 AIRCRAFT` while a filter is
+narrowing the field. The first figure is where the selection is standing in the
+list, so `n` and `p` move a number as well as a mark. It reads `SEL --` when
+nothing on the board is selected, and adds `(FILTERED)` in the caution colour
+while the filter is hiding the aeroplane that was pinned.
 
-The board itself replaced a block that held the selected aircraft on its own
-and a separate table of rows under it, which was two grammars for one list.
-Now every aircraft is a flight strip, one under another, of one of two heights.
-The selected aircraft gets a full strip, about 64 pixels tall at the panel's
-own resolution, lifted off the page two fifths of the way towards the
-softkeys' grey and marked down its left edge with a 3 pixel accent bar. Every
-other aircraft gets a half strip, about 30 pixels tall, with no lift and no
-edge: both mark the selection, and a board where every strip stood out would
-have nothing picked out of it. The selected aircraft is always the strip at
-the top, so the scrolling window a plain list needed is gone: `n` and `p` move
-which strip is full rather than which part of a list is on screen.
+Under it is the panel: the radar data block the scope's own tag is built from,
+set large. A `SELECTED` label, a 1 pixel accent rule down the left edge, the
+callsign in the large face at double scale with the ICAO hex and `SQ nnnn`
+stacked beside it, then five figures in the large face with a small cyan word
+under each. `LEVEL` is hundreds of feet with the trend arrow after it, set in
+the aircraft's own altitude band because that is the one figure the scope
+beside it also says. `GS` and `TRK` follow, then `DIST` and `BRG` on a second
+row with the bearing needle turned to it. `TRK` carries no needle of its own:
+the block already has one, and a second eight pixels away would read as a pair
+of directions to reconcile rather than as one to fly.
+
+Under the block, one muted line spells the shorthand out:
+`2,400 FT CLIMBING 1,800 FT/MIN · 52.30 N / 4.81 E · SEEN JUST NOW`. Everything
+above it is controller abbreviation, and 024 is two thousand four hundred feet
+to anyone who has worked a radar and a three-digit number to everyone else. The
+panel gives things up as the column shortens, in this order: the plain line
+first, then the callsign's second scale, then the `DIST` and `BRG` row. An
+empty sky leaves the block its shape and puts `NO TRAFFIC` where the callsign
+goes, so the column does not change height when the last aircraft leaves range.
+A pinned aircraft the filter is hiding keeps the panel, with `· FILTERED` after
+the label in the caution colour, until the filter widens enough to let it back
+in.
+
+The board under that is one strip per aircraft, all of them the same height,
+about 30 pixels at the panel's own resolution, in the order the list is sorted
+in. The selected aeroplane's strip is marked where it stands rather than
+promoted: a 3 pixel accent bar down its left edge, and its index set in the
+reading ink where every other index is muted. The board used to lift it to the
+top as a full-height card, which meant pressing `n` swapped which aeroplane was
+on top and nothing on screen said where in the list the operator had got to.
+
+Every strip opens with that index, at the far left of the ident field: the
+aircraft's rank by distance under whatever filter is on, `01`, `02`, and so on.
+It is the cursor. Room is reserved for three digits, because the index counts
+places in the whole list rather than rows on the board, and a list of a hundred
+and twenty aircraft has to be able to write one without the callsigns beside it
+stepping sideways.
+
+As many strips are drawn as the column has room for, and the window scrolls so
+the selected strip is always fully on screen, riding a third of the way down
+once the list is long enough for the window to have a choice about it. Muted
+`+3 ABOVE` and `+57 MORE` lines close either end the window has cut, each
+taking one strip's room, so the strips on screen and the two numbers always add
+up to what the filter is showing.
 
 Seven fields run left to right on every strip, with a hairline rule between
 each pair: `CALLSIGN / ICAO`, `LEVEL FT`, `GS KT`, `TRK`, `DIST NM / BRG`,
-`POS` and `SEEN`. A small header in the data colour names each one, set once
-on the top row of the full strip, because repeating FT and KT over every
-aircraft would spend a third of the board saying what it had already shown.
-The units live in those headers and nowhere else.
+`POS` and `SEEN`. A small header in the data colour names each one, set once in
+a row above the board, because repeating FT and KT over every aircraft would
+spend a third of the board saying what it had already shown. The units live in
+those headers and nowhere else.
 
-The full strip sets its callsign in the large face, with the ICAO hex and the
-squawk on the line under it. A half strip has one line, so the hex sits beside
-the callsign in the bold body face instead of under it. An aircraft with no
-callsign gets its hex in the callsign's own place rather than printing the
-same six characters twice. An aircraft squawking an emergency draws
-`EMERGENCY` as a filled red box with white text, after the squawk on the full
-strip and in the hex's own place on a half strip, which has no room for both
-and no use for a hex while an aircraft is declaring one. A box rather than a
-coloured word, because it is the one thing on the board that has to be seen
-without being looked for.
+A strip has one line, so the ICAO hex sits beside the callsign in the bold body
+face rather than under it. An aircraft with no callsign gets its hex in the
+callsign's own place rather than printing the same six characters twice. An
+aircraft squawking an emergency draws `EMERGENCY` as a filled red box with
+white text, in the hex's place, which has no room for both and no use for a hex
+while an aircraft is declaring one. A box rather than a coloured word, because
+it is the one thing on the board that has to be seen without being looked for.
+The same box follows the squawk on the panel above.
 
-Climb and descent get a small triangle beside the level figure, on every
-strip. The rate itself, in feet per minute, is on the selected strip alone: a
-column of rate figures nobody is reading is noise, and the one aircraft whose
-rate is worth a number is the one that has been picked. `SEEN` reports in
-coarse buckets rather than in seconds, because a figure counting up is
-movement the eye keeps going back to. `POS` stacks its two halves, one to a
-row, on the full strip, and sets them side by side on a half strip, which is
-the shape the field was sized for in the first place.
+Climb and descent get a small triangle beside the level figure, on every strip.
+The rate itself, in feet per minute, is on the panel alone: a column of rate
+figures nobody is reading is noise, and the one aircraft whose rate is worth a
+number is the one that has been picked. `SEEN` reports in coarse buckets rather
+than in seconds, because a figure counting up is movement the eye keeps going
+back to. `POS` sets its two halves side by side, which is the shape the field
+was sized for in the first place.
 
 The little attitude model sits at the right end of the ident field, in a
 24-pixel cell: the same low-polygon aeroplane the 3D view draws, yawed to the
@@ -195,29 +229,20 @@ aircraft's heading and pitched and banked by the same rules, seen through a
 camera of its own that is fixed north up and looking down from due south, so
 every strip reads the same angle down the board. An aircraft with no decoded
 heading gets the disc, the same as in the picture. It takes the aircraft's own
-colour on every strip, the selected one included, because reading the board
-and reading the scope are meant to be the same act of recognition.
+colour on every strip, the selected one included, because reading the board and
+reading the scope are meant to be the same act of recognition.
 
-Altitude gets its figure and its triangle set in that aircraft's altitude
-band, whichever colour mode is on. That is the one field where a number and a
-colour say the same thing, so the band survives airline mode instead of being
-the price of turning it on.
+Altitude gets its figure and its triangle set in that aircraft's altitude band,
+whichever colour mode is on. That is the one field where a number and a colour
+say the same thing, so the band survives airline mode instead of being the
+price of turning it on.
 
-Every field is sized from the widest value it could hold rather than from
-what is on screen, so a board full of moving numbers stays still and a value
+Every field is sized from the widest value it could hold rather than from what
+is on screen, so a board full of moving numbers stays still and a value
 climbing through a digit never nudges its neighbour. As the column narrows,
 fields are given up whole rather than squeezed, in this order: `POS`, `SEEN`,
-`TRK`, the attitude model, then `GS`. The identity, the level and the range
-are never given up; a column too narrow even for those draws no board at all.
-
-With nothing in the sky the full strip is empty, with `NO TRAFFIC` where the
-callsign goes, and it keeps its height so the column does not change shape
-when the last aircraft leaves range. A pinned aircraft the filter is hiding
-still gets the full strip, with `FILTERED` added to its second line in the
-caution colour, until the filter widens enough to let it back in.
-
-A board longer than the column ends on a muted `+N MORE` line that counts
-everything not on screen.
+`TRK`, the attitude model, then `GS`. The identity, the level and the range are
+never given up; a column too narrow even for those draws no board at all.
 
 Under that, the legend.
 
@@ -472,8 +497,8 @@ there is no strip board anywhere for a ring to refer to.
 ### Hiding the column
 
 `w` takes the right column off the frame, and the picture gets the whole width
-between the header band and the key bar. The count line, the strips and the
-legend go together; the header and the key bar stay exactly where they are,
+between the header band and the key bar. The status line, the panel, the strips
+and the legend go together; the header and the key bar stay exactly where they are,
 and `W WIDE` in the bar shows its green engaged bar while the column is away.
 
 The two views behave differently under it, because they measure the box
@@ -485,8 +510,8 @@ binding comes out proportionally larger and everything on the ground grows
 with it.
 
 The selection keys keep working with the column away, and so does the filter.
-The scope still shows which aircraft is selected; what is gone is the block
-that said anything about it, and the count line that went with the board.
+The scope still shows which aircraft is selected, and its tag still says what
+that aeroplane is doing; what is gone is the panel and the board under it.
 
 There is no flag for it. Hiding the figures is something you do while looking
 at the scope rather than something you decide before the program starts. The
@@ -505,8 +530,8 @@ the colours carry until asked otherwise.
 
 `airline` paints each aircraft in its operator's own colour instead, taken from
 the 409 designators in [pkg/airlines](pkg/airlines/README.md). The silhouette,
-the trail and the callsign match on every strip an aircraft appears on, full
-or half, so one glance ties the dot to the strip. An aircraft with no
+the trail and the callsign match on the panel and on the strip, so one glance
+ties the dot to the list. An aircraft with no
 callsign, or one whose
 three-letter prefix is not in the database, is drawn muted. The legend then
 names the four operators with the most aircraft on the field, and adds `OTHER`
@@ -558,9 +583,10 @@ transmitting, so there is no live aircraft left to test against a band or a
 callsign, only a last reading that could be any age, and hiding a track on a
 reading that old would be a decision nobody watching the scope could check.
 
-The count line above the board says which state you are in: `81 AIRCRAFT` at
-`ALL`, `12 OF 81 AIRCRAFT` while a filter is on, so a short board under a
-filter reads as the filter doing its job rather than as a quiet sky. The
+The status line above the panel says which state you are in: `SEL 07 · 81
+AIRCRAFT` at `ALL`, `SEL 07 · 12 OF 81 AIRCRAFT` while a filter is on, so a
+short board under a filter reads as the filter doing its job rather than as a
+quiet sky. The
 legend marks its own place in this too: whichever entry the filter is on gets
 a ring around its swatch, drawn outside it in the reading ink, so the legend
 says which of its own rows the scope is showing.
@@ -568,9 +594,11 @@ says which of its own rows the scope is showing.
 Selection follows the same rule as everything else, with one exception for a
 pin. An unpinned selection moves to the nearest aircraft the filter is still
 showing, so it follows the field when a value hides the aircraft it was on. A
-pinned aircraft the filter hides stays selected: it keeps the full strip, with
-`FILTERED` added to its second line in the caution colour, until the filter
-widens enough to let it back in. A pinned aircraft that leaves the list
+pinned aircraft the filter hides stays selected: it keeps the panel, with
+`· FILTERED` after the label in the caution colour and `SEL -- (FILTERED)` on
+the status line, until the filter widens enough to let it back in. It has no
+strip on the board while it is hidden, because the board is the list the filter
+left. A pinned aircraft that leaves the list
 altogether still loses its pin, exactly as it did before the filter existed.
 There is no flag for the filter; it is reachable from `f` and nowhere else,
 the same as the trail modes.
@@ -799,9 +827,9 @@ loads into a virtual terminal. Four faces are compiled into the binary:
 | Face | Size | What it sets |
 |---|---|---|
 | Terminus | 6x12 | labels, unit suffixes, softkey labels |
-| Terminus | 8x16 | body text, the scope tag and the half strips |
-| Terminus Bold | 8x16 | the wordmark, softkey letters and the full strip's figures |
-| Terminus Bold | 16x32 | the clock and the callsign on the full strip |
+| Terminus | 8x16 | body text, the scope tag and the panel's codes |
+| Terminus Bold | 8x16 | the wordmark, softkey letters and the strips' callsigns |
+| Terminus Bold | 16x32 | the clock, the panel's figures, and its callsign at double scale |
 
 They are Debian `console-setup`'s Uni3 builds of Terminus Font, taken byte
 for byte and gzipped as that package ships them. Two of the four are PSF1 and
@@ -1001,7 +1029,7 @@ radar's own cycle through its four views. The pattern scene binds
 nothing, so Esc still quits from it.
 
 Until you choose an aircraft, the selection is the nearest contact, which is
-also the strip already sitting at the top of the board. `n`, `p`, Up and Down
+the first strip on the board. `n`, `p`, Up and Down
 pin it to whatever they land on, and it then stays with that aeroplane by ICAO
 however the distance-sorted order moves under it. Esc lets go again, and so
 does the aircraft leaving the list.

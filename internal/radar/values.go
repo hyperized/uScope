@@ -8,6 +8,8 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/psf"
+	"github.com/hyperized/uScope/pkg/text"
 )
 
 // The small shapes and the stand-in words the flight strips are drawn from.
@@ -114,6 +116,39 @@ func (s *Scene) drawVertMarker(dst *canvas.Canvas, left, top int, rate float64, 
 	dst.FillTriangle(left+half, apex, left, base, left+vertMarker-1, base, col)
 
 	return left + vertMarker + vertGap
+}
+
+// drawTrend marks a climb or a descent after a level and returns the x just
+// past whatever it drew, which is the pen it was handed when the aircraft is
+// neither.
+//
+// The mark is a glyph where the face carries one and the drawn triangle where
+// it does not. Nothing guarantees a console font has U+2191 and U+2193, which
+// is the check the ellipsis went through, and a shape put on the canvas always
+// renders.
+//
+// Both blocks that write a level use it, each in its own face and its own
+// colour: the tag on the scope in the body face beside the reading ink, the
+// selected aircraft's panel in the large one beside the altitude band. One
+// function rather than two, because a panel showing a climb the tag has no
+// arrow on would be the same aeroplane contradicting itself on one screen.
+func (s *Scene) drawTrend(
+	dst *canvas.Canvas, face *psf.Font, pen, top int, rate float64, ink color.RGBA,
+) int {
+	if level(rate) {
+		return pen
+	}
+
+	glyph, mark := tagClimb, climbRune
+	if rate < 0 {
+		glyph, mark = tagDescend, descendRune
+	}
+
+	if _, has := face.Glyph(mark); has {
+		return text.Draw(dst, face, pen, top, glyph, ink)
+	}
+
+	return s.drawVertMarker(dst, pen, top, rate, ink)
 }
 
 // arrowWidth is the room the direction arrow takes beside a figure, the gap

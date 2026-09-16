@@ -55,14 +55,31 @@ const (
 	// small hollow circle. Radius 2 is five pixels across.
 	noHeadingRadius = 2
 
-	// selectionRadius is the ring around the selected aircraft, and leaderRun
-	// how far up and to the right its tag sits.
+	// selectionRadius is the ring around the selected aircraft, leaderFoot
+	// where on that ring the leader line starts, and leaderRun how far up and
+	// to the right its tag sits.
+	//
+	// The foot is eight because the leader leaves the ring on the diagonal, and
+	// eight pixels along both axes is a hair over eleven from the centre. It
+	// used to be half the radius, which drew the first four pixels of the
+	// leader across the inside of the ring it was meant to start on.
 	selectionRadius = 11
+	leaderFoot      = 8
 	leaderRun       = 20
 
 	// tagLines is how many lines the selected aircraft's tag carries: who it
 	// is, what it is doing, and where it is from here.
 	tagLines = 3
+
+	// tagLead is the pitch between two lines of the tag.
+	//
+	// It is twelve rather than the body face's own sixteen. A tag is a block
+	// to take in at once and the leading a paragraph needs pulls it apart on a
+	// field of aircraft; twelve is what the data block in the study is set at.
+	// Nothing collides at that pitch because a tag carries capitals, digits
+	// and two arrows and no descenders, and Terminus draws all of those inside
+	// the middle twelve rows of its sixteen-row cell.
+	tagLead = 12
 
 	// tagLevelPerFoot is how many feet one step of the level is worth.
 	// Hundreds of feet is how a controller says an altitude, and three digits
@@ -819,14 +836,13 @@ func knownHeading(heading float64) bool {
 }
 
 // drawSelection rings the selected aircraft and hangs its data block off a
-// leader line, so the strips in the column and the contact on the scope are
-// obviously the same aeroplane. Both bare views skip it.
+// leader line, so the panel at the top of the column and the contact on the
+// scope are obviously the same aeroplane. Both bare views skip it.
 //
 // The tag replaced a bare callsign. A callsign says which aeroplane the ring is
 // round and nothing else, so reading what it was doing meant looking away from
-// the scope to find its strip. Three lines is what a radar tag has carried
-// since they were written in grease pencil, and it answers the question where
-// the question is being asked.
+// the scope to find it in the column. The block answers the question where the
+// question is being asked.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawSelection(
@@ -836,7 +852,7 @@ func (s *Scene) drawSelection(
 	dst.Circle(x, y, selectionRadius, s.pal.Accent)
 
 	endX, endY := x+leaderRun, y-leaderRun
-	dst.Line(x+selectionRadius/2, y-selectionRadius/2, endX, endY, s.pal.Accent)
+	dst.Line(x+leaderFoot, y-leaderFoot, endX, endY, s.pal.Accent)
 
 	if !lay.labels || s.faces.Body == nil {
 		return
@@ -847,24 +863,27 @@ func (s *Scene) drawSelection(
 
 // drawTag writes the selected aircraft's data block on the end of the leader.
 //
-// Line one is who it is, line two what it is doing now, line three where it is
-// from here. All three are set in the accent, because the tag is the selection
-// and the selection is one thing: split across three colours it would read as
-// three facts to reconcile rather than as one block to take in at a glance.
+// Three lines, the way a radar controller's label has read since they were
+// written in grease pencil: who it is, what it is doing, and where it is from
+// here. Each line has a colour of its own and that is the whole of the design.
+// The callsign wears the accent, because the accent means the operator picked
+// this one. The level and the speed are readings about an aeroplane and take
+// the reading ink. The range and the bearing are the quietest pair of the six
+// figures and go muted, so the eye lands on the middle line first.
 //
-// The lines stack upward from the leader's end, so the whole block sits above
-// and to the right of the contact and clear of the ring round it, whatever the
-// traffic underneath is doing.
+// The lines stack upward from the leader's end, which puts the block's
+// lower-left corner where the leader arrives and the whole of it above and to
+// the right of the contact, clear of the ring, whatever the traffic underneath
+// is doing.
 func (s *Scene) drawTag(
 	dst *canvas.Canvas, left, bottom int, plane airplane.Snapshot, receiver source.Receiver,
 ) {
-	step := lineHeight(s.faces.Body)
-	top := bottom - tagLines*step
+	top := bottom - tagLines*tagLead
 
-	text.Draw(dst, s.faces.Body, left, top, clip(callsignOf(plane), maxCallsign), s.pal.Accent)
+	text.Draw(dst, s.faces.BodyBold, left, top, clip(callsignOf(plane), maxCallsign), s.pal.Accent)
 
-	s.drawTagState(dst, left, top+step, plane)
-	s.drawTagWhere(dst, left, top+2*step, plane, receiver)
+	s.drawTagState(dst, left, top+tagLead, plane)
+	s.drawTagWhere(dst, left, top+2*tagLead, plane, receiver)
 }
 
 // drawTagState is the tag's middle line: the level in hundreds of feet with the
@@ -876,44 +895,19 @@ func (s *Scene) drawTag(
 func (s *Scene) drawTagState(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
 	face := s.faces.Body
 
-	pen := drawBytes(dst, face, left, top, s.flightLevel(plane.Altitude), s.pal.Accent)
-	pen = s.drawTagTrend(dst, pen, top, plane.VertRate)
-	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Accent)
+	pen := drawBytes(dst, face, left, top, s.flightLevel(plane.Altitude), s.pal.Ink)
+	pen = s.drawTrend(dst, face, pen, top, plane.VertRate, s.pal.Ink)
+	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Ink)
 
-	drawBytes(dst, face, pen, top, s.speed(plane.Velocity), s.pal.Accent)
-}
-
-// drawTagTrend marks a climb or a descent after the level and returns the x
-// just past whatever it drew, which is the level itself when the aircraft is
-// neither.
-//
-// The arrow is a glyph where the face carries one and the flight strips' own
-// drawn triangle where it does not. Nothing guarantees a console font has
-// U+2191 and U+2193, which is the check the ellipsis went through, and a shape
-// put on the canvas always renders.
-func (s *Scene) drawTagTrend(dst *canvas.Canvas, pen, top int, rate float64) int {
-	if level(rate) {
-		return pen
-	}
-
-	glyph, mark := tagClimb, climbRune
-	if rate < 0 {
-		glyph, mark = tagDescend, descendRune
-	}
-
-	if _, has := s.faces.Body.Glyph(mark); has {
-		return text.Draw(dst, s.faces.Body, pen, top, glyph, s.pal.Accent)
-	}
-
-	return s.drawVertMarker(dst, pen, top, rate, s.pal.Accent)
+	drawBytes(dst, face, pen, top, s.speed(plane.Velocity), s.pal.Ink)
 }
 
 // drawTagWhere is the tag's bottom line: how far the aircraft is from the
 // receiver and on what bearing.
 //
-// It repeats what the selected strip's own DIST and BRG fields say, on purpose.
+// It repeats what the selected aircraft's panel in the column says, on purpose.
 // The tag exists so the scope can be read without looking away from it, and the
-// pair of figures that place a contact against the antenna is the pair worth
+// pair of figures that places a contact against the antenna is the pair worth
 // having in both places.
 func (s *Scene) drawTagWhere(
 	dst *canvas.Canvas, left, top int, plane airplane.Snapshot, receiver source.Receiver,
@@ -922,17 +916,17 @@ func (s *Scene) drawTagWhere(
 
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 
-	pen := drawBytes(dst, face, left, top, s.distance(away), s.pal.Accent)
-	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Accent)
+	pen := drawBytes(dst, face, left, top, s.distance(away), s.pal.Muted)
+	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Muted)
 
 	bearing, known := bearingTo(receiver, plane)
 	if !known {
-		text.Draw(dst, face, pen, top, detailUnknown, s.pal.Accent)
+		text.Draw(dst, face, pen, top, detailUnknown, s.pal.Muted)
 
 		return
 	}
 
-	drawBytes(dst, face, pen, top, s.degrees(bearing), s.pal.Accent)
+	drawBytes(dst, face, pen, top, s.degrees(bearing), s.pal.Muted)
 }
 
 // callsignOf is the callsign, or the ICAO hex when no callsign has been

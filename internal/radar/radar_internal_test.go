@@ -1994,14 +1994,13 @@ func TestDrawStripLevelUsesTheBand(t *testing.T) {
 // TestDrawStripsRefusesAColumnTooShortForOneFullStrip checks the second of
 // drawStrips's two early returns (TestPlanStrips already covers the other, a
 // column too narrow for even the identity, the level and the range): a column
-// with all the width it needs but not enough height for the count line plus
-// one full strip draws nothing, rather than clipping the selected strip's own
-// three rows half-drawn.
+// with all the width it needs but not enough height for the row of field names
+// plus one strip draws nothing, rather than clipping a strip half-drawn.
 //
 // The width is set deliberately generous so only the height guard is under
 // test; a column that width would draw every field on the board given the
 // room.
-func TestDrawStripsRefusesAColumnTooShortForOneFullStrip(t *testing.T) {
+func TestDrawStripsRefusesAColumnTooShortForTheBoard(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -2017,7 +2016,7 @@ func TestDrawStripsRefusesAColumnTooShortForOneFullStrip(t *testing.T) {
 		Receiver: source.Receiver{Latitude: coordinateSampleLat, Longitude: stripsLon},
 	}
 
-	need := lineHeight(scene.faces.Small) + rowLead + scene.fullStripHeight()
+	need := scene.boardHeadHeight() + scene.halfStripHeight()
 
 	draw := func(bottom int) int {
 		canv, err := canvas.New(stripsColumnWidth, bottom+stripsMargin)
@@ -2033,18 +2032,18 @@ func TestDrawStripsRefusesAColumnTooShortForOneFullStrip(t *testing.T) {
 	}
 
 	if got := draw(need - 1); got != 0 {
-		t.Errorf("a column one pixel short of the count line plus one full strip painted %d pixels, want none", got)
+		t.Errorf("a column one pixel short of the field names plus one strip painted %d pixels, want none", got)
 	}
 
 	if got := draw(need); got == 0 {
-		t.Error("a column exactly tall enough for the count line plus one full strip painted nothing")
+		t.Error("a column exactly tall enough for the field names plus one strip painted nothing")
 	}
 }
 
-// TestDrawStripCountRefusesWhenTooNarrow checks the count line's own early
+// TestDrawStripStatusRefusesWhenTooNarrow checks the status line's own early
 // return: a column narrower than the words it has to carry draws nothing
-// rather than running the count past the board's own right edge.
-func TestDrawStripCountRefusesWhenTooNarrow(t *testing.T) {
+// rather than running the count past the column's own right edge.
+func TestDrawStripStatusRefusesWhenTooNarrow(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -2054,7 +2053,7 @@ func TestDrawStripCountRefusesWhenTooNarrow(t *testing.T) {
 	)
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
-	widest := measureTracked(scene.faces.Small, widestCount)
+	widest := measureTracked(scene.faces.Small, widestStatus)
 
 	draw := func(right int) int {
 		canv, err := canvas.New(right+1, countCanvasHeight)
@@ -2064,17 +2063,17 @@ func TestDrawStripCountRefusesWhenTooNarrow(t *testing.T) {
 
 		canv.Clear(theme.Night.Field)
 		col := &layout{dst: canv, left: 0, right: right, top: 0, bottom: countCanvasHeight}
-		scene.drawStripCount(col, countShown, countTotal)
+		scene.drawStripStatus(col, selection{}, countShown, countTotal)
 
 		return filterPainted(canv)
 	}
 
 	if got := draw(widest - 1); got != 0 {
-		t.Errorf("a column one pixel narrower than the count line painted %d pixels, want none", got)
+		t.Errorf("a column one pixel narrower than the status line painted %d pixels, want none", got)
 	}
 
 	if got := draw(widest); got == 0 {
-		t.Error("a column exactly as wide as the count line painted nothing")
+		t.Error("a column exactly as wide as the status line painted nothing")
 	}
 }
 
@@ -2234,13 +2233,20 @@ func TestDrawTagTrend(t *testing.T) {
 		return canv
 	}
 
+	// trend is one call to the shared mark drawer at the pen and top every case
+	// here uses, in the scene's own body face and in the accent, so a case says
+	// which rate it is about and nothing else.
+	trend := func(scene *Scene, canv *canvas.Canvas, rate float64) int {
+		return scene.drawTrend(canv, scene.faces.Body, trendPenX, trendTopY, rate, theme.Night.Accent)
+	}
+
 	t.Run("level draws no arrow and returns the pen unchanged", func(t *testing.T) {
 		t.Parallel()
 
 		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
 
-		if got := scene.drawTagTrend(newCanvas(t), trendPenX, trendTopY, 0); got != trendPenX {
-			t.Errorf("drawTagTrend(level) pen = %d, want %d unchanged", got, trendPenX)
+		if got := trend(scene, newCanvas(t), 0); got != trendPenX {
+			t.Errorf("drawTrend(level) pen = %d, want %d unchanged", got, trendPenX)
 		}
 	})
 
@@ -2250,12 +2256,12 @@ func TestDrawTagTrend(t *testing.T) {
 		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
 		canv := newCanvas(t)
 
-		if got := scene.drawTagTrend(canv, trendPenX, trendTopY, trendClimbRate); got <= trendPenX {
-			t.Errorf("drawTagTrend(climbing) pen = %d, want more than %d", got, trendPenX)
+		if got := trend(scene, canv, trendClimbRate); got <= trendPenX {
+			t.Errorf("drawTrend(climbing) pen = %d, want more than %d", got, trendPenX)
 		}
 
 		if colourCount(canv, canv.Bounds(), theme.Night.Accent) == 0 {
-			t.Error("drawTagTrend(climbing) painted nothing in the accent colour")
+			t.Error("drawTrend(climbing) painted nothing in the accent colour")
 		}
 	})
 
@@ -2265,12 +2271,12 @@ func TestDrawTagTrend(t *testing.T) {
 		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
 		canv := newCanvas(t)
 
-		if got := scene.drawTagTrend(canv, trendPenX, trendTopY, trendDescendRate); got <= trendPenX {
-			t.Errorf("drawTagTrend(descending) pen = %d, want more than %d", got, trendPenX)
+		if got := trend(scene, canv, trendDescendRate); got <= trendPenX {
+			t.Errorf("drawTrend(descending) pen = %d, want more than %d", got, trendPenX)
 		}
 
 		if colourCount(canv, canv.Bounds(), theme.Night.Accent) == 0 {
-			t.Error("drawTagTrend(descending) painted nothing in the accent colour")
+			t.Error("drawTrend(descending) painted nothing in the accent colour")
 		}
 	})
 
@@ -2281,12 +2287,12 @@ func TestDrawTagTrend(t *testing.T) {
 		canv := newCanvas(t)
 
 		want := trendPenX + vertMarker + vertGap
-		if got := scene.drawTagTrend(canv, trendPenX, trendTopY, trendClimbRate); got != want {
-			t.Errorf("drawTagTrend(no glyph) pen = %d, want %d", got, want)
+		if got := trend(scene, canv, trendClimbRate); got != want {
+			t.Errorf("drawTrend(no glyph) pen = %d, want %d", got, want)
 		}
 
 		if colourCount(canv, canv.Bounds(), theme.Night.Accent) == 0 {
-			t.Error("drawTagTrend(no glyph) painted nothing where the fallback triangle should be")
+			t.Error("drawTrend(no glyph) painted nothing where the fallback triangle should be")
 		}
 	})
 }

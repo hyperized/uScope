@@ -1560,19 +1560,16 @@ func TestPanelVerticalRateTriangle(t *testing.T) {
 }
 
 // stripWindowCapacity is how many aircraft the board draws without needing
-// the "+N MORE" line at the panel's resolution: the selected full strip plus
-// sixteen half strips below it that all fit before the column runs out of
-// room. A seventeenth aircraft still fits at that width (the window only
-// gives up one line's worth of room once the board can no longer show
-// everything), so it takes an eighteenth to force the tail.
-const stripWindowCapacity = 17
+// the "+N MORE" line at the panel's resolution: ten strips fit between the row
+// of field names and the legend, and an eleventh costs the board a strip to
+// pay for the tail line that says so.
+const stripWindowCapacity = 10
 
-// stripListRightBand sits inside the sixteenth half strip's line, in the
-// field only a real aircraft strip fills (POS, SEEN and the rules between
-// every field). The "+N MORE" line is short and left-aligned, so it never
-// reaches this far right: painted pixels here mean a real strip, not the
-// tail.
-var stripListRightBand = image.Rect(1100, 607, 1264, 637) //nolint:gochecknoglobals // a rectangle is data.
+// stripListRightBand sits inside the tenth strip's line, in the fields only a
+// real aircraft strip fills (POS, SEEN and the rules between them). The
+// "+N MORE" line is short and left-aligned, so it never reaches this far
+// right: painted pixels here mean a real strip, not the tail.
+var stripListRightBand = image.Rect(1100, 585, 1264, 611) //nolint:gochecknoglobals // a rectangle is data.
 
 // TestRowListMoreLine checks the window boundary the "+N MORE" line closes: a
 // fleet exactly the size of the board's capacity leaves a real strip on the
@@ -3353,33 +3350,35 @@ func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
 //
 //nolint:gochecknoglobals // rectangles are data, and image.Rectangle cannot be const.
 var (
-	rowBearingDigits = image.Rect(1008, 108, 1042, 140)
-	rowBearingArrow  = image.Rect(1058, 108, 1070, 140)
+	rowBearingDigits = image.Rect(1010, 316, 1074, 340)
+	rowBearingArrow  = image.Rect(1074, 316, 1090, 340)
 )
 
-// cardTrackArrow is the selected strip's TRK field to the right of its
-// degrees, which is where the arrow goes and where nothing else is ever
-// drawn. It carries the same fill-background caveat as the two boxes above.
+// rowTrackArrow is the first strip's TRK field to the right of its degrees,
+// which is where the needle goes and where nothing else is ever drawn.
+//
+// The selected aircraft's panel above the board writes the same course and
+// draws no needle beside it. The block already carries one, on the bearing,
+// and a second eight pixels away would read as a pair of directions to
+// reconcile rather than as one to fly.
 //
 //nolint:gochecknoglobals // ditto.
-var cardTrackArrow = image.Rect(979, 108, 989, 140)
+var rowTrackArrow = image.Rect(978, 316, 993, 340)
 
 // stripFillerPlane is a decoy aircraft that always sits first in a frame's
-// plane list, so it takes the selected full strip and whatever is listed
-// after it lands on a half strip instead: plain field background, with none
-// of the selected strip's fill behind it.
+// plane list, so it takes the selection and whatever is listed after it lands
+// on the second strip down, clear of the accent edge the first one wears.
 func stripFillerPlane() airplane.Snapshot {
 	return scenePlane("AAA111", "FILLER1", 0, 5, 2000, 10)
 }
 
-// fullStripAttitudeCell is the little aeroplane at the right end of the
-// selected strip's ident field, and stripAttitudeCell the same cell one row
-// down, on the half strip a second aircraft in the frame lands on.
+// firstStripAttitudeCell is the little aeroplane at the right end of the first
+// strip's ident field, and stripAttitudeCell the same cell one strip down.
 //
 //nolint:gochecknoglobals // ditto.
 var (
-	fullStripAttitudeCell = image.Rect(794, 113, 818, 137)
-	stripAttitudeCell     = image.Rect(794, 160, 818, 184)
+	firstStripAttitudeCell = image.Rect(798, 316, 822, 340)
+	stripAttitudeCell      = image.Rect(798, 346, 822, 370)
 )
 
 // The identity the single-aircraft fixtures below fly under. They are the demo
@@ -3762,12 +3761,12 @@ func TestRowBearingWithoutAPositionDrawsNoArrow(t *testing.T) {
 	}
 }
 
-// TestCardTrackArrowTurnsWithTheHeading is the same check on the panel's
-// TRACK line, which carries the course the aircraft is flying rather than the
-// bearing it sits at. The unknown case is in the same table, because the
-// panel writing TRACK --- and drawing an arrow beside it would be the one
-// aircraft contradicting itself on one screen.
-func TestCardTrackArrowTurnsWithTheHeading(t *testing.T) {
+// TestRowTrackArrowTurnsWithTheHeading is the same check on a strip's TRK
+// field, which carries the course the aircraft is flying rather than the
+// bearing it sits at. The unknown case is in the same table, because a strip
+// writing TRK --- and drawing a needle beside it would be the one aircraft
+// contradicting itself on one screen.
+func TestRowTrackArrowTurnsWithTheHeading(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -3789,16 +3788,16 @@ func TestCardTrackArrowTurnsWithTheHeading(t *testing.T) {
 		sceneFrame(scenePlane(icaoSample, callsignSample, 45, nearNm, 2400, undecoded)))
 	unknown.Draw(unknownCanvas, 0)
 
-	if countColour(northCanvas, cardTrackArrow, theme.Night.Ink) == 0 {
-		t.Error("the TRACK line drew no arrow for a heading of due north")
+	if countColour(northCanvas, rowTrackArrow, theme.Night.Ink) == 0 {
+		t.Error("the TRK field drew no needle for a heading of due north")
 	}
 
-	if identicalIn(northCanvas, eastCanvas, cardTrackArrow) {
-		t.Error("the TRACK arrow is the same picture at 000 and at 090, want it turned to the heading")
+	if identicalIn(northCanvas, eastCanvas, rowTrackArrow) {
+		t.Error("the TRK needle is the same picture at 000 and at 090, want it turned to the heading")
 	}
 
-	if got := countColour(unknownCanvas, cardTrackArrow, theme.Night.Ink); got != 0 {
-		t.Errorf("TRACK --- drew %d arrow pixels, want none", got)
+	if got := countColour(unknownCanvas, rowTrackArrow, theme.Night.Ink); got != 0 {
+		t.Errorf("TRK --- drew %d needle pixels, want none", got)
 	}
 }
 

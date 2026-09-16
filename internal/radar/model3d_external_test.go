@@ -128,8 +128,8 @@ func TestRowAttitudeTakesTheAircraftColour(t *testing.T) {
 		name string
 		box  image.Rectangle
 	}{
-		{name: "the selected strip", box: fullStripAttitudeCell},
-		{name: "a half strip", box: stripAttitudeCell},
+		{name: "the selected strip", box: firstStripAttitudeCell},
+		{name: "an unselected strip", box: stripAttitudeCell},
 	} {
 		if got := countColour(canv, testCase.box, theme.Night.AltHigh); got == 0 {
 			t.Errorf("%s drew no %v pixels, want the aircraft's own band colour", testCase.name, theme.Night.AltHigh)

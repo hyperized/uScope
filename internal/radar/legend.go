@@ -15,11 +15,6 @@ import (
 // The right column's fixed strings and the caps on what is drawn from a decoded
 // field.
 const (
-	// filteredTag closes the selected strip's second line while the filter is
-	// hiding the aircraft that strip is about. It carries its own separator so
-	// it can be drawn straight after whatever came before it.
-	filteredTag = " / FILTERED"
-
 	squawkPrefix = "SQ "
 
 	// distanceDecimals is one place. A tenth of a nautical mile is about 180
@@ -63,17 +58,18 @@ type legendEntry struct {
 // drawColumn fills the right-hand column.
 //
 // The legend takes its room off the bottom first, because it is the one block
-// there with a fixed height; the flight strips get everything left over, which
+// there with a fixed height. The status line and the selected aircraft's panel
+// then take theirs off the top, and the board gets everything left over, which
 // is what fills the column at any height.
 //
-// The order the two are called in is the order they claim space, not the order
-// they appear on screen. Reading down the frame it is the aircraft count, the
-// selected flight's strip, the half strips under it and then the legend.
+// The order the blocks are called in is the order they claim space, not the
+// order they appear on screen. Reading down the frame it is the status line,
+// the panel, the row of field names, the strips, and the legend.
 //
 // An empty column is the answer on a canvas too narrow to hold one and on a
 // scope the w key has widened, and there is nothing to draw either way. The
-// count goes with the strips in the second case: it sits on their own line, and
-// a filter is still legible from the F softkey in the bar.
+// status line goes with the rest in that case: a filter is still legible from
+// the F softkey in the bar.
 func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	if lay.column.Empty() {
 		return
@@ -89,6 +85,13 @@ func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	}
 
 	s.drawLegend(&col)
+
+	sel := s.selectedPlane(frame)
+
+	s.drawStripStatus(&col, sel, s.shownPlanes(), len(frame.Planes))
+	col.top += lineHeight(s.faces.Small) + rowLead
+
+	s.drawCard(&col, frame, sel)
 	s.drawStrips(&col, frame)
 }
 

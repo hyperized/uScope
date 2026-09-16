@@ -608,21 +608,21 @@ func TestAutoRangeSkipsFilteredAircraft(t *testing.T) {
 	}
 }
 
-// TestDrawStripCountShowsTheFilterHeld checks what the line above the board
-// actually paints: "2 AIRCRAFT" at ALL, "1 OF 2 AIRCRAFT" once a filter is
-// active, so a short board under a filter reads as the filter doing its job
-// rather than as a quiet sky.
+// TestDrawStripStatusShowsTheFilterHeld checks what the line above the panel
+// actually paints: "SEL -- \u00b7 2 AIRCRAFT" at ALL, "SEL -- \u00b7 1 OF 2 AIRCRAFT"
+// once a filter is active, so a short board under a filter reads as the filter
+// doing its job rather than as a quiet sky.
 //
-// It calls drawStripCount directly on a layout of its own rather than through
-// a full Draw, because the board's own field headers share the column with it
-// and would sit close enough to anything measured out of the whole panel to
-// make the two hard to tell apart by counting pixels alone.
-func TestDrawStripCountShowsTheFilterHeld(t *testing.T) {
+// It calls drawStripStatus directly on a layout of its own rather than through
+// a full Draw, because the panel and the board share the column with it and
+// would sit close enough to anything measured out of the whole frame to make
+// the three hard to tell apart by counting pixels alone.
+func TestDrawStripStatusShowsTheFilterHeld(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
 
-	canv, err := canvas.New(300, 20)
+	canv, err := canvas.New(420, 20)
 	if err != nil {
 		t.Fatalf("canvas.New: %v", err)
 	}
@@ -630,21 +630,21 @@ func TestDrawStripCountShowsTheFilterHeld(t *testing.T) {
 	const (
 		shown = 1
 		total = 2
-		right = 280
+		right = 400
 	)
 
 	col := &layout{dst: canv, left: 0, right: right, top: 0, bottom: 20}
 
 	draw := func() int {
 		canv.Clear(theme.Night.Field)
-		scene.drawStripCount(col, shown, total)
+		scene.drawStripStatus(col, selection{}, shown, total)
 
 		return filterPainted(canv)
 	}
 
 	plain := draw()
 	if plain == 0 {
-		t.Fatal(`drawStripCount at ALL painted nothing, want "2 AIRCRAFT"`)
+		t.Fatal(`drawStripStatus at ALL painted nothing, want "SEL -- 2 AIRCRAFT"`)
 	}
 
 	scene.filter = filterState{kind: filterBand, band: bandLow}
@@ -683,11 +683,11 @@ func TestMarkLegendEntryDrawsNothingUnmarked(t *testing.T) {
 	}
 }
 
-// TestDrawStripCodesShowsTheFilteredTag checks the one thing sel.hidden adds
-// to the selected strip's second line: the extra " / FILTERED" after the
-// squawk, in the caution colour. The same line with nothing hidden must not
-// pick the tag up on its own.
-func TestDrawStripCodesShowsTheFilteredTag(t *testing.T) {
+// TestDrawCardLabelShowsTheFilteredTag checks the one thing sel.hidden adds to
+// the word over the selected aircraft's panel: the extra " \u00b7 FILTERED" after
+// it, in the caution colour. The same label with nothing hidden must not pick
+// the tag up on its own.
+func TestDrawCardLabelShowsTheFilteredTag(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
@@ -697,21 +697,28 @@ func TestDrawStripCodesShowsTheFilteredTag(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	plane := airplane.Snapshot{ICAO: icaoFirst}
-
-	draw := func(sel selection) int {
+	draw := func(sel selection) (int, int) {
 		canv.Clear(theme.Night.Field)
-		scene.drawStripCodes(stripPen{dst: canv}, 0, plane, sel)
+		scene.drawCardLabel(canv, 0, 0, sel)
 
-		return filterPainted(canv)
+		return filterPainted(canv), colourCount(canv, canv.Bounds(), theme.Night.Caution)
 	}
 
-	plain := draw(selection{})
-	hidden := draw(selection{hidden: true})
+	plain, plainAmber := draw(selection{})
+
+	hidden, hiddenAmber := draw(selection{hidden: true})
 
 	if hidden <= plain {
 		t.Errorf("pixels painted with the FILTERED tag = %d, without it = %d, want more with the tag",
 			hidden, plain)
+	}
+
+	if plainAmber != 0 {
+		t.Errorf("an unfiltered label painted %d caution pixels, want none", plainAmber)
+	}
+
+	if hiddenAmber == 0 {
+		t.Error("the FILTERED tag painted nothing in the caution colour")
 	}
 }
 

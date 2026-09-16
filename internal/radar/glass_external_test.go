@@ -16,6 +16,21 @@ import (
 const (
 	keyWide   = 'w'
 	keyFilter = 'f'
+	keyNext   = 'n'
+)
+
+// The two cursor pictures: how far down the demo fleet the first one steps,
+// and how big the synthetic list behind the second is and how far down that
+// one steps.
+//
+// The long list is deliberately far more aircraft than the board can hold and
+// the selection deliberately well past the top of it, so the picture shows the
+// window doing its job: a "+N ABOVE" line, a "+N MORE" line, and the marked
+// strip a third of the way down between them.
+const (
+	cursorStep     = 6
+	longFleetSize  = 40
+	longCursorStep = 24
 )
 
 // TestGlassRenderPNG writes one picture of every part of the glass grammar to
@@ -55,6 +70,27 @@ func TestGlassRenderPNG(t *testing.T) {
 	// render, and the picture would prove nothing.
 	requireEmergencyIsNearest(t)
 	writeGlassPNG(t, dir, "glass-strips-emergency.png", radar.Settings{}, night, nil)
+
+	// The cursor. Six presses of n walk the selection to the seventh aircraft
+	// in the demo fleet, which is far enough down the board to show the mark
+	// travelling rather than the list being re-ordered around it.
+	writeGlassPNG(t, dir, "glass-strips-cursor.png", radar.Settings{}, night, steps(cursorStep))
+
+	// The same cursor on a list four times the board's height, so both +N
+	// lines are on screen at once.
+	writeFleetPNG(t, dir, "glass-strips-cursor-long.png",
+		sceneFrame(rowFleet(longFleetSize)...), night, steps(longCursorStep))
+}
+
+// steps is n pressed count times, which is how the pictures above walk the
+// selection down the board.
+func steps(count int) []rune {
+	presses := make([]rune, 0, count)
+	for range count {
+		presses = append(presses, keyNext)
+	}
+
+	return presses
 }
 
 // requireEmergencyIsNearest checks the demo fleet still opens with the
@@ -106,6 +142,36 @@ func writeGlassPNG(
 
 	scene := radar.New(testFaces(tb), demo, scope.New(), opts...)
 	scene.Apply(set)
+	drawWithKeys(tb, scene, canv, name, presses)
+	savePNG(tb, dir, name, canv)
+}
+
+// writeFleetPNG is writeGlassPNG over a frame a test built rather than over
+// the demo fleet, which is what the long-list picture needs: the demo has a
+// dozen aircraft and the window only shows its edges past forty.
+func writeFleetPNG(
+	tb testing.TB, dir, name string, frame source.Frame, opts []radar.Option, presses []rune,
+) {
+	tb.Helper()
+
+	canv, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	scene := radar.New(testFaces(tb), &fakeSource{frame: frame}, scope.New(scope.WithCurrent(sceneRangeNm)), opts...)
+	drawWithKeys(tb, scene, canv, name, presses)
+	savePNG(tb, dir, name, canv)
+}
+
+// drawWithKeys draws one frame, sends the keys, and draws again.
+//
+// The keys go after a frame rather than before it for the reason writeFilterPNG
+// sends its own that way: both the filter and the selection walk a list the
+// scene only has once a frame has been counted.
+func drawWithKeys(tb testing.TB, scene *radar.Scene, canv *canvas.Canvas, name string, presses []rune) {
+	tb.Helper()
+
 	scene.Draw(canv, 0)
 
 	for _, key := range presses {
@@ -115,5 +181,4 @@ func writeGlassPNG(
 	}
 
 	scene.Draw(canv, 0)
-	savePNG(tb, dir, name, canv)
 }

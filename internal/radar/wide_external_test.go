@@ -29,13 +29,17 @@ var (
 	wideCapBox   = image.Rect(672, 682, 720, 704)
 
 	// columnTypeBox is the column with its first seventy-five pixels left out,
-	// which is where the cases below count the reading colour.
+	// which is where the cases below count the data colour.
 	//
-	// The home marker is set in Ink as well, and once the scope takes the
-	// whole width it sits at the middle of the frame, a few pixels inside the
-	// column's left edge. The strips set type all the way across the column,
-	// so starting past the marker costs nothing and keeps the count about
-	// them.
+	// The data colour rather than the reading ink: the status line and the row
+	// of field names are the only things in the frame below the header that
+	// paint it, and the scope paints it nowhere at all. The selected
+	// aircraft's tag on the scope carries a line in Ink, and once w hands the
+	// scope the whole width that tag lands inside the box a counted Ink pixel
+	// would have to be the column's.
+	//
+	// The seventy-five pixels come off the left for the home marker, which is
+	// set in Ink and sits at the middle of a wide frame.
 	columnTypeBox = image.Rect(700, 77, 1264, 666)
 
 	// wideEngagedBar is the strip along the inside of wideCapBox's bottom
@@ -68,7 +72,7 @@ func TestWideHidesTheColumn(t *testing.T) {
 	scene.Apply(radar.Settings{RangeNm: sceneRangeNm})
 	scene.Draw(canv, 0)
 
-	before := countColour(canv, columnTypeBox, theme.Night.Ink)
+	before := countColour(canv, columnTypeBox, theme.Night.Data)
 	if before == 0 {
 		t.Fatal("the column set no type before w, so this comparison proves nothing")
 	}
@@ -86,8 +90,8 @@ func TestWideHidesTheColumn(t *testing.T) {
 
 	scene.Draw(canv, 0)
 
-	if got := countColour(canv, columnTypeBox, theme.Night.Ink); got != 0 {
-		t.Errorf("the column set %d ink pixels after w, want none", got)
+	if got := countColour(canv, columnTypeBox, theme.Night.Data); got != 0 {
+		t.Errorf("the column set %d data pixels after w, want none", got)
 	}
 
 	if got := canv.Image().RGBAAt(card.X, card.Y); got != theme.Night.Field {
@@ -240,7 +244,7 @@ func TestWide3DCrossesTheColumnBoundary(t *testing.T) {
 		t.Fatalf("the ordinary 3D view drew %d pixels in the column gap, want none", got)
 	}
 
-	if countColour(canv, columnTypeBox, theme.Night.Ink) == 0 {
+	if countColour(canv, columnTypeBox, theme.Night.Data) == 0 {
 		t.Fatal("the column set no type in the 3D view, so this comparison proves nothing")
 	}
 
@@ -254,8 +258,8 @@ func TestWide3DCrossesTheColumnBoundary(t *testing.T) {
 		t.Error("the wide 3D view drew nothing in the column gap, want the ground running through it")
 	}
 
-	if got := countColour(canv, columnTypeBox, theme.Night.Ink); got != 0 {
-		t.Errorf("the column set %d ink pixels in the wide 3D view, want none", got)
+	if got := countColour(canv, columnTypeBox, theme.Night.Data); got != 0 {
+		t.Errorf("the column set %d data pixels in the wide 3D view, want none", got)
 	}
 }
 
