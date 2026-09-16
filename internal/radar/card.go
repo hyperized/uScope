@@ -28,9 +28,8 @@ const (
 	cardLabelSuffix = " / SELECTED FLIGHT"
 	cardNoSelection = "--"
 
-	squawkPrefix   = "SQ "
-	trackPrefix    = "TRACK "
-	trackSeparator = " / "
+	squawkPrefix = "SQ "
+	trackPrefix  = "TRACK "
 
 	// trackUnknown stands in when no heading has been decoded. uAirwaves marks
 	// that with a negative heading, so zero is due north and reads as
@@ -259,8 +258,11 @@ func (s *Scene) drawCardIdentity(dst *canvas.Canvas, box image.Rectangle, plane 
 	s.drawSquawk(dst, box.Max.X, top, plane)
 }
 
-// drawCardTrack writes the course as degrees and the compass point it falls
-// in, because a number alone takes a moment to place and a letter does not.
+// drawCardTrack writes the course as degrees with an arrow turned to it,
+// because a number alone takes a moment to place and a picture does not.
+//
+// The arrow takes the ink the degrees are set in rather than the muted tone
+// the label has. It is the reading, not a label on one.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawCardTrack(dst *canvas.Canvas, x, y int, heading float64) {
@@ -275,8 +277,7 @@ func (s *Scene) drawCardTrack(dst *canvas.Canvas, x, y int, heading float64) {
 	}
 
 	pen = drawBytes(dst, face, pen, y, s.degrees(heading), s.pal.Ink)
-	pen = text.Draw(dst, face, pen, y, trackSeparator, s.pal.Muted)
-	text.Draw(dst, face, pen, y, compass(heading), s.pal.Ink)
+	s.drawArrow(dst, pen+arrowGap, y+lineHeight(face)/2, heading, s.pal.Ink)
 }
 
 // drawSquawk right-aligns the transponder code behind its label, with the

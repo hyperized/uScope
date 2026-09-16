@@ -31,56 +31,14 @@ const (
 	icaoSecond = "BBB222"
 )
 
-// Headings at and around the compass's eight point boundaries, plus the
-// values that arrive off the air rather than off a protractor.
+// The four cardinal headings. They are named rather than written out at each
+// call site so a case reads as a direction instead of as a number.
 const (
-	headingNorth           = 0.0
-	headingBelowNEBoundary = 22.4
-	headingOnNEBoundary    = 22.5
-	headingNE              = 45.0
-	headingEast            = 90.0
-	headingSouth           = 180.0
-	headingWest            = 270.0
-	headingWrapBoundary    = 337.5
-	headingBelowFullTurn   = 359.9
-	headingFullTurn        = 360.0
-	headingTwoFullTurns    = 720.0
-	headingNegative        = -45.0
+	headingNorth = 0.0
+	headingEast  = 90.0
+	headingSouth = 180.0
+	headingWest  = 270.0
 )
-
-func TestCompass(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct {
-		name    string
-		heading float64
-		want    string
-	}{
-		{name: "exactly north", heading: headingNorth, want: "N"},
-		{name: "just under the NE boundary stays north", heading: headingBelowNEBoundary, want: "N"},
-		{name: "exactly on the NE boundary", heading: headingOnNEBoundary, want: "NE"},
-		{name: "exactly NE", heading: headingNE, want: "NE"},
-		{name: "exactly east", heading: headingEast, want: "E"},
-		{name: "exactly south", heading: headingSouth, want: "S"},
-		{name: "exactly west", heading: headingWest, want: "W"},
-		{name: "the wrap boundary rounds forward into north", heading: headingWrapBoundary, want: "N"},
-		{name: "just under a full turn", heading: headingBelowFullTurn, want: "N"},
-		{name: "exactly a full turn", heading: headingFullTurn, want: "N"},
-		{name: "two full turns", heading: headingTwoFullTurns, want: "N"},
-		{name: "a negative heading wraps backward", heading: headingNegative, want: "NW"},
-		{name: "NaN reads as north rather than panicking", heading: math.NaN(), want: "N"},
-		{name: "positive infinity reads as north", heading: math.Inf(1), want: "N"},
-		{name: "negative infinity reads as north", heading: math.Inf(-1), want: "N"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := compass(testCase.heading); got != testCase.want {
-				t.Errorf("compass(%v) = %q, want %q", testCase.heading, got, testCase.want)
-			}
-		})
-	}
-}
 
 // Boundary values shared by the number formatters below: either side of a
 // thousands separator, and the sentinel uAirwaves uses for an unknown value.
@@ -1558,37 +1516,6 @@ func TestScenePlace(t *testing.T) {
 			scene := &Scene{}
 			if got := string(scene.place(testCase.value, 'N', 'S')); got != testCase.want {
 				t.Errorf("place(%v, 'N', 'S') = %q, want %q", testCase.value, got, testCase.want)
-			}
-		})
-	}
-}
-
-// TestSceneBearing checks the one-field bearing the compact rows right-align
-// as a unit: three digits, a separator, the compass point.
-func TestSceneBearing(t *testing.T) {
-	t.Parallel()
-
-	const (
-		bearingWestSample  = 264.0
-		bearingNorthSample = 359.0
-	)
-
-	for _, testCase := range []struct {
-		name  string
-		value float64
-		want  string
-	}{
-		{name: caseZero, value: headingNorth, want: "000 / N"},
-		{name: "west", value: bearingWestSample, want: "264 / W"},
-		{name: "just under the wrap, still reads north", value: bearingNorthSample, want: "359 / N"},
-		{name: "north-east", value: headingNE, want: "045 / NE"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			scene := &Scene{}
-			if got := string(scene.bearing(testCase.value)); got != testCase.want {
-				t.Errorf("bearing(%v) = %q, want %q", testCase.value, got, testCase.want)
 			}
 		})
 	}
@@ -3261,36 +3188,41 @@ func TestKnownHeading(t *testing.T) {
 	}
 }
 
-// TestTrailAlpha checks both halves of the trail's fade: the default ramp from
-// tail to head, and --no-decay flattening it to the head's own strength.
-func TestTrailAlpha(t *testing.T) {
+// TestTrailFade checks both halves of the trail's shading: the floor
+// --no-decay and the fade disagree about, and the ramp segmentAlpha runs from
+// that floor up to the head.
+func TestTrailFade(t *testing.T) {
 	t.Parallel()
 
 	const span = 4.0
 
-	fading := &Scene{}
-	flat := &Scene{noDecay: true}
+	if got := (&Scene{noDecay: true}).trailFloor(); got != trailMaxAlpha {
+		t.Errorf("no-decay trailFloor() = %v, want %v", got, trailMaxAlpha)
+	}
+
+	if got := (&Scene{}).trailFloor(); got != trailMinAlpha {
+		t.Errorf("trailFloor() = %v, want %v", got, trailMinAlpha)
+	}
 
 	for index := range int(span) + 1 {
-		got := flat.trailAlpha(index, span)
-		if got != trailMaxAlpha {
-			t.Errorf("no-decay trailAlpha(%d, %v) = %v, want %v", index, span, got, trailMaxAlpha)
+		if got := segmentAlpha(trailMaxAlpha, index, span); got != trailMaxAlpha {
+			t.Errorf("segmentAlpha(flat, %d, %v) = %v, want %v", index, span, got, trailMaxAlpha)
 		}
 	}
 
-	tail := fading.trailAlpha(0, span)
-	head := fading.trailAlpha(int(span), span)
+	tail := segmentAlpha(trailMinAlpha, 0, span)
+	head := segmentAlpha(trailMinAlpha, int(span), span)
 
 	if tail != trailMinAlpha {
-		t.Errorf("trailAlpha at the tail = %v, want %v", tail, trailMinAlpha)
+		t.Errorf("segmentAlpha at the tail = %v, want %v", tail, trailMinAlpha)
 	}
 
 	if head != trailMaxAlpha {
-		t.Errorf("trailAlpha at the head = %v, want %v", head, trailMaxAlpha)
+		t.Errorf("segmentAlpha at the head = %v, want %v", head, trailMaxAlpha)
 	}
 
-	if middle := fading.trailAlpha(int(span)/2, span); middle <= tail || middle >= head {
-		t.Errorf("trailAlpha in the middle = %v, want between %v and %v", middle, tail, head)
+	if middle := segmentAlpha(trailMinAlpha, int(span)/2, span); middle <= tail || middle >= head {
+		t.Errorf("segmentAlpha in the middle = %v, want between %v and %v", middle, tail, head)
 	}
 }
 

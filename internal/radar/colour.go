@@ -10,6 +10,7 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/scope"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/airlines"
 )
 
@@ -332,11 +333,27 @@ func outranks(left, right operatorCount) bool {
 // aircraftColour is the colour one aircraft is drawn in: its silhouette, its
 // trail, its callsign on the card and its callsign in the compact rows.
 func (s *Scene) aircraftColour(plane airplane.Snapshot) color.RGBA {
+	return s.contactColour(plane.Altitude, plane.Callsign)
+}
+
+// ghostColour is the colour the trail of a lost aircraft keeps.
+//
+// It is the same rule live traffic is coloured by, read off the last altitude
+// and callsign the aircraft reported. A ghost drawn by some other rule would
+// be a second thing to learn about a field that is already showing a track
+// nobody is flying.
+func (s *Scene) ghostColour(ghost source.Trail) color.RGBA {
+	return s.contactColour(ghost.Altitude, ghost.Callsign)
+}
+
+// contactColour is the rule both of those share: the altitude band, or the
+// operator's own colour in airline mode.
+func (s *Scene) contactColour(altitude float64, callsign string) color.RGBA {
 	if s.colour != ColourAirline {
-		return s.bandColour(plane.Altitude)
+		return s.bandColour(altitude)
 	}
 
-	return s.airlineColour(plane.Callsign)
+	return s.airlineColour(callsign)
 }
 
 // airlineColour is the operator's colour for a callsign.

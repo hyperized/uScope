@@ -2937,3 +2937,439 @@ func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
 		t.Errorf("minimal painted %d pixels with no position to draw against, want 0", got)
 	}
 }
+
+// The first compact row's bearing cell at the panel's resolution, split into
+// the three digits and the arrow that follows them.
+//
+// The numbers are read off a render rather than recomputed here, the same way
+// the row band above them is: the card and the header are sized from font
+// metrics alone, so the first row lands on the same pixels every time.
+//
+//nolint:gochecknoglobals // rectangles are data, and image.Rectangle cannot be const.
+var (
+	rowBearingDigits = image.Rect(1100, 313, 1136, 330)
+	rowBearingArrow  = image.Rect(1136, 313, 1152, 330)
+)
+
+// cardTrackArrow is the panel's TRACK line to the right of its degrees, which
+// is where the arrow goes and where nothing else is ever drawn.
+//
+//nolint:gochecknoglobals // ditto.
+var cardTrackArrow = image.Rect(712, 178, 736, 196)
+
+// The identity the single-aircraft fixtures below fly under. They are the demo
+// fleet's own first aircraft, so a render from a test and a render from --demo
+// hold the same characters in the same columns.
+const (
+	icaoSample     = "484AC1"
+	callsignSample = "KLM123"
+)
+
+// ghostOf is the trail an aircraft leaves behind when it stops transmitting:
+// the history it last showed, with no position and no heading, because there
+// is no longer an aeroplane to have either.
+func ghostOf(plane airplane.Snapshot) source.Trail {
+	return source.Trail{
+		ICAO:     plane.ICAO,
+		Callsign: plane.Callsign,
+		Altitude: plane.Altitude,
+		Points:   plane.PositionHistory,
+	}
+}
+
+// ghostFrame is a frame carrying ghosts and whatever live aircraft go with
+// them.
+func ghostFrame(ghosts []source.Trail, planes ...airplane.Snapshot) source.Frame {
+	frame := sceneFrame(planes...)
+	frame.Ghosts = ghosts
+
+	return frame
+}
+
+// bareScope is the settings a trail test draws under: a fixed range, and the
+// two overlays off so the only thing left on the row being read is a track.
+func bareScope(noDecay bool) radar.Settings {
+	return radar.Settings{
+		RangeNm: sceneRangeNm, NoDecay: noDecay,
+		Airports: radar.ToggleOff, Shore: radar.ToggleOff,
+	}
+}
+
+// trailWindow is the row of the scope the eastbound fixtures project onto and
+// a window along it that clears the home marker at one end and the outer ring
+// at the other.
+func trailWindow() (int, int, int) {
+	const clearance = 20
+
+	return scopeBox.Min.Y + scopeBox.Dy()/2,
+		scopeBox.Min.X + scopeBox.Dx()/2 + clearance,
+		scopeBox.Max.X - clearance
+}
+
+// TestGhostTrailDrawsAtFullStrength is what a ghost is for. The aircraft is
+// gone, so there is no head for a fade to point at, and the whole track is
+// drawn in the colour its last altitude earned it.
+//
+// The fade setting is tried both ways on purpose. A ghost only ever reaches
+// the scene on a run with --no-decay on, but the scene must not be relying on
+// that: the rule is a property of the ghost, not of the flag that produced it.
+func TestGhostTrailDrawsAtFullStrength(t *testing.T) {
+	t.Parallel()
+
+	row, fromX, toX := trailWindow()
+
+	for _, testCase := range []struct {
+		name    string
+		noDecay bool
+	}{
+		{name: "with the fade off", noDecay: true},
+		{name: "with the fade on", noDecay: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := ghostFrame([]source.Trail{ghostOf(eastboundTrail())})
+
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+			scene.Apply(bareScope(testCase.noDecay))
+			scene.Draw(canv, 0)
+
+			run := trailRun(canv, row, fromX, toX)
+			if len(run) < 2 {
+				t.Fatalf("the ghost drew %d pixels on row %d, want a run to read", len(run), row)
+			}
+
+			for index, col := range run {
+				if col != theme.Night.AltLow {
+					t.Fatalf("ghost pixel %d = %v, want the band colour %v at full strength",
+						index, col, theme.Night.AltLow)
+				}
+			}
+		})
+	}
+}
+
+// TestGhostTrailDrawsUnderTheLiveOnes checks the order the two are painted in.
+//
+// The ghost and the aircraft are put on the same fixes and given altitudes in
+// different bands, so the row can only come out one colour or the other. A
+// track nobody is flying must never hide one somebody is.
+func TestGhostTrailDrawsUnderTheLiveOnes(t *testing.T) {
+	t.Parallel()
+
+	row, fromX, toX := trailWindow()
+
+	live := eastboundTrail()
+
+	// The ghost takes the same fixes and a cruising altitude, so it lands on
+	// exactly the same pixels in a colour two bands away from the live one.
+	const ghostAltitude = 36000.0
+
+	ghost := ghostOf(live)
+	ghost.ICAO, ghost.Altitude = "3C6745", ghostAltitude
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, ghostFrame([]source.Trail{ghost}, live))
+	scene.Apply(bareScope(true))
+	scene.Draw(canv, 0)
+
+	run := trailRun(canv, row, fromX, toX)
+	if len(run) < 2 {
+		t.Fatalf("nothing drew on row %d, want both tracks there", row)
+	}
+
+	for index, col := range run {
+		if col == theme.Night.AltHigh {
+			t.Fatalf("pixel %d is the ghost's colour %v, want the live aircraft's %v on top",
+				index, col, theme.Night.AltLow)
+		}
+	}
+}
+
+// TestGhostTrailsGoWithTheTrailToggle checks the two ways the scope ends up
+// with no ghost on it.
+//
+// A ghost is a trail, so the t key has to take it with the rest of them, or
+// the cap would be saying something the scope is not doing. The other way is
+// the ordinary one: a run without --no-decay produces no ghosts at all, and
+// the frame carries none.
+func TestGhostTrailsGoWithTheTrailToggle(t *testing.T) {
+	t.Parallel()
+
+	row, fromX, toX := trailWindow()
+	ghosts := []source.Trail{ghostOf(eastboundTrail())}
+
+	for _, testCase := range []struct {
+		name        string
+		ghosts      []source.Trail
+		hideTrails  bool
+		wantPainted bool
+	}{
+		{name: "a ghost with trails on", ghosts: ghosts, wantPainted: true},
+		{name: "the same ghost with trails off", ghosts: ghosts, hideTrails: true},
+		{name: "a frame that kept no ghosts", ghosts: nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, ghostFrame(testCase.ghosts))
+			scene.Apply(bareScope(true))
+
+			if testCase.hideTrails && !press(scene, 't') {
+				t.Fatal("the t key was not handled, want the trail toggle to take it")
+			}
+
+			scene.Draw(canv, 0)
+
+			got := len(trailRun(canv, row, fromX, toX)) > 0
+			if got != testCase.wantPainted {
+				t.Errorf("anything drawn on row %d = %v, want %v", row, got, testCase.wantPainted)
+			}
+		})
+	}
+}
+
+// TestGhostTrailIsClippedToTheRing checks that a ghost is cut off where every
+// other plotted thing is. It is drawn through the same projection, so a track
+// that ran off the edge of the range has to stop at the ring rather than
+// carry on across the column beside it.
+func TestGhostTrailIsClippedToTheRing(t *testing.T) {
+	t.Parallel()
+
+	const farNm = 500.0
+
+	ghost := ghostOf(eastboundTrail())
+	for index := range ghost.Points {
+		ghost.Points[index].Longitude += farNm / nmPerDegreeTest
+	}
+
+	draw := func(tb testing.TB, ghosts []source.Trail) *canvas.Canvas {
+		tb.Helper()
+
+		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, ghostFrame(ghosts))
+		scene.Apply(bareScope(true))
+		scene.Draw(canv, 0)
+
+		return canv
+	}
+
+	if !identicalIn(draw(t, nil), draw(t, []source.Trail{ghost}), scopeBox) {
+		t.Errorf("a ghost %g nm out changed the scope, want it cut off at the ring like everything else", farNm)
+	}
+}
+
+// TestGhostTrailsDrawInMinimalMode checks the second view draws them too.
+//
+// Minimal mode is the aircraft and their trails on a bare field, and a ghost
+// is one of those trails. It is also the view a lost contact shows up in
+// best, since there is no furniture to read it against.
+func TestGhostTrailsDrawInMinimalMode(t *testing.T) {
+	t.Parallel()
+
+	frame := ghostFrame([]source.Trail{ghostOf(eastboundTrail())})
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Apply(bareScope(true))
+
+	if !press(scene, 'v') {
+		t.Fatal("the v key was not handled, want the view toggle to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if painted(canv, canv.Bounds()) == 0 {
+		t.Error("minimal mode drew nothing with a ghost on the field, want the ghost")
+	}
+}
+
+// TestGhostColourFollowsTheColourMode checks a ghost is coloured by the same
+// rule live traffic is. In airline mode that is the operator's own colour,
+// read off the callsign the aircraft was last heard under, so a lost contact
+// stays the colour it had while it was still talking.
+func TestGhostColourFollowsTheColourMode(t *testing.T) {
+	t.Parallel()
+
+	row, fromX, toX := trailWindow()
+	frame := ghostFrame([]source.Trail{ghostOf(eastboundTrail())})
+
+	draw := func(tb testing.TB, mode radar.ColourMode) []color.RGBA {
+		tb.Helper()
+
+		// The mode goes into the settings rather than into an option, because
+		// Apply sets every field of the block and would put an option's colour
+		// mode straight back to the default.
+		set := bareScope(true)
+		set.Colour = mode
+
+		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, frame)
+		scene.Apply(set)
+		scene.Draw(canv, 0)
+
+		run := trailRun(canv, row, fromX, toX)
+		if len(run) == 0 {
+			tb.Fatalf("the ghost drew nothing on row %d in %s mode", row, mode)
+		}
+
+		return run
+	}
+
+	byAltitude := draw(t, radar.ColourAltitude)
+	byAirline := draw(t, radar.ColourAirline)
+
+	if byAltitude[0] == byAirline[0] {
+		t.Errorf("the ghost drew %v in both colour modes, want the operator's colour in airline mode",
+			byAltitude[0])
+	}
+}
+
+// TestGhostsStayOutOfTheAutoRange checks the one thing a ghost must not do to
+// the scope around it.
+//
+// Auto range widens to hold the farthest contact, and a contact is something
+// still transmitting. A ghost two hundred miles out is a track somebody flew,
+// not somewhere the receiver can hear, so letting it set the range would zoom
+// the scope out from traffic that is actually there.
+func TestGhostsStayOutOfTheAutoRange(t *testing.T) {
+	t.Parallel()
+
+	const farNm = 200.0
+
+	near := scenePlane(icaoSample, callsignSample, 90, 12, 2400, 90)
+
+	ghost := ghostOf(eastboundTrail())
+	for index := range ghost.Points {
+		ghost.Points[index].Longitude += farNm / nmPerDegreeTest
+	}
+
+	rangeAfter := func(tb testing.TB, ghosts []source.Trail) float64 {
+		tb.Helper()
+
+		scene, canv, ranges := sceneOn(tb, panelWidth, panelHeight, ghostFrame(ghosts, near))
+		scene.Draw(canv, 0)
+
+		return ranges.GetCurrent()
+	}
+
+	without := rangeAfter(t, nil)
+	with := rangeAfter(t, []source.Trail{ghost})
+
+	if with != without {
+		t.Errorf("auto range settled at %g nm with a ghost %g nm out, want %g nm as without it",
+			with, farNm, without)
+	}
+}
+
+// nmPerDegreeTest is one degree of latitude in nautical miles, which is what
+// these tests push a fixture's fixes out by. It is spelled out here rather
+// than imported because the package under test keeps its own copy unexported.
+const nmPerDegreeTest = 60.0
+
+// TestRowBearingArrowTurnsWithTheBearing checks that the arrow after the BRG
+// figure is actually rotated to it rather than stamped the same way every
+// time. Four aircraft at the four cardinal bearings have to paint four
+// different pictures in the same cell.
+func TestRowBearingArrowTurnsWithTheBearing(t *testing.T) {
+	t.Parallel()
+
+	const nearNm = 12.0
+
+	type cell struct {
+		name string
+		canv *canvas.Canvas
+	}
+
+	bearings := []struct {
+		name    string
+		bearing float64
+	}{
+		{name: "north", bearing: 0},
+		{name: "east", bearing: 90},
+		{name: "south", bearing: 180},
+		{name: "west", bearing: 270},
+	}
+
+	cells := make([]cell, 0, len(bearings))
+
+	for _, testCase := range bearings {
+		scene, canv, _ := sceneOn(t, panelWidth, panelHeight,
+			sceneFrame(scenePlane(icaoSample, callsignSample, testCase.bearing, nearNm, 2400, testCase.bearing)))
+		scene.Draw(canv, 0)
+
+		if painted(canv, rowBearingArrow) == 0 {
+			t.Fatalf("a bearing of %g drew no arrow in the BRG cell", testCase.bearing)
+		}
+
+		cells = append(cells, cell{name: testCase.name, canv: canv})
+	}
+
+	for left := range cells {
+		for right := left + 1; right < len(cells); right++ {
+			if identicalIn(cells[left].canv, cells[right].canv, rowBearingArrow) {
+				t.Errorf("the arrows for %s and %s are the same picture, want one turned to each bearing",
+					cells[left].name, cells[right].name)
+			}
+		}
+	}
+}
+
+// TestRowBearingWithoutAPositionDrawsNoArrow checks the --- case. An aircraft
+// with no decoded position has no bearing, and an arrow pointing north out of
+// three dashes would be the scope inventing one.
+func TestRowBearingWithoutAPositionDrawsNoArrow(t *testing.T) {
+	t.Parallel()
+
+	nowhere := airplane.Snapshot{
+		ICAO: icaoSample, Callsign: callsignSample, Altitude: 2400, Heading: 41, Velocity: 420,
+		LastUpdate: sceneClock, Squawk: "1000",
+	}
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(nowhere))
+	scene.Draw(canv, 0)
+
+	if painted(canv, rowBearingDigits) == 0 {
+		t.Error("the BRG cell is empty, want the three dashes that stand in for a bearing")
+	}
+
+	if got := painted(canv, rowBearingArrow); got != 0 {
+		t.Errorf("an aircraft with no position drew %d arrow pixels, want none", got)
+	}
+}
+
+// TestCardTrackArrowTurnsWithTheHeading is the same check on the panel's
+// TRACK line, which carries the course the aircraft is flying rather than the
+// bearing it sits at. The unknown case is in the same table, because the
+// panel writing TRACK --- and drawing an arrow beside it would be the one
+// aircraft contradicting itself on one screen.
+func TestCardTrackArrowTurnsWithTheHeading(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nearNm       = 12.0
+		undecoded    = -1.0
+		headingNorth = 0.0
+		headingEast  = 90.0
+	)
+
+	north, northCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(scenePlane(icaoSample, callsignSample, 45, nearNm, 2400, headingNorth)))
+	north.Draw(northCanvas, 0)
+
+	east, eastCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(scenePlane(icaoSample, callsignSample, 45, nearNm, 2400, headingEast)))
+	east.Draw(eastCanvas, 0)
+
+	unknown, unknownCanvas, _ := sceneOn(t, panelWidth, panelHeight,
+		sceneFrame(scenePlane(icaoSample, callsignSample, 45, nearNm, 2400, undecoded)))
+	unknown.Draw(unknownCanvas, 0)
+
+	if painted(northCanvas, cardTrackArrow) == 0 {
+		t.Error("the TRACK line drew no arrow for a heading of due north")
+	}
+
+	if identicalIn(northCanvas, eastCanvas, cardTrackArrow) {
+		t.Error("the TRACK arrow is the same picture at 000 and at 090, want it turned to the heading")
+	}
+
+	if got := painted(unknownCanvas, cardTrackArrow); got != 0 {
+		t.Errorf("TRACK --- drew %d arrow pixels, want none", got)
+	}
+}

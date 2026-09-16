@@ -48,6 +48,20 @@ const (
 	// whole fleet off the scope when it resumes.
 	demoMaxStep = 5 * time.Second
 
+	// demoQuietICAO is the aircraft that stops transmitting, and
+	// demoQuietAfter how much simulated time passes before it does.
+	//
+	// The invented fleet used to fly for ever, which is the one way it was
+	// unlike every real feed: on a live scope contacts are lost all the time,
+	// and with --no-decay on, a lost contact is the only thing that leaves a
+	// ghost. Ninety seconds is long enough that the first minute of a demo is
+	// the fleet as it always was, and short enough to watch happen.
+	//
+	// It is the aircraft with no callsign, which is the one the rest of the
+	// scene already treats as the awkward case, and it never comes back.
+	demoQuietICAO  = "4951BA"
+	demoQuietAfter = 90 * time.Second
+
 	// nmPerDegree is one degree of latitude in nautical miles, which is the
 	// definition of the unit.
 	nmPerDegree = 60.0
@@ -183,10 +197,17 @@ type craft struct {
 	history   []airplane.PositionEntry
 	lastFix   time.Time
 	messages  int64
+
+	// drops marks the one aircraft that goes quiet, and quiet says it has.
+	// Once quiet it is neither flown nor snapshotted again, which freezes the
+	// buffer under its trail and is what lets a ghost alias it.
+	drops bool
+	quiet bool
 }
 
 // Demo is a synthetic source: twelve invented aircraft on straight tracks
-// around a fixed receiver.
+// around a fixed receiver, one of which goes quiet after ninety seconds and
+// is never heard from again.
 //
 // It exists so the radar can be built and looked at on a machine with no
 // receiver in it, and so the render path has something deterministic to draw
@@ -207,6 +228,14 @@ type Demo struct {
 	lon    float64
 	manual bool
 	sector bool
+
+	// start is the clock the first frame was drawn on, which is what the one
+	// aircraft that goes quiet is timed against.
+	start time.Time
+
+	// ghosts keeps the trail of that aircraft once it has, so --demo shows
+	// what --no-decay does on a live feed.
+	ghosts ghosts
 }
 
 // DemoOption configures a Demo at construction.
@@ -237,6 +266,17 @@ func WithDemoClock(now func() time.Time) DemoOption {
 // from the table and never vary.
 func WithSeed(seed uint64) DemoOption {
 	return func(d *Demo) { d.seed = seed }
+}
+
+// WithDemoGhosts keeps the trail of the fleet's one aircraft that goes quiet,
+// the same way WithGhosts does for a real feed.
+//
+// It is spelled differently from WithGhosts for the reason the whole option
+// split exists: a LiveOption and a DemoOption are separate types on purpose,
+// so a beast address cannot be handed to the demo fleet, and two functions
+// cannot share one name in one package.
+func WithDemoGhosts(on bool) DemoOption {
+	return func(d *Demo) { d.ghosts = newGhosts(on) }
 }
 
 // WithDemoSector crowds the whole fleet into the north-west quadrant instead
@@ -280,8 +320,11 @@ func (d *Demo) Frame() Frame {
 	d.advance(now)
 	d.ticks++
 
+	planes := d.snapshot(now)
+
 	return Frame{
-		Planes: d.snapshot(now),
+		Planes: planes,
+		Ghosts: d.ghosts.observe(planes),
 		Receiver: Receiver{
 			Latitude: d.lat, Longitude: d.lon, HasFix: true,
 			Label: LabelManual, Mode: FixManual,
@@ -359,7 +402,7 @@ func (d *Demo) bearingFor(index int, spec craftSpec, jitter float64) float64 {
 // advance flies every aircraft forward by the time since the last frame.
 func (d *Demo) advance(now time.Time) {
 	if d.last.IsZero() {
-		d.last = now
+		d.last, d.start = now, now
 		d.seedFixTimes(now)
 
 		return
@@ -376,8 +419,32 @@ func (d *Demo) advance(now time.Time) {
 		elapsed = demoMaxStep
 	}
 
+	d.loseContact(now)
+
 	for index := range d.fleet {
+		if d.fleet[index].quiet {
+			continue
+		}
+
 		d.fleet[index].fly(elapsed, now)
+	}
+}
+
+// loseContact stops the one aircraft that goes quiet, once its ninety seconds
+// are up.
+//
+// The whole fleet is walked rather than the aircraft being found once and
+// remembered, because twelve bool reads a frame is not worth a field to
+// avoid, and the fleet is built from a table that could grow a second one.
+func (d *Demo) loseContact(now time.Time) {
+	if now.Sub(d.start) < demoQuietAfter {
+		return
+	}
+
+	for index := range d.fleet {
+		if d.fleet[index].drops {
+			d.fleet[index].quiet = true
+		}
 	}
 }
 
@@ -395,6 +462,10 @@ func (d *Demo) snapshot(now time.Time) airplanes.List {
 	d.list = d.list[:0]
 
 	for index := range d.fleet {
+		if d.fleet[index].quiet {
+			continue
+		}
+
 		d.list = append(d.list, d.fleet[index].snapshot(now))
 	}
 
@@ -442,6 +513,7 @@ func newCraft(spec craftSpec, latitude, longitude float64) craft {
 		longitude: longitude,
 		history:   make([]airplane.PositionEntry, demoSeedFixes, demoMaxHistory),
 		messages:  int64(demoSeedFixes),
+		drops:     spec.icao == demoQuietICAO,
 	}
 
 	// A negative velocity is the undecoded sentinel rather than a speed, so the

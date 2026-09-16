@@ -143,6 +143,12 @@ type Scene struct {
 	icon       *sprite.Bitmap
 	now        func() time.Time
 
+	// arrow is the small direction arrow drawn after the rows' bearing and
+	// after the panel's track, turned to the angle the figure beside it just
+	// gave. It is not replaceable the way the silhouette is: the silhouette is
+	// what an aircraft looks like and the arrow is a piece of punctuation.
+	arrow *sprite.Bitmap
+
 	// trails and autoRange are what the t and a keys toggle.
 	trails    bool
 	autoRange bool
@@ -349,6 +355,7 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		src:        src,
 		scopeRange: scopeRange,
 		icon:       sprite.Airplane(),
+		arrow:      sprite.Arrow(),
 		now:        time.Now,
 		trails:     true,
 		autoRange:  true,

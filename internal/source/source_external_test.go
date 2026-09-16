@@ -1073,3 +1073,392 @@ func TestDemoClose(t *testing.T) {
 		t.Errorf("Close() = %v, want nil", err)
 	}
 }
+
+// sequentialClock hands back each tick in order and then keeps repeating the
+// last one, the pattern the demo clock tests above already use inline. It is
+// pulled out here because the ghost tests below need the same shape with a
+// third tick.
+func sequentialClock(ticks []time.Time) func() time.Time {
+	index := 0
+
+	return func() time.Time {
+		tick := ticks[index]
+		if index < len(ticks)-1 {
+			index++
+		}
+
+		return tick
+	}
+}
+
+// startLiveIngest builds a Live wired to a fake ingest that hands back the
+// shared *airplanes.Airplanes it was given, so the test can add and remove
+// aircraft on its own schedule afterwards instead of only once, from inside
+// the one Stream call Start makes.
+func startLiveIngest(tb testing.TB, opts ...source.LiveOption) (*source.Live, *airplanes.Airplanes) {
+	tb.Helper()
+
+	var store *airplanes.Airplanes
+
+	fake := &fakeIngest{streamFn: func(_ context.Context, planes *airplanes.Airplanes) error {
+		store = planes
+
+		return nil
+	}}
+
+	live, err := source.NewLive(append([]source.LiveOption{source.WithIngest(fake)}, opts...)...)
+	if err != nil {
+		tb.Fatalf("NewLive: %v", err)
+	}
+
+	live.Start(context.Background())
+
+	if err := live.Close(); err != nil {
+		tb.Fatalf("Close: %v", err)
+	}
+
+	return live, store
+}
+
+// addAircraft ensures one aircraft exists in store and gives it an identity
+// and a single position fix, so its trail is never empty.
+func addAircraft(
+	tb testing.TB, store *airplanes.Airplanes, icao, callsign string, altitude, latitude, longitude float64,
+) {
+	tb.Helper()
+
+	store.Ensure(icao)
+
+	plane, ok := store.Get(icao)
+	if !ok {
+		tb.Fatalf("Get(%q) after Ensure = false, want true", icao)
+	}
+
+	plane.Update(
+		airplane.WithCallsign(callsign),
+		airplane.WithAltitude(altitude),
+		airplane.WithPosition(latitude, longitude),
+	)
+}
+
+// TestLiveGhostsOffByDefault pins the "off unless asked for" contract: with
+// the option omitted, or passed explicitly as false, Frame().Ghosts stays nil
+// even after an aircraft has come and gone. A source that turned ghosts on by
+// accident would cost every caller memory it never asked for.
+func TestLiveGhostsOffByDefault(t *testing.T) {
+	t.Parallel()
+
+	const (
+		icao            = "GHOST01"
+		callsign        = "TESTCS"
+		altitude        = 5000.0
+		latitude        = 52.1
+		longitude       = 4.2
+		caseOmitted     = "option omitted"
+		caseExplicitOff = "option explicitly false"
+	)
+
+	for _, testCase := range []struct {
+		name string
+		opts []source.LiveOption
+	}{
+		{name: caseOmitted, opts: nil},
+		{name: caseExplicitOff, opts: []source.LiveOption{source.WithGhosts(false)}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			live, store := startLiveIngest(t, testCase.opts...)
+
+			addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
+			live.Frame()
+
+			store.Prune(0)
+
+			frame := live.Frame()
+			if frame.Ghosts != nil {
+				t.Errorf("Frame().Ghosts = %v, want nil with ghosts off", frame.Ghosts)
+			}
+		})
+	}
+}
+
+// TestDemoGhostsOffByDefault is TestLiveGhostsOffByDefault's Demo half: the
+// fleet's own quiet aircraft goes through the same disappearance, and
+// Frame().Ghosts must still stay nil with the option omitted or off.
+func TestDemoGhostsOffByDefault(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pastQuiet       = 90*time.Second + time.Second
+		caseOmitted     = "option omitted"
+		caseExplicitOff = "option explicitly false"
+	)
+
+	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name string
+		opt  source.DemoOption
+	}{
+		{name: caseOmitted, opt: nil},
+		{name: caseExplicitOff, opt: source.WithDemoGhosts(false)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			clock := sequentialClock([]time.Time{start, start.Add(pastQuiet)})
+
+			opts := []source.DemoOption{source.WithDemoClock(clock)}
+			if testCase.opt != nil {
+				opts = append(opts, testCase.opt)
+			}
+
+			demo, err := source.NewDemo(opts...)
+			if err != nil {
+				t.Fatalf("NewDemo: %v", err)
+			}
+
+			demo.Frame()
+
+			frame := demo.Frame()
+			if frame.Ghosts != nil {
+				t.Errorf("Frame().Ghosts = %v, want nil with ghosts off", frame.Ghosts)
+			}
+		})
+	}
+}
+
+// TestLiveGhostAircraftDisappearingLeavesGhost checks the core contract: an
+// aircraft the store has pruned shows up, on the very next frame, as a ghost
+// carrying the identity and the trail it last reported.
+func TestLiveGhostAircraftDisappearingLeavesGhost(t *testing.T) {
+	t.Parallel()
+
+	const (
+		icao      = "GHOST02"
+		callsign  = "LOSTCS"
+		altitude  = 8000.0
+		latitude  = 52.3
+		longitude = 4.9
+	)
+
+	live, store := startLiveIngest(t, source.WithGhosts(true))
+
+	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
+
+	present := live.Frame()
+	if len(present.Planes) != 1 {
+		t.Fatalf("Frame().Planes while flying = %d, want 1", len(present.Planes))
+	}
+
+	if present.Ghosts != nil {
+		t.Errorf("Frame().Ghosts while the aircraft is still flying = %v, want nil", present.Ghosts)
+	}
+
+	store.Prune(0)
+
+	gone := live.Frame()
+	if len(gone.Planes) != 0 {
+		t.Errorf("Frame().Planes after Prune = %d, want 0", len(gone.Planes))
+	}
+
+	if len(gone.Ghosts) != 1 {
+		t.Fatalf("Frame().Ghosts after Prune = %d, want exactly 1", len(gone.Ghosts))
+	}
+
+	ghost := gone.Ghosts[0]
+
+	wrongIdentity := ghost.ICAO != icao || ghost.Callsign != callsign || ghost.Altitude != altitude
+	if wrongIdentity {
+		t.Errorf("ghost identity = %+v, want ICAO %q callsign %q altitude %v",
+			ghost, icao, callsign, altitude)
+	}
+
+	if len(ghost.Points) == 0 {
+		t.Error("ghost.Points is empty, want the position history the aircraft last showed")
+	}
+}
+
+// TestLiveGhostAircraftReappearingStopsBeingGhost checks revive: the same
+// ICAO showing up again must clear the ghost, and must not leave it drawn
+// twice.
+func TestLiveGhostAircraftReappearingStopsBeingGhost(t *testing.T) {
+	t.Parallel()
+
+	const (
+		icao      = "GHOST03"
+		callsign  = "BACKCS"
+		altitude  = 3000.0
+		latitude  = 51.9
+		longitude = 4.4
+	)
+
+	live, store := startLiveIngest(t, source.WithGhosts(true))
+
+	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
+	live.Frame()
+
+	store.Prune(0)
+
+	gone := live.Frame()
+	if len(gone.Ghosts) != 1 {
+		t.Fatalf("Frame().Ghosts after Prune = %d, want exactly 1", len(gone.Ghosts))
+	}
+
+	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
+
+	back := live.Frame()
+	if len(back.Planes) != 1 {
+		t.Errorf("Frame().Planes after the aircraft returns = %d, want 1", len(back.Planes))
+	}
+
+	if len(back.Ghosts) != 0 {
+		t.Errorf("Frame().Ghosts after the aircraft returns = %v, want none", back.Ghosts)
+	}
+}
+
+// TestDemoQuietAircraftBecomesGhost is the explicit acceptance item: the
+// fleet's one aircraft with no callsign must stop appearing in Frame().Planes
+// once ninety seconds of simulated time have passed since the first frame,
+// its last trail must show up as the one ghost, and it must not come back on
+// a later frame.
+func TestDemoQuietAircraftBecomesGhost(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pastQuiet      = 90*time.Second + time.Second
+		wellPastQuiet  = 90*time.Second + 5*time.Second
+		fleetSize      = 12
+		fleetAfterLoss = 11
+		wantICAO       = "4951BA" // the fleet's one aircraft with no callsign.
+	)
+
+	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := sequentialClock([]time.Time{
+		start,
+		start.Add(pastQuiet),
+		start.Add(wellPastQuiet),
+	})
+
+	demo, err := source.NewDemo(source.WithDemoClock(clock), source.WithDemoGhosts(true))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	first := demo.Frame()
+	if got := len(first.Planes); got != fleetSize {
+		t.Fatalf("first Frame().Planes = %d, want %d", got, fleetSize)
+	}
+
+	second := demo.Frame()
+
+	if got := len(second.Planes); got != fleetAfterLoss {
+		t.Errorf("Frame().Planes after 90s = %d, want %d", got, fleetAfterLoss)
+	}
+
+	for _, plane := range second.Planes {
+		if plane.ICAO == wantICAO {
+			t.Errorf("aircraft %q is still in Frame().Planes after going quiet", wantICAO)
+		}
+	}
+
+	if got := len(second.Ghosts); got != 1 {
+		t.Fatalf("Frame().Ghosts after 90s = %d, want exactly 1", got)
+	}
+
+	ghost := second.Ghosts[0]
+	if ghost.ICAO != wantICAO {
+		t.Errorf("ghost ICAO = %q, want %q", ghost.ICAO, wantICAO)
+	}
+
+	if len(ghost.Points) == 0 {
+		t.Error("ghost.Points is empty, want the aircraft's last trail")
+	}
+
+	third := demo.Frame()
+
+	if got := len(third.Planes); got != fleetAfterLoss {
+		t.Errorf("Frame().Planes on a later frame = %d, want %d (it must not come back)", got, fleetAfterLoss)
+	}
+
+	if got := len(third.Ghosts); got != 1 {
+		t.Errorf("Frame().Ghosts on a later frame = %d, want exactly 1 (not duplicated)", got)
+	}
+}
+
+// TestDemoFleetWholeBeforeQuietBoundary pins the boundary rather than just
+// the end state: at eighty-five seconds the fleet must still be all twelve,
+// with no ghost yet, so the drop the previous test checks is known to land on
+// the ninety second mark and not sooner.
+func TestDemoFleetWholeBeforeQuietBoundary(t *testing.T) {
+	t.Parallel()
+
+	const (
+		beforeQuiet = 85 * time.Second
+		fleetSize   = 12
+	)
+
+	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := sequentialClock([]time.Time{start, start.Add(beforeQuiet)})
+
+	demo, err := source.NewDemo(source.WithDemoClock(clock), source.WithDemoGhosts(true))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	demo.Frame()
+
+	frame := demo.Frame()
+	if got := len(frame.Planes); got != fleetSize {
+		t.Errorf("Frame().Planes at 85s = %d, want %d", got, fleetSize)
+	}
+
+	if len(frame.Ghosts) != 0 {
+		t.Errorf("Frame().Ghosts at 85s = %v, want none", frame.Ghosts)
+	}
+}
+
+// TestFrameGhostsSurvivesBeingRead checks that the ghosts returned in one
+// Frame are safe to read more than once: nothing about reading Ghosts should
+// clear or mutate it. It stops short of holding the slice across a second
+// Frame call, since Frame explicitly does not guarantee that.
+func TestFrameGhostsSurvivesBeingRead(t *testing.T) {
+	t.Parallel()
+
+	const pastQuiet = 90*time.Second + time.Second
+
+	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := sequentialClock([]time.Time{start, start.Add(pastQuiet)})
+
+	demo, err := source.NewDemo(source.WithDemoClock(clock), source.WithDemoGhosts(true))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	demo.Frame()
+
+	frame := demo.Frame()
+	if len(frame.Ghosts) != 1 {
+		t.Fatalf("Frame().Ghosts = %d entries, want 1", len(frame.Ghosts))
+	}
+
+	first := frame.Ghosts[0]
+	second := frame.Ghosts[0]
+
+	wrongIdentity := first.ICAO != second.ICAO || first.Callsign != second.Callsign || first.Altitude != second.Altitude
+	if wrongIdentity {
+		t.Errorf("reading Ghosts[0] twice gave different identity fields: %+v vs %+v", first, second)
+	}
+
+	if len(first.Points) != len(second.Points) {
+		t.Errorf("reading Ghosts[0].Points twice gave different lengths: %d vs %d",
+			len(first.Points), len(second.Points))
+	}
+
+	for index, trail := range frame.Ghosts {
+		if trail.ICAO == "" {
+			t.Errorf("Ghosts[%d].ICAO is empty on a second read", index)
+		}
+	}
+}

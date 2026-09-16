@@ -29,12 +29,6 @@ const (
 	degreesPerCircle = 360.0
 	halfCircle       = 180.0
 
-	// pointWidth is how many degrees each of the eight compass points covers,
-	// and halfPoint is the offset that centres a point on its letter rather
-	// than starting it there.
-	pointWidth = 45.0
-	halfPoint  = 22.5
-
 	// groupSize is how many digits go between two thousands separators.
 	groupSize = 3
 
@@ -44,30 +38,6 @@ const (
 	// floatBits is the precision strconv is told the value has.
 	floatBits = 64
 )
-
-// compassPoints are the eight points in the order an increasing heading
-// passes them.
-//
-//nolint:gochecknoglobals // a compass is data, and an array cannot be const.
-var compassPoints = [...]string{"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
-
-// compass turns a heading in degrees into its eight-point letter.
-//
-// A heading that is not a number reads as north. It arrives from the air and
-// is never trusted; a scope that panicked on a corrupt velocity message would
-// be worse than one that points the wrong way for a frame.
-func compass(heading float64) string {
-	if math.IsNaN(heading) || math.IsInf(heading, 0) {
-		return compassPoints[0]
-	}
-
-	normalised := math.Mod(heading, degreesPerCircle)
-	if normalised < 0 {
-		normalised += degreesPerCircle
-	}
-
-	return compassPoints[int((normalised+halfPoint)/pointWidth)%len(compassPoints)]
-}
 
 // fixed writes value with exactly decimals digits after the point.
 func (s *Scene) fixed(value float64, decimals int) []byte {
@@ -219,18 +189,6 @@ const (
 	// seconds old, plotted on a projection that rounds to the pixel.
 	placeDecimals = 2
 )
-
-// bearing writes a bearing as its three digits, a separator and its compass
-// point.
-//
-// It is one field rather than two because the compact rows right-align it as a
-// unit, and two right-aligned pieces would need two column edges to align
-// against for no gain.
-func (s *Scene) bearing(value float64) []byte {
-	out := append(s.degrees(value), ' ', '/', ' ')
-
-	return append(out, compass(value)...)
-}
 
 // drawBytes draws a formatted number and returns the x just past it.
 //

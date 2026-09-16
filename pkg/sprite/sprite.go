@@ -179,6 +179,56 @@ func Airplane() *Bitmap {
 	return airplane()
 }
 
+// arrow is the package's Arrow singleton, built once on first use. See the
+// comment on airplane for why sync.OnceValue is used instead of an init
+// function or a plain package variable.
+//
+//nolint:gochecknoglobals // memoization idiom, not mutable state; see the comment above.
+var arrow = sync.OnceValue(func() *Bitmap {
+	// Point up, 9x9, read top row first. A bearing or a track is drawn as the
+	// angle itself, turned to face it, instead of picked from one of eight
+	// compass letters; the sprite only has to look right as an arrow, not
+	// spell a direction out in a font.
+	//
+	// Every part of it is at least three pixels across, and the head is only
+	// one pixel wider on each side than the shaft. Both of those are what
+	// nine pixels a side and nearest-neighbour rotation will carry. A thinner
+	// stroke breaks into a dotted line off the four axis-aligned headings,
+	// and a broader head turns into a lump with a stub behind it, which says
+	// less about the angle than an even taper does. The shapes were compared
+	// at every fifteen degrees before this one was picked.
+	//
+	//	....#....
+	//	...###...
+	//	..#####..
+	//	...###...
+	//	...###...
+	//	...###...
+	//	...###...
+	//	...###...
+	//	...###...
+	//
+	//nolint:goconst // ascii art rows repeat on purpose; naming them would hide the shape.
+	rows := []string{
+		"....#....",
+		"...###...",
+		"..#####..",
+		"...###...",
+		"...###...",
+		"...###...",
+		"...###...",
+		"...###...",
+		"...###...",
+	}
+
+	return mustBitmap(rows)
+})
+
+// Arrow is a 9x9 arrow silhouette, point up.
+func Arrow() *Bitmap {
+	return arrow()
+}
+
 // invRotate returns the source offset that lands at destination offset (dx,
 // dy) once the sprite is turned by the angle whose sine and cosine are sin
 // and cos.

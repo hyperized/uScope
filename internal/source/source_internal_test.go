@@ -8,11 +8,13 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/adsb"
+	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/location"
 	"github.com/hyperized/uAirwaves/pkg/selflocate"
@@ -769,5 +771,202 @@ func TestReciprocal(t *testing.T) {
 				t.Errorf("reciprocal(%v) = %v, want %v", testCase.track, got, testCase.want)
 			}
 		})
+	}
+}
+
+// snapshotWithHistory builds the one shape ghosts.go reads out of a
+// airplane.Snapshot: an ICAO plus a trail of the given length. Nothing else
+// on the struct matters to keep, sweep or push, so nothing else is set.
+func snapshotWithHistory(icao string, points int) airplane.Snapshot {
+	history := make([]airplane.PositionEntry, points)
+	for index := range history {
+		history[index] = airplane.PositionEntry{Latitude: float64(index)}
+	}
+
+	return airplane.Snapshot{ICAO: icao, PositionHistory: history}
+}
+
+// ghostICAOs collects the ICAO of every trail in order, so a test can assert
+// against a plain slice of strings instead of a slice of Trail values.
+func ghostICAOs(trails []Trail) []string {
+	icaos := make([]string, len(trails))
+	for index, trail := range trails {
+		icaos[index] = trail.ICAO
+	}
+
+	return icaos
+}
+
+// loseGhost is the only way observe's push path is reached: an aircraft has
+// to be seen on one frame and gone on the next before sweep will give it up.
+// It hands back the ghost list as it stands right after that aircraft is
+// lost.
+func loseGhost(tracker *ghosts, icao string, points int) []Trail {
+	tracker.observe(airplanes.List{snapshotWithHistory(icao, points)})
+
+	return tracker.observe(nil)
+}
+
+// TestGhostsEvictByTrailCount drives more lost aircraft through observe than
+// maxTrails allows and checks the ring keeps only the newest ones, oldest
+// first, and never grows past the cap. maxTrails is a field for exactly this:
+// driving eviction needs no fixture anywhere near the production 2000 cap.
+func TestGhostsEvictByTrailCount(t *testing.T) {
+	t.Parallel()
+
+	const (
+		trailCap    = 3
+		trailPoints = 2
+	)
+
+	tracker := newGhosts(true)
+	tracker.maxTrails = trailCap
+
+	var last []Trail
+
+	for _, icao := range []string{"A00001", "A00002", "A00003", "A00004", "A00005"} {
+		last = loseGhost(&tracker, icao, trailPoints)
+	}
+
+	want := []string{"A00003", "A00004", "A00005"}
+	got := ghostICAOs(last)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("Ghosts after 5 losses with maxTrails=%d = %v, want %v", trailCap, got, want)
+	}
+
+	if len(last) > trailCap {
+		t.Errorf("len(Ghosts) = %d, want at most %d", len(last), trailCap)
+	}
+}
+
+// TestGhostsEvictByPointCount checks the other cap: eviction driven by total
+// points rather than trail count, with maxTrails left at its large default.
+// Three trails of four points each against a cap of ten force exactly one
+// eviction, so the survivors are a known pair rather than just "no more than
+// the cap".
+func TestGhostsEvictByPointCount(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pointCap    = 10
+		trailPoints = 4
+	)
+
+	tracker := newGhosts(true)
+	tracker.maxPoints = pointCap
+
+	var last []Trail
+
+	for _, icao := range []string{"B00001", "B00002", "B00003"} {
+		last = loseGhost(&tracker, icao, trailPoints)
+	}
+
+	want := []string{"B00002", "B00003"}
+	got := ghostICAOs(last)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("Ghosts after 3 losses of %d points each with maxPoints=%d = %v, want %v",
+			trailPoints, pointCap, got, want)
+	}
+}
+
+// TestGhostsNoPointsNeverPushed checks push's guard: an aircraft that appears
+// with an empty history and then vanishes must leave no ghost at all. A
+// track of no fixes has nothing to draw, and keeping it would spend a ring
+// slot on nothing.
+func TestGhostsNoPointsNeverPushed(t *testing.T) {
+	t.Parallel()
+
+	const emptyHistory = 0
+
+	tracker := newGhosts(true)
+
+	got := loseGhost(&tracker, "C00001", emptyHistory)
+
+	if len(got) != 0 {
+		t.Errorf("Ghosts after an aircraft with no history vanished = %v, want none", got)
+	}
+}
+
+// TestGhostsEmptyICAOIgnored checks keep's guard: a snapshot with no ICAO is
+// never tracked at all, so it neither becomes a ghost when it "vanishes" nor
+// spends a slot in the ring on the way.
+func TestGhostsEmptyICAOIgnored(t *testing.T) {
+	t.Parallel()
+
+	const points = 3
+
+	tracker := newGhosts(true)
+
+	got := loseGhost(&tracker, "", points)
+
+	if len(got) != 0 {
+		t.Errorf("Ghosts after an aircraft with no ICAO vanished = %v, want none", got)
+	}
+
+	if len(tracker.live) != 0 {
+		t.Errorf("live map after an aircraft with no ICAO = %d entries, want 0 (never tracked)", len(tracker.live))
+	}
+}
+
+// TestGhostsSweepOrderIsSortedAndStable checks that two aircraft lost on the
+// same frame always enter the ring in ascending ICAO order, whichever order
+// the map sweep happened to walk them in. Map iteration order varies between
+// runs even within one process, which is exactly what sweep's sort is meant
+// to hide, so this repeats the sequence enough times to have caught a
+// regression back to an unsorted sweep.
+func TestGhostsSweepOrderIsSortedAndStable(t *testing.T) {
+	t.Parallel()
+
+	const (
+		points  = 2
+		repeats = 25
+	)
+
+	for attempt := range repeats {
+		tracker := newGhosts(true)
+
+		tracker.observe(airplanes.List{
+			snapshotWithHistory("ZULU01", points),
+			snapshotWithHistory("ALPHA1", points),
+		})
+
+		got := ghostICAOs(tracker.observe(nil))
+		want := []string{"ALPHA1", "ZULU01"}
+
+		if !slices.Equal(got, want) {
+			t.Fatalf("attempt %d: Ghosts order = %v, want %v (ascending by ICAO)", attempt, got, want)
+		}
+	}
+}
+
+// TestGhostsReviveLeavesHoleWithoutShifting pushes three ghosts, revives the
+// middle one, and checks the other two keep the order they were lost in. A
+// revival that shuffled the ring instead of leaving a hole would make an
+// older ghost look newer than it is.
+func TestGhostsReviveLeavesHoleWithoutShifting(t *testing.T) {
+	t.Parallel()
+
+	const points = 2
+
+	tracker := newGhosts(true)
+
+	loseGhost(&tracker, "D00001", points)
+	loseGhost(&tracker, "D00002", points)
+	before := loseGhost(&tracker, "D00003", points)
+
+	wantBefore := []string{"D00001", "D00002", "D00003"}
+	if got := ghostICAOs(before); !slices.Equal(got, wantBefore) {
+		t.Fatalf("Ghosts before revival = %v, want %v", got, wantBefore)
+	}
+
+	// D00002 reappears: keep calls revive first, which empties its ring slot
+	// before the trail is recorded as live again.
+	afterRevive := tracker.observe(airplanes.List{snapshotWithHistory("D00002", points)})
+
+	wantAfter := []string{"D00001", "D00003"}
+	if got := ghostICAOs(afterRevive); !slices.Equal(got, wantAfter) {
+		t.Errorf("Ghosts after D00002 revived = %v, want %v", got, wantAfter)
 	}
 }

@@ -57,7 +57,7 @@ const (
 	rowAltitudeChars = 7 // "999,999"
 	rowSpeedChars    = 3 // "999"
 	rowDistanceChars = 5 // "999.9"
-	rowBearingChars  = 8 // "359 / NW"
+	rowBearingChars  = 8 // "359" and the arrow, in the room "359 / NW" had
 )
 
 // The columns, in the order they are drawn.
@@ -468,19 +468,33 @@ func (s *Scene) drawRowAltitude(pen rowPen, plane airplane.Snapshot) {
 
 // drawRowBearing sets the bearing cell, which is where the aircraft is from
 // the receiver rather than the course it is flying.
+//
+// The digits and the arrow are one right-aligned group, so the table's right
+// edge stays where the column plan put it. The dashes a row with no bearing
+// gets finish where the digits do rather than where the arrow does, so the
+// column reads down as a run of numbers with a gap in it rather than as two
+// things alternating.
+//
+// The column is still measured at the eight characters the compass spelling
+// took, which is what keeps the table fitting and dropping columns exactly as
+// it did. The arrow takes less room than the letters and the slack goes to
+// the left of the group, where the gap between columns already is.
 func (s *Scene) drawRowBearing(pen rowPen, receiver source.Receiver, plane airplane.Snapshot) {
 	if !pen.plan.on[colBearing] {
 		return
 	}
 
+	digits := pen.plan.edge[colBearing] - s.arrowWidth()
+
 	bearing, known := bearingTo(receiver, plane)
 	if !known {
-		text.DrawRight(pen.dst, pen.face, pen.plan.edge[colBearing], pen.top, detailUnknown, s.pal.Muted)
+		text.DrawRight(pen.dst, pen.face, digits, pen.top, detailUnknown, s.pal.Muted)
 
 		return
 	}
 
-	pen.right(colBearing, s.bearing(bearing), s.pal.Muted)
+	drawBytesRight(pen.dst, pen.face, digits, pen.top, s.degrees(bearing), s.pal.Muted)
+	s.drawArrow(pen.dst, digits+arrowGap, pen.top+pen.face.Height()/2, bearing, s.pal.Muted)
 }
 
 // drawMoreRow writes the muted line saying how many aircraft the list had no

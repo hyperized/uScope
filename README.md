@@ -102,15 +102,31 @@ Behind each aircraft is its trail, drawn as an anti-aliased polyline from the
 oldest fix it still holds to the newest, brightening towards the head. The
 trails are the reason this project exists. A character cell cannot draw one,
 and a scope full of them says in one glance what a scope full of dots cannot:
-who is turning and who came from where. `--no-decay` draws every segment at
-full strength instead, which trades "which end is the aeroplane" for a track
-that is easier to follow across a busy field.
+who is turning and who came from where.
+
+`--no-decay` changes two things about a trail. Every segment is drawn at full
+strength instead of fading towards the tail, which trades "which end is the
+aeroplane" for a track that is easier to follow across a busy field. And a
+trail now outlives the aircraft that drew it: when a contact goes quiet and
+the store drops it, its track stays on the scope as a ghost, at full strength
+and with nothing at the head of it. There is no silhouette, no label and no
+selection ring on a ghost, because there is no aeroplane there to mark and no
+heading to point one at. Ghosts go under the live trails, so an aeroplane is
+never hidden by the track of one that has gone. They take no part in the auto
+range or in minimal mode's centring, both of which are about where the
+receiver can hear right now, and the `t` key takes them away with the rest of
+the trails. They are kept for the life of the process, up to two thousand
+tracks or a million fixes between them, oldest given up first.
+
+That is also the one place the demo fleet behaves like a real feed. Ninety
+seconds in, the aircraft with no callsign stops transmitting and never comes
+back, so `--demo --no-decay` leaves a ghost on the field to look at.
 
 The right column runs panel, rows, legend, top to bottom.
 
 The panel is the selected aircraft, and it is one block rather than two. Its
 callsign is set at 64 pixels, with the ICAO hex and the squawk beside it, its
-track in degrees and compass points under that, three figures across the
+track in degrees with an arrow turned to it under that, three figures across the
 middle (distance in nautical miles, altitude in feet, speed in knots), and a
 line of smaller values under those: vertical rate with a climb or descent
 triangle, position to two decimals, and how long ago the aircraft was heard.
@@ -127,7 +143,12 @@ corner drops the hex rather than printing the same six characters twice.
 Under it is the row table, nearest aircraft first, with a small header line
 naming its columns: number, callsign, ICAO hex, altitude, speed, distance and
 bearing from the receiver, and the aircraft count right-aligned at the end of
-that same line. The selected row carries the accent bar. Altitude
+that same line. The selected row carries the accent bar. Bearing is three
+digits followed by a small arrow turned to the exact angle, and the panel's
+`TRACK` line is written the same way. An arrow rather than a compass point,
+because eight letters are eight sectors and `NE` says the same thing about 23
+degrees as about 67, where the arrow says the angle itself. A row with no
+bearing to show keeps its dashes and draws no arrow. Altitude
 gets a small triangle beside it when the aircraft is climbing or descending,
 and both the figure and the triangle are set in that aircraft's altitude band
 whichever colour mode is on. That is the one column where a number and a
@@ -555,9 +576,9 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | `--shore` | `on` | draw the coastline: `on` or `off` |
 | `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` to stay on the receiver |
-| `--no-decay` | off | draw every trail segment at full strength, no fade to the tail |
+| `--no-decay` | off | draw every trail segment at full strength, and keep the trail of an aircraft that goes quiet |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
-| `--demo` | off | fly twelve invented aircraft instead of decoding any |
+| `--demo` | off | fly twelve invented aircraft instead of decoding any; one of them goes quiet after 90 seconds |
 | `--demo-sector` | off | put the whole invented fleet in the north-west quadrant, as a directional antenna would |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
 | `--replay-iq` | | replay a captured IQ file through the demodulator |

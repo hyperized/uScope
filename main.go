@@ -316,8 +316,16 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 // live builds the real ingest, adding the operator's position when there is
 // one.
 //
+// --no-decay is what turns ghost trails on. The flag means a trail stays until
+// the operator changes the range, and until now the one thing that broke that
+// promise was the store pruning an aircraft that had gone quiet: the trail
+// went with it. Keeping the ghosts is not free, so it is tied to the flag
+// that asks for it rather than being on for everyone.
+//
 //nolint:ireturn // every branch of sourceFor returns the interface.
 func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
+	opts = append(opts, source.WithGhosts(cfg.noDecay))
+
 	if cfg.hasLocation {
 		opts = append(opts, source.WithManualLocation(cfg.latitude, cfg.longitude))
 	}
@@ -334,7 +342,7 @@ func live(cfg config, opts ...source.LiveOption) (source.Source, error) {
 //
 //nolint:ireturn // every branch of sourceFor returns the interface.
 func demo(cfg config) (source.Source, error) {
-	var opts []source.DemoOption
+	opts := []source.DemoOption{source.WithDemoGhosts(cfg.noDecay)}
 	if cfg.hasLocation {
 		opts = append(opts, source.WithDemoLocation(cfg.latitude, cfg.longitude))
 	}

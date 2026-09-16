@@ -63,6 +63,11 @@ const (
 	vertMarker = 7
 	vertGap    = 6
 
+	// arrowGap is the air between a direction figure and the arrow that
+	// follows it. It is vertGap so that the scene's two small shapes sit off
+	// their figures by the same amount.
+	arrowGap = vertGap
+
 	// levelBand is how small a vertical rate has to be before the aircraft
 	// counts as level. Mode S reports a rate on every velocity message and it
 	// is rarely a flat zero in the cruise, so a raw figure would show a few
@@ -244,6 +249,28 @@ func (s *Scene) drawVertMarker(dst *canvas.Canvas, left, top int, rate float64, 
 	dst.FillTriangle(left+half, apex, left, base, left+vertMarker-1, base, col)
 
 	return left + vertMarker + vertGap
+}
+
+// arrowWidth is the room the direction arrow takes beside a figure, the gap
+// before it included.
+func (s *Scene) arrowWidth() int {
+	return arrowGap + s.arrow.Side()
+}
+
+// drawArrow stamps the direction arrow at left, turned to the angle the
+// figure beside it has just given, and centred vertically on middle.
+//
+// Both places the scene writes a direction use it: the rows' BRG column and
+// the panel's TRACK line. An arrow rather than a compass point, because eight
+// letters are eight sectors and NE says the same thing about 23 degrees as
+// about 67, where the arrow says the angle itself.
+//
+// It is centred on the line rather than set on its baseline, the same way the
+// climb triangle is. It is a shape beside type and not a glyph in it.
+//
+//nolint:varnamelen // middle is the line's vertical centre, the pixel idiom used throughout uScope.
+func (s *Scene) drawArrow(dst *canvas.Canvas, left, middle int, degrees float64, ink color.RGBA) {
+	s.arrow.Draw(dst, left+s.arrow.Side()/2, middle, degrees, ink)
 }
 
 // bearingTo is the compass bearing from the receiver to an aircraft, which is

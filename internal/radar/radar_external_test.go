@@ -30,6 +30,15 @@ const (
 	benchHistory = 200
 )
 
+// The benchmark's ghosts: five hundred lost trails of two hundred fixes each.
+// That is more contacts than the live fleet above, on purpose: a ghost is
+// never freed once its aircraft goes quiet, so a long --no-decay session
+// accumulates far more of them than the traffic ever flying at once.
+const (
+	benchGhosts       = 500
+	benchGhostHistory = 200
+)
+
 // receiverLat and receiverLon are Schiphol, which is where the demo fleet
 // flies and where these numbers were checked against a real scope.
 const (
@@ -110,6 +119,39 @@ func fleet(count, history int) airplanes.List {
 	return list
 }
 
+// ghostFleet builds count lost trails of history fixes each, spread around
+// the receiver the same way fleet spreads its aircraft so they land inside
+// the scope's range instead of being clipped away: a benchmark of trails the
+// projection rejects prices nothing. Altitudes cycle through all three bands
+// and callsigns carry a real airline prefix, so altitude mode and the
+// airline lookup both have something to work with.
+func ghostFleet(count, history int) []source.Trail {
+	list := make([]source.Trail, 0, count)
+
+	for index := range count {
+		offsetLat := receiverLat + float64(index%11)*0.03 - 0.15
+		offsetLon := receiverLon + float64(index%13)*0.02 - 0.12
+
+		points := make([]airplane.PositionEntry, 0, history)
+		for fix := range history {
+			points = append(points, airplane.PositionEntry{
+				Latitude:  offsetLat - float64(history-fix)*0.001,
+				Longitude: offsetLon - float64(history-fix)*0.0015,
+				Altitude:  float64(index%40) * 1000,
+			})
+		}
+
+		list = append(list, source.Trail{
+			ICAO:     string(rune('A'+index%26)) + "99999",
+			Callsign: "KLM" + string(rune('0'+index%10)),
+			Altitude: float64(index%40) * 1000,
+			Points:   points,
+		})
+	}
+
+	return list
+}
+
 // benchFrame is the frame the benchmark and the allocation test draw.
 func benchFrame() source.Frame {
 	return source.Frame{
@@ -142,6 +184,40 @@ func benchScene(tb testing.TB) (*radar.Scene, *canvas.Canvas) {
 	return scene, canv
 }
 
+// benchSceneWith is benchScene for a caller-built frame, for the cases that
+// need more on the scope than the ordinary fleet.
+func benchSceneWith(tb testing.TB, frame source.Frame) (*radar.Scene, *canvas.Canvas) {
+	tb.Helper()
+
+	canv, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	src := &fakeSource{frame: frame}
+	scene := radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(60)))
+
+	return scene, canv
+}
+
+// sceneFor is benchScene, or benchSceneWith a frame carrying the bench
+// ghosts when ghosts is true. Both the allocation test and the benchmark
+// pick their scene through it, so the ghosts fixture is built in one place.
+//
+//nolint:revive // flag-parameter: ghosts picks which of two fixtures to build, not a mode to branch deeper on.
+func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
+	tb.Helper()
+
+	if !ghosts {
+		return benchScene(tb)
+	}
+
+	frame := benchFrame()
+	frame.Ghosts = ghostFleet(benchGhosts, benchGhostHistory)
+
+	return benchSceneWith(tb, frame)
+}
+
 // TestDrawAllocations is the promise the whole of format.go exists to keep:
 // once the first frame has grown the ICAO index, drawing costs nothing on the
 // heap, in either colour mode. Airline mode is the one that calls
@@ -154,11 +230,18 @@ func benchScene(tb testing.TB) (*radar.Scene, *canvas.Canvas) {
 // frame in three minutes of them; internal/radar's TestFollowAllocations is
 // what prices the other one.
 //
+// The fourth case is a --no-decay run carrying five hundred ghosts. A ghost
+// is never freed once its aircraft goes quiet, so it is the one thing on the
+// scope that grows without bound over a long session; this is the case that
+// would catch a per-ghost allocation in drawGhost or ghostColour if one crept
+// in.
+//
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range []struct {
-		name string
-		set  radar.Settings
+		name   string
+		set    radar.Settings
+		ghosts bool
 	}{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
@@ -166,9 +249,14 @@ func TestDrawAllocations(t *testing.T) {
 			name: "minimal mode following the traffic",
 			set:  radar.Settings{Colour: radar.ColourAltitude, Minimal: true, Recentre: radar.DefaultRecentre},
 		},
+		{
+			name:   "no-decay run with ghosts",
+			set:    radar.Settings{Colour: radar.ColourAltitude, NoDecay: true},
+			ghosts: true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			scene, canv := benchScene(t)
+			scene, canv := sceneFor(t, testCase.ghosts)
 			scene.Apply(testCase.set)
 
 			// Draw once outside the measurement so the one-time growth of the
@@ -185,13 +273,22 @@ func TestDrawAllocations(t *testing.T) {
 // BenchmarkDraw measures one whole frame at the panel's resolution, in every
 // combination of colour mode and palette: airline mode and the paper palette
 // both do more work per aircraft than the defaults, and the numbers together
-// are what the benchmark is for. The last case is minimal mode following the
-// traffic, which has no furniture to draw and one more pass over the fleet.
+// are what the benchmark is for. Minimal mode following the traffic has no
+// furniture to draw and one more pass over the fleet.
+//
+// The last case adds five hundred ghosts at two hundred fixes each to the
+// ordinary bench frame, drawn under --no-decay because that is the only run
+// a ghost is ever drawn on at all. A ghost is kept for as long as the program
+// runs rather than for as long as its aircraft does, so it is the one thing
+// on the scope that accumulates without bound over a long session: this is
+// the case that would show a per-ghost cost if drawGhost or ghostColour ever
+// grew one.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range []struct {
-		name string
-		set  radar.Settings
-		pal  theme.Palette
+		name   string
+		set    radar.Settings
+		pal    theme.Palette
+		ghosts bool
 	}{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
 		{name: "altitude/paper", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Paper},
@@ -202,9 +299,15 @@ func BenchmarkDraw(b *testing.B) {
 			set:  radar.Settings{Colour: radar.ColourAltitude, Minimal: true, Recentre: radar.DefaultRecentre},
 			pal:  theme.Night,
 		},
+		{
+			name:   "ghosts",
+			set:    radar.Settings{Colour: radar.ColourAltitude, NoDecay: true},
+			pal:    theme.Night,
+			ghosts: true,
+		},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
-			scene, canv := benchScene(b)
+			scene, canv := sceneFor(b, testCase.ghosts)
 			scene.Apply(testCase.set)
 			scene.SetPalette(testCase.pal)
 

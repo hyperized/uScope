@@ -50,6 +50,12 @@ type ingest interface {
 //
 // Live is safe for concurrent use. Everything it reads from uAirwaves is
 // already locked there, and its own mutable state sits behind mu.
+//
+// With ghosts on, the Ghosts in a Frame alias the tracker's own slice and are
+// only valid until the next Frame call, the same caveat Demo carries about
+// its Planes. Frame is called once per drawn frame from the run loop, so
+// there is one reader; two goroutines drawing from one Live would need a copy
+// each, and nothing here makes one.
 type Live struct {
 	in      ingest
 	planes  *airplanes.Airplanes
@@ -73,6 +79,11 @@ type Live struct {
 	cancel       context.CancelFunc
 	group        sync.WaitGroup
 	lastEstimate time.Time
+
+	// ghosts keeps the trail of an aircraft the store has pruned, so a lost
+	// contact leaves its track behind. It sits under mu with the rest of the
+	// mutable state and is inert unless WithGhosts turned it on.
+	ghosts ghosts
 }
 
 // LiveOption configures a Live at construction.
@@ -135,6 +146,22 @@ func WithIngest(in ingest) LiveOption {
 			l.in = in
 		}
 	}
+}
+
+// WithGhosts keeps the trail of an aircraft that stops transmitting.
+//
+// uAirwaves prunes an aircraft from the store once it has been quiet long
+// enough, and without this the track it flew in on goes with it. With it on,
+// the frame the aircraft disappears from carries its last trail in Ghosts and
+// the radar keeps drawing it. --no-decay is what turns it on: the flag means
+// a trail stays until the operator changes the range, and a trail that
+// vanishes because the aeroplane went quiet is the one case that never
+// honoured that.
+//
+// It is off by default because it is not free. A ghost holds its fixes for
+// the life of the process, up to the caps in ghosts.go.
+func WithGhosts(on bool) LiveOption {
+	return func(l *Live) { l.ghosts = newGhosts(on) }
 }
 
 // WithEstimateInterval replaces how often the self-locator is consulted. A
@@ -206,9 +233,11 @@ func (l *Live) Start(ctx context.Context) {
 // Frame takes one snapshot of the whole ingest.
 func (l *Live) Frame() Frame {
 	receiver := l.receiver()
+	planes := l.planes.Sorted(receiver.Latitude, receiver.Longitude, airplanes.WithTrails())
 
 	return Frame{
-		Planes:   l.planes.Sorted(receiver.Latitude, receiver.Longitude, airplanes.WithTrails()),
+		Planes:   planes,
+		Ghosts:   l.observe(planes),
 		Receiver: receiver,
 		Source:   l.in.Source(),
 		Stats:    l.in.Stats(),
@@ -232,6 +261,18 @@ func (l *Live) Close() error {
 	l.group.Wait()
 
 	return nil
+}
+
+// observe folds the frame's aircraft into the ghost ring.
+//
+// It takes mu in a section of its own rather than holding it across the whole
+// of Frame, because receiver above reaches applyEstimate, which takes the
+// same lock on its own way past.
+func (l *Live) observe(planes airplanes.List) []Trail {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.ghosts.observe(planes)
 }
 
 // validate range-checks what the options collected.

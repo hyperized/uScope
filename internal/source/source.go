@@ -5,7 +5,8 @@
 // RTL-SDR on the uConsole, a BEAST feed over TCP, or a captured IQ file
 // played back. Demo invents twelve aircraft and flies them in straight lines,
 // which is what makes the radar developable on a laptop with no receiver in
-// it.
+// it, and loses one of them after ninety seconds so that losing a contact is
+// something the invented fleet does too.
 //
 // Both hand back the same Frame, and the scene never learns which one it is
 // talking to. That is the point: the layout work happens against Demo, and
@@ -16,6 +17,10 @@
 // position histories in it are only valid until the next Frame call on the
 // same Source: Live builds a fresh list every time, but Demo hands back its
 // own buffers, which is how it stays free of per-frame allocations.
+//
+// Both implementations can also keep the trail of an aircraft that stops
+// transmitting, which is what --no-decay asks for and what ghosts.go holds.
+// It is off unless the source is built with it on, and off it costs nothing.
 package source
 
 import (
@@ -101,7 +106,14 @@ type Receiver struct {
 // Now is carried in the frame rather than read from time.Now inside the scene
 // so a test drives the clock and the data from one place.
 type Frame struct {
-	Planes   airplanes.List
+	Planes airplanes.List
+
+	// Ghosts are the trails of aircraft that have stopped transmitting, kept
+	// only by a source built with ghosts on. They are nil otherwise, which a
+	// scene has to cope with in any case: a run that has lost nothing yet has
+	// none either.
+	Ghosts []Trail
+
 	Receiver Receiver
 	Source   adsb.SourceInfo
 	Stats    adsb.Stats
