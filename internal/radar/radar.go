@@ -2,8 +2,8 @@
 //
 // It is the scene DESIGN.md is the contract for: a header band, a square
 // scope on the left with range rings and one thin trail per aircraft, a right
-// column holding the selected-flight card, the compact rows, a details block,
-// the legend and the stats, and a key bar along the bottom.
+// column holding the selected-flight panel, the compact rows and the legend,
+// and a key bar along the bottom.
 //
 // Aircraft are coloured by altitude band or by operator, which is what the c
 // key and --colour pick between. Airline colours come from pkg/airlines and
@@ -147,6 +147,12 @@ type Scene struct {
 	trails    bool
 	autoRange bool
 
+	// noDecay draws every trail segment at full strength instead of fading
+	// the tail out. It is a flag with no key: it changes what a trail means
+	// rather than whether there is one, and a setting you can flip by
+	// accident mid-flight is one you have to re-read the screen to trust.
+	noDecay bool
+
 	// colour is what an aircraft's colour means, which the c key cycles.
 	colour ColourMode
 
@@ -209,6 +215,12 @@ type Scene struct {
 	// rowStart is the first compact row on screen. The window follows the
 	// selection so the selected aircraft is always one of the rows.
 	rowStart int
+
+	// pinned says the operator chose this aircraft. Until they do, the
+	// selection follows the nearest contact rather than sticking to whichever
+	// aeroplane happened to be first in the list when the program started.
+	// n, p, Up and Down pin it; Esc lets go again.
+	pinned bool
 
 	// The scratch buffers every number in the scene is formatted into.
 	// Reusing them is what keeps the draw path free of allocations; the note

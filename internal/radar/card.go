@@ -27,15 +27,15 @@ const (
 
 	cardLabelSuffix = " / SELECTED FLIGHT"
 	cardNoSelection = "--"
-	noContact       = "NO CONTACT"
 
 	squawkPrefix   = "SQ "
 	trackPrefix    = "TRACK "
 	trackSeparator = " / "
 
-	// trackUnknown stands in when no heading has been decoded. A heading of
-	// exactly zero is the undecoded state rather than due north, and printing
-	// 000 / N would be the card inventing a course.
+	// trackUnknown stands in when no heading has been decoded. uAirwaves marks
+	// that with a negative heading, so zero is due north and reads as
+	// 000 / N; it is a negative figure that would have the panel inventing a
+	// course.
 	trackUnknown = "---"
 
 	unitFT = "FT"
@@ -68,9 +68,6 @@ const (
 	legendHigh = "> 25K FT"
 )
 
-// The stats line.
-const statsAircraft = " AIRCRAFT / "
-
 // legendEntry is one altitude band and the colour that means it.
 type legendEntry struct {
 	col   color.RGBA
@@ -79,15 +76,15 @@ type legendEntry struct {
 
 // drawColumn fills the right-hand column.
 //
-// Everything with a fixed height takes its room first: the stats line, the
-// legend and the details block off the bottom, the card off the top. The
-// compact rows get what is left, which is what fills the column at any height
-// rather than leaving the hole the first version of this layout had under the
-// list.
+// Everything with a fixed height takes its room first: the legend off the
+// bottom, the selected-flight panel off the top. The compact rows get all of
+// what is left, which is what fills the column at any height.
 //
 // The order the blocks are called in is the order they claim space, not the
-// order they appear on screen. Reading down the frame it is card, rows,
-// details, legend, stats.
+// order they appear on screen. Reading down the frame it is panel, rows,
+// legend. The stats line under the legend is gone: it said how many aircraft
+// there were and where they came from, and the header already carries the
+// source, so the count moved onto the rows' own title line and the line went.
 func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	if lay.column.Empty() {
 		return
@@ -102,54 +99,97 @@ func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 		labels: lay.labels,
 	}
 
-	s.drawStats(&col, frame)
 	s.drawLegend(&col, frame)
 	s.drawCard(&col, frame)
-	s.drawDetails(&col, frame)
 	s.drawRows(&col, frame)
 }
 
-// drawCard is the selected-flight card: the numbered label, the callsign set
-// large with its track under it, the ICAO hex and squawk in the top right,
-// and the three figures along the bottom.
+// cardPlan is the panel measured for one column width: the height of each
+// band and the shape the value line takes.
+//
+// It is worked out before anything is drawn because the panel's own height
+// depends on whether the value line fits, and the border has to be drawn
+// before the contents go inside it.
+type cardPlan struct {
+	label  int
+	middle int
+	figure int
+
+	// values is the height of the value line, and columns how many pairs go
+	// side by side in it. Both are zero on a column too narrow for one whole
+	// pair, and the panel is that much shorter.
+	values  int
+	columns int
+
+	total int
+}
+
+// planCard measures the panel against a column of this width, reporting false
+// when one of its three faces is missing.
+func (s *Scene) planCard(width int) (cardPlan, bool) {
+	plan := cardPlan{
+		label:  lineHeight(s.faces.Small),
+		figure: lineHeight(s.faces.Large),
+	}
+
+	body := lineHeight(s.faces.Body)
+	if plan.label == 0 || body == 0 || plan.figure == 0 {
+		return plan, false
+	}
+
+	plan.middle = max(plan.figure*cardTitleScale+body, 2*body)
+	plan.total = 2*cardPadY + plan.label + rowGap + plan.middle + rowGap + plan.figure
+
+	columns, lines := s.cardValueShape(width - accentWidth - 2*cardPadX)
+	if lines > 0 {
+		plan.columns = columns
+		plan.values = lines*body + (lines-1)*rowLead
+		plan.total += rowGap + plan.values
+	}
+
+	return plan, true
+}
+
+// drawCard is the selected-flight panel: the numbered label, the callsign set
+// large with its track under it, the ICAO hex and the squawk in the top right,
+// the three figures, and the line of values under them.
+//
+// It is one panel rather than a card plus a details block because both were
+// about the same aeroplane and both had a border. Two borders said there were
+// two things to read.
 func (s *Scene) drawCard(col *layout, frame source.Frame) {
-	labelHeight := lineHeight(s.faces.Small)
-	detailHeight := lineHeight(s.faces.Body)
-	figureHeight := lineHeight(s.faces.Large)
-
-	if labelHeight == 0 || detailHeight == 0 || figureHeight == 0 {
+	plan, drawable := s.planCard(col.right - col.left)
+	if !drawable || !col.fits(plan.total+blockGap) {
 		return
 	}
 
-	middle := max(figureHeight*cardTitleScale+detailHeight, 2*detailHeight)
-	total := 2*cardPadY + labelHeight + rowGap + middle + rowGap + figureHeight
-
-	if !col.fits(total + blockGap) {
-		return
-	}
-
-	s.cardFrame(col, total)
+	s.cardFrame(col, plan.total)
 
 	left, right := col.left+accentWidth+cardPadX, col.right-cardPadX
 	top := col.top + cardPadY
 
 	plane, position := s.selectedPlane(frame)
 	s.drawCardLabel(col.dst, left, top, position)
-	top += labelHeight + rowGap
+	top += plan.label + rowGap
 
+	col.top += plan.total + blockGap
+
+	// An empty sky puts NO TRAFFIC where the callsign goes. It used to live in
+	// the details block, which is where the eye went looking for a reason the
+	// panel was blank; now the panel says it itself.
 	if position < 0 {
-		text.Draw(col.dst, s.faces.Large, left, top, noContact, s.pal.Muted)
-		col.top += total + blockGap
+		text.Draw(col.dst, s.faces.Large, left, top, noTraffic, s.pal.Muted)
 
 		return
 	}
 
-	s.drawCardIdentity(col.dst, image.Rect(left, top, right, top+middle), plane)
-	s.drawCardFigures(col.dst,
-		image.Rect(left, top+middle+rowGap, right, top+middle+rowGap+figureHeight),
-		frame.Receiver, plane)
+	s.drawCardIdentity(col.dst, image.Rect(left, top, right, top+plan.middle), plane)
+	top += plan.middle + rowGap
 
-	col.top += total + blockGap
+	s.drawCardFigures(col.dst, image.Rect(left, top, right, top+plan.figure), frame.Receiver, plane)
+	top += plan.figure + rowGap
+
+	s.drawCardValues(col.dst, image.Rect(left, top, right, top+plan.values), plan.columns, frame, plane)
 }
 
 // selectedPlane is the aircraft the card is about and its place in the list.
@@ -196,7 +236,11 @@ func (s *Scene) drawLabelNumber(dst *canvas.Canvas, x, y, position int) int {
 }
 
 // drawCardIdentity sets the callsign large with the track under it, and the
-// two codes right-aligned beside them.
+// codes right-aligned beside them.
+//
+// The ICAO hex in the corner is dropped when no callsign was decoded, because
+// callsignOf has then already put that same hex in the large face two inches
+// to the left. The squawk moves up into the space it leaves.
 func (s *Scene) drawCardIdentity(dst *canvas.Canvas, box image.Rectangle, plane airplane.Snapshot) {
 	large, body := s.faces.Large, s.faces.Body
 
@@ -205,8 +249,14 @@ func (s *Scene) drawCardIdentity(dst *canvas.Canvas, box image.Rectangle, plane 
 
 	s.drawCardTrack(dst, box.Min.X, box.Min.Y+lineHeight(large)*cardTitleScale, plane.Heading)
 
-	text.DrawRight(dst, body, box.Max.X, box.Min.Y, clip(plane.ICAO, maxICAO), s.pal.Ink)
-	s.drawSquawk(dst, box.Max.X, box.Min.Y+lineHeight(body), plane.Squawk)
+	top := box.Min.Y
+
+	if plane.Callsign != "" {
+		text.DrawRight(dst, body, box.Max.X, top, clip(plane.ICAO, maxICAO), s.pal.Ink)
+		top += lineHeight(body)
+	}
+
+	s.drawSquawk(dst, box.Max.X, top, plane)
 }
 
 // drawCardTrack writes the course as degrees and the compass point it falls
@@ -218,7 +268,7 @@ func (s *Scene) drawCardTrack(dst *canvas.Canvas, x, y int, heading float64) {
 
 	pen := text.Draw(dst, face, x, y, trackPrefix, s.pal.Muted)
 
-	if heading == 0 {
+	if !knownHeading(heading) {
 		text.Draw(dst, face, pen, y, trackUnknown, s.pal.Muted)
 
 		return
@@ -229,22 +279,38 @@ func (s *Scene) drawCardTrack(dst *canvas.Canvas, x, y int, heading float64) {
 	text.Draw(dst, face, pen, y, compass(heading), s.pal.Ink)
 }
 
-// drawSquawk right-aligns the transponder code behind its label.
+// drawSquawk right-aligns the transponder code behind its label, with the
+// emergency tag after it when the aircraft is squawking one.
 //
-// The two pieces are measured and then drawn left to right rather than drawn
-// right to left, so the label stays muted and the code stays ink without the
-// pair drifting apart when the code is short.
+// The pieces are measured and then drawn left to right rather than drawn right
+// to left, so the label stays muted and the code stays ink without the group
+// drifting apart when the code is short.
+//
+// The tag is the one place the accent marks something other than the
+// selection. An emergency is the one thing on the scope worth taking the eye
+// off everything else, which is what the accent is for.
 //
 //nolint:varnamelen // y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawSquawk(dst *canvas.Canvas, rightX, y int, squawk string) {
+func (s *Scene) drawSquawk(dst *canvas.Canvas, rightX, y int, plane airplane.Snapshot) {
 	face := s.faces.Body
-	code := clip(squawk, maxSquawk)
+
+	code := clip(plane.Squawk, maxSquawk)
+	if code == "" {
+		code = noSquawk
+	}
+
+	tag := ""
+	if plane.Emergency {
+		tag = emergencyTag
+	}
 
 	prefixWidth, _ := text.Measure(face, squawkPrefix)
 	codeWidth, _ := text.Measure(face, code)
+	tagWidth, _ := text.Measure(face, tag)
 
-	pen := text.Draw(dst, face, rightX-prefixWidth-codeWidth, y, squawkPrefix, s.pal.Muted)
-	text.Draw(dst, face, pen, y, code, s.pal.Ink)
+	pen := text.Draw(dst, face, rightX-prefixWidth-codeWidth-tagWidth, y, squawkPrefix, s.pal.Muted)
+	pen = text.Draw(dst, face, pen, y, code, s.pal.Ink)
+	text.Draw(dst, face, pen, y, tag, s.pal.Accent)
 }
 
 // The three figures along the bottom of the card, in the order they are
@@ -487,7 +553,7 @@ func (s *Scene) drawCardFigures(
 
 	if plan.show[figureSpeed] {
 		s.drawPlannedFigure(dst, plan, figureSpeed,
-			figure{value: s.whole(plane.Velocity), unit: unitKT, ink: s.pal.Ink})
+			figure{value: s.speed(plane.Velocity), unit: unitKT, ink: s.pal.Ink})
 	}
 }
 
@@ -663,28 +729,4 @@ func (s *Scene) legendEntries() [figureCount]legendEntry {
 		{col: s.pal.AltMid, label: legendMid},
 		{col: s.pal.AltHigh, label: legendHigh},
 	}
-}
-
-// drawStats writes the one line that says whether anything is working: how
-// many aircraft are being tracked and where from.
-//
-// The frame count used to sit in this line too, but it changes every tick and
-// was more distracting than informative next to numbers that only change when
-// something in the sky does. It is still in source.Frame.Stats for whatever
-// wants it; it just does not go on screen any more.
-func (s *Scene) drawStats(col *layout, frame source.Frame) {
-	face := s.faces.Small
-
-	height := lineHeight(face)
-	if height == 0 || !col.fits(height) {
-		return
-	}
-
-	top := col.bottom - height
-
-	pen := drawBytes(col.dst, face, col.left, top, s.count(len(frame.Planes)), s.pal.Ink)
-	pen = text.Draw(col.dst, face, pen, top, statsAircraft, s.pal.Muted)
-	text.Draw(col.dst, face, pen, top, clip(frame.Source.Label, maxSourceLabel), s.pal.Muted)
-
-	col.bottom -= height + blockGap
 }

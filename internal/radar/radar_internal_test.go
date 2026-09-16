@@ -23,6 +23,13 @@ import (
 	"github.com/hyperized/uScope/pkg/shore"
 )
 
+// The ICAOs in the small fleets these tests build. The first is the one an
+// unpinned selection lands on.
+const (
+	icaoFirst  = "AAA111"
+	icaoSecond = "BBB222"
+)
+
 // Headings at and around the compass's eight point boundaries, plus the
 // values that arrive off the air rather than off a protractor.
 const (
@@ -543,7 +550,7 @@ func TestGlyphWidth(t *testing.T) {
 func TestIndexOf(t *testing.T) {
 	t.Parallel()
 
-	icaos := []string{"AAA111", "BBB222", "CCC333"}
+	icaos := []string{icaoFirst, icaoSecond, "CCC333"}
 
 	for _, testCase := range []struct {
 		name      string
@@ -552,9 +559,9 @@ func TestIndexOf(t *testing.T) {
 		wantIndex int
 	}{
 		{name: "an empty search string reports a miss", list: icaos, search: "", wantIndex: -1},
-		{name: "a hit reports its position", list: icaos, search: "BBB222", wantIndex: 1},
+		{name: "a hit reports its position", list: icaos, search: icaoSecond, wantIndex: 1},
 		{name: "a miss reports -1", list: icaos, search: "ZZZ999", wantIndex: -1},
-		{name: "an empty list reports a miss", list: nil, search: "AAA111", wantIndex: -1},
+		{name: "an empty list reports a miss", list: nil, search: icaoFirst, wantIndex: -1},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1865,10 +1872,11 @@ func TestBandMuted(t *testing.T) {
 	}
 }
 
-// TestDetailsShape checks the block's two layouts: one column of five lines
-// when the width will not hold the longest pair twice over, two columns of
-// three lines when it will, plus where detailAt places a pair in either shape.
-func TestDetailsShape(t *testing.T) {
+// TestCardValueShape checks how the panel's three value pairs are arranged as
+// the column narrows: three across when there is room for three, wrapped to
+// two lines and then three, and dropped entirely below one whole pair. It also
+// checks where detailAt places a pair in a two-column shape.
+func TestCardValueShape(t *testing.T) {
 	t.Parallel()
 
 	small, err := fonts.Small()
@@ -1877,7 +1885,7 @@ func TestDetailsShape(t *testing.T) {
 	}
 
 	scene := &Scene{faces: Faces{Small: small, Body: rowPlanFaces(t)}}
-	widest := scene.detailWidest()
+	widest := scene.cardPairWidest()
 
 	for _, testCase := range []struct {
 		name        string
@@ -1886,38 +1894,47 @@ func TestDetailsShape(t *testing.T) {
 		wantLines   int
 	}{
 		{
-			name:  "exactly one pair takes one column of five lines",
-			width: widest, wantColumns: 1, wantLines: detailsPairs,
+			name:  "under one pair draws no value line at all",
+			width: widest - 1, wantColumns: 0, wantLines: 0,
+		},
+		{
+			name:  "exactly one pair takes one column of three lines",
+			width: widest, wantColumns: 1, wantLines: cardPairs,
 		},
 		{
 			name:  "just short of two pairs still takes one column",
-			width: 2*widest - 1, wantColumns: 1, wantLines: detailsPairs,
+			width: 2*widest - 1, wantColumns: 1, wantLines: cardPairs,
 		},
 		{
-			name:  "exactly two pairs takes two columns of three lines",
-			width: 2 * widest, wantColumns: detailsColumns, wantLines: detailsLines,
+			name:  "two pairs take two columns of two lines",
+			width: 2 * widest, wantColumns: 2, wantLines: 2,
+		},
+		{
+			name:  "three pairs take one line",
+			width: 3 * widest, wantColumns: cardPairs, wantLines: 1,
+		},
+		{
+			name:  "room for four is still three, because there are three",
+			width: 4 * widest, wantColumns: cardPairs, wantLines: 1,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			columns, lines := scene.detailsShape(testCase.width)
+			columns, lines := scene.cardValueShape(testCase.width)
 			if columns != testCase.wantColumns || lines != testCase.wantLines {
-				t.Errorf("detailsShape(%d) = (%d, %d), want (%d, %d)",
+				t.Errorf("cardValueShape(%d) = (%d, %d), want (%d, %d)",
 					testCase.width, columns, lines, testCase.wantColumns, testCase.wantLines)
 			}
 		})
 	}
 
-	t.Run("detailsHeight is zero just under the widest pair and real at it", func(t *testing.T) {
+	t.Run("cardValueShape is zero without a body face", func(t *testing.T) {
 		t.Parallel()
 
-		if got := scene.detailsHeight(widest - 1); got != 0 {
-			t.Errorf("detailsHeight(widest-1) = %d, want 0", got)
-		}
-
-		if got := scene.detailsHeight(widest); got == 0 {
-			t.Error("detailsHeight(widest) = 0, want a real height")
+		bare := &Scene{}
+		if columns, lines := bare.cardValueShape(1000); columns != 0 || lines != 0 {
+			t.Errorf("cardValueShape on a faceless scene = (%d, %d), want (0, 0)", columns, lines)
 		}
 	})
 
@@ -1929,50 +1946,65 @@ func TestDetailsShape(t *testing.T) {
 		const step = 20
 
 		vertX, vertY := detailAt(box, 2, step, pairVert)
-		brgX, brgY := detailAt(box, 2, step, pairBrg)
 		posX, posY := detailAt(box, 2, step, pairPos)
+		seenX, seenY := detailAt(box, 2, step, pairSeen)
 
 		if vertX != box.Min.X || vertY != box.Min.Y {
 			t.Errorf("detailAt(pairVert) = (%d, %d), want the box origin", vertX, vertY)
 		}
 
-		if brgX == vertX || brgY != vertY {
-			t.Errorf("detailAt(pairBrg) = (%d, %d), want the same row, a different column", brgX, brgY)
+		if posX == vertX || posY != vertY {
+			t.Errorf("detailAt(pairPos) = (%d, %d), want the same row, a different column", posX, posY)
 		}
 
-		if posX != vertX || posY != vertY+step {
-			t.Errorf("detailAt(pairPos) = (%d, %d), want the first column, one row down", posX, posY)
+		if seenX != vertX || seenY != vertY+step {
+			t.Errorf("detailAt(pairSeen) = (%d, %d), want the first column, one row down", seenX, seenY)
 		}
 	})
 }
 
-// TestDetailsHeightRowStepRowsHeightWithoutFaces checks the guard each of the
-// three geometry helpers has for the face it cannot do without.
-func TestDetailsHeightRowStepRowsHeightWithoutFaces(t *testing.T) {
+// TestPlanCardWithoutFaces checks the guard planCard has for each face it
+// cannot do without, and the two row helpers' guard for the body face.
+func TestPlanCardWithoutFaces(t *testing.T) {
 	t.Parallel()
 
-	const detailsProbeWidth = 1000
+	const cardProbeWidth = 1000
 
-	t.Run("detailsHeight is zero without a small face", func(t *testing.T) {
-		t.Parallel()
-
-		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}}
-		if got := scene.detailsHeight(detailsProbeWidth); got != 0 {
-			t.Errorf("detailsHeight(%d) = %d, want 0 without a small face", detailsProbeWidth, got)
-		}
-	})
-
-	t.Run("detailsHeight is zero without a body face", func(t *testing.T) {
-		t.Parallel()
+	loadSmall := func(t *testing.T) *psf.Font {
+		t.Helper()
 
 		small, err := fonts.Small()
 		if err != nil {
 			t.Fatalf("fonts.Small: %v", err)
 		}
 
-		scene := &Scene{faces: Faces{Small: small}}
-		if got := scene.detailsHeight(detailsProbeWidth); got != 0 {
-			t.Errorf("detailsHeight(%d) = %d, want 0 without a body face", detailsProbeWidth, got)
+		return small
+	}
+
+	t.Run("planCard refuses without a small face", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Body: rowPlanFaces(t), Large: rowPlanFaces(t)}}
+		if _, ok := scene.planCard(cardProbeWidth); ok {
+			t.Error("planCard reported a plan without a small face")
+		}
+	})
+
+	t.Run("planCard refuses without a body face", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Small: loadSmall(t), Large: rowPlanFaces(t)}}
+		if _, ok := scene.planCard(cardProbeWidth); ok {
+			t.Error("planCard reported a plan without a body face")
+		}
+	})
+
+	t.Run("planCard refuses without a large face", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Small: loadSmall(t), Body: rowPlanFaces(t)}}
+		if _, ok := scene.planCard(cardProbeWidth); ok {
+			t.Error("planCard reported a plan without a large face")
 		}
 	})
 
@@ -3144,6 +3176,390 @@ func BenchmarkBackground(b *testing.B) {
 
 			for b.Loop() {
 				scene.renderLayer(canv, scene.layerKeyFor(canv, frame), frame)
+			}
+		})
+	}
+}
+
+// TestSceneSpeed checks the velocity sentinel: uAirwaves marks a velocity no
+// message has carried with -1, and the scope drew that as "-1" until this
+// formatter existed. Every negative figure reads as unknown, because none of
+// them is a speed.
+func TestSceneSpeed(t *testing.T) {
+	t.Parallel()
+
+	const (
+		cruise     = 484.0
+		justUnder  = -0.5
+		sentinel   = -1.0
+		veryFast   = 999.4
+		unknownFig = "---"
+	)
+
+	for _, testCase := range []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{name: "the sentinel reads as unknown", value: sentinel, want: unknownFig},
+		{name: "any negative reads as unknown", value: justUnder, want: unknownFig},
+		{name: "not a number reads as unknown", value: math.NaN(), want: unknownFig},
+		{name: "minus infinity reads as unknown", value: math.Inf(-1), want: unknownFig},
+		{name: "a standstill is a reading, not a sentinel", value: 0, want: "0"},
+		{name: "one knot is a reading", value: 1, want: "1"},
+		{name: "a cruise speed rounds to whole knots", value: cruise, want: "484"},
+		{name: "a fast one rounds up", value: veryFast, want: "999"},
+		{name: "infinity falls back to whole's own dash", value: math.Inf(1), want: "-"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			if got := string(scene.speed(testCase.value)); got != testCase.want {
+				t.Errorf("speed(%v) = %q, want %q", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestKnownHeading checks the heading sentinel at the boundary. Zero is due
+// north and a real course; only a negative figure means nothing was decoded.
+func TestKnownHeading(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sentinel  = -1.0
+		justUnder = -0.0001
+		northWest = 315.0
+		wrapped   = 360.0
+	)
+
+	for _, testCase := range []struct {
+		name  string
+		value float64
+		want  bool
+	}{
+		{name: "the sentinel is unknown", value: sentinel, want: false},
+		{name: "any negative is unknown", value: justUnder, want: false},
+		{name: "not a number is unknown", value: math.NaN(), want: false},
+		{name: "due north is known", value: 0, want: true},
+		{name: "one degree is known", value: 1, want: true},
+		{name: "north west is known", value: northWest, want: true},
+		{name: "a full circle is known", value: wrapped, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := knownHeading(testCase.value); got != testCase.want {
+				t.Errorf("knownHeading(%v) = %v, want %v", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestTrailAlpha checks both halves of the trail's fade: the default ramp from
+// tail to head, and --no-decay flattening it to the head's own strength.
+func TestTrailAlpha(t *testing.T) {
+	t.Parallel()
+
+	const span = 4.0
+
+	fading := &Scene{}
+	flat := &Scene{noDecay: true}
+
+	for index := range int(span) + 1 {
+		got := flat.trailAlpha(index, span)
+		if got != trailMaxAlpha {
+			t.Errorf("no-decay trailAlpha(%d, %v) = %v, want %v", index, span, got, trailMaxAlpha)
+		}
+	}
+
+	tail := fading.trailAlpha(0, span)
+	head := fading.trailAlpha(int(span), span)
+
+	if tail != trailMinAlpha {
+		t.Errorf("trailAlpha at the tail = %v, want %v", tail, trailMinAlpha)
+	}
+
+	if head != trailMaxAlpha {
+		t.Errorf("trailAlpha at the head = %v, want %v", head, trailMaxAlpha)
+	}
+
+	if middle := fading.trailAlpha(int(span)/2, span); middle <= tail || middle >= head {
+		t.Errorf("trailAlpha in the middle = %v, want between %v and %v", middle, tail, head)
+	}
+}
+
+// tablelessPSF1 builds a 256-glyph PSF1 font with no unicode table, which is
+// how the kernel ships a font that only covers Latin-1. Resolving a code point
+// is then the code point itself, so anything past 255 is simply absent, which
+// is the one way a test can hand cutMarker a face with no ellipsis: all four
+// embedded Terminus faces carry U+2026.
+func tablelessPSF1(tb testing.TB) *psf.Font {
+	tb.Helper()
+
+	const (
+		glyphs   = 256
+		charsize = 16
+		header   = 4
+	)
+
+	data := make([]byte, header+glyphs*charsize)
+	data[0], data[1] = 0x36, 0x04
+	data[2], data[3] = 0, charsize
+
+	font, err := psf.Parse(data)
+	if err != nil {
+		tb.Fatalf("psf.Parse of a synthetic PSF1: %v", err)
+	}
+
+	return font
+}
+
+// TestCutMarker checks both markers a cut label can end with: the ellipsis on
+// a face that carries one, and the full stop on a face that does not.
+func TestCutMarker(t *testing.T) {
+	t.Parallel()
+
+	small, err := fonts.Small()
+	if err != nil {
+		t.Fatalf("fonts.Small: %v", err)
+	}
+
+	if got := cutMarker(small); got != cutEllipsis {
+		t.Errorf("cutMarker(Terminus small) = %q, want %q", got, cutEllipsis)
+	}
+
+	if got := cutMarker(tablelessPSF1(t)); got != cutDot {
+		t.Errorf("cutMarker(a face with no ellipsis) = %q, want %q", got, cutDot)
+	}
+}
+
+// TestFitLabel checks the measured cut: a label that fits is never touched, a
+// label that does not loses exactly enough runes for the marker, and a width
+// with no room for even one glyph draws nothing at all.
+func TestFitLabel(t *testing.T) {
+	t.Parallel()
+
+	small, err := fonts.Small()
+	if err != nil {
+		t.Fatalf("fonts.Small: %v", err)
+	}
+
+	const label = "BEAST 192.168.1.159:30005"
+
+	glyph := small.Width()
+	step := glyph + labelTracking
+	whole := trackedWidth(small, len([]rune(label)))
+
+	for _, testCase := range []struct {
+		name       string
+		width      int
+		wantHead   string
+		wantMarker string
+	}{
+		{name: "no room at all draws nothing", width: 0, wantHead: "", wantMarker: ""},
+		{name: "less than one glyph draws nothing", width: glyph - 1, wantHead: "", wantMarker: ""},
+		{name: "exactly the label is left whole", width: whole, wantHead: label, wantMarker: ""},
+		{name: "more than the label is left whole", width: whole + step, wantHead: label, wantMarker: ""},
+		{
+			name: "one glyph short loses two runes and gains a marker",
+			// One rune of room is given back to the marker, so a label cut at
+			// n runes shows n-1 of its own.
+			width: whole - step, wantHead: label[:len(label)-2], wantMarker: cutEllipsis,
+		},
+		{name: "one glyph of room is all marker", width: glyph, wantHead: "", wantMarker: cutEllipsis},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			head, marker := fitLabel(small, label, testCase.width)
+			if head != testCase.wantHead || marker != testCase.wantMarker {
+				t.Errorf("fitLabel(%q, %d) = (%q, %q), want (%q, %q)",
+					label, testCase.width, head, marker, testCase.wantHead, testCase.wantMarker)
+			}
+		})
+	}
+}
+
+// TestTrackedWidth checks the inverse of fitRunes, including the zero and
+// negative counts a right-aligned run of no glyphs at all would ask for.
+func TestTrackedWidth(t *testing.T) {
+	t.Parallel()
+
+	small, err := fonts.Small()
+	if err != nil {
+		t.Fatalf("fonts.Small: %v", err)
+	}
+
+	step := small.Width() + labelTracking
+
+	for _, testCase := range []struct {
+		name  string
+		runes int
+		want  int
+	}{
+		{name: "a negative count is no width", runes: -1, want: 0},
+		{name: "no glyphs is no width", runes: 0, want: 0},
+		{name: "one glyph carries no tracking after it", runes: 1, want: small.Width()},
+		{name: "two glyphs carry one gap", runes: 2, want: 2*small.Width() + labelTracking},
+		{name: "four glyphs carry three gaps", runes: 4, want: 4*step - labelTracking},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := trackedWidth(small, testCase.runes); got != testCase.want {
+				t.Errorf("trackedWidth(%d) = %d, want %d", testCase.runes, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestSyncSelectionUnpinsALostAircraft checks the one branch the external
+// selection tests cannot reach from outside: a pinned aircraft that leaves the
+// list takes its pin with it, because there is nothing left to hold.
+func TestSyncSelectionUnpinsALostAircraft(t *testing.T) {
+	t.Parallel()
+
+	scene := &Scene{pinned: true, selICAO: "GONE01", selIndex: 2}
+
+	scene.syncSelection(source.Frame{Planes: []airplane.Snapshot{
+		{ICAO: icaoFirst}, {ICAO: icaoSecond},
+	}})
+
+	if scene.pinned {
+		t.Error("the pin survived the aircraft leaving the list")
+	}
+
+	if scene.selICAO != icaoFirst || scene.selIndex != 0 {
+		t.Errorf("selection = %q at %d, want the nearest aircraft at 0", scene.selICAO, scene.selIndex)
+	}
+}
+
+// TestPlanCardDropsTheValueLineWhenNarrow checks that the panel gives up its
+// line of values, and the height that went with it, on a column too narrow for
+// one whole pair.
+func TestPlanCardDropsTheValueLineWhenNarrow(t *testing.T) {
+	t.Parallel()
+
+	small, err := fonts.Small()
+	if err != nil {
+		t.Fatalf("fonts.Small: %v", err)
+	}
+
+	scene := &Scene{faces: Faces{Small: small, Body: rowPlanFaces(t), Large: rowPlanFaces(t)}}
+	chrome := accentWidth + 2*cardPadX
+
+	narrow, drawable := scene.planCard(chrome + scene.cardPairWidest() - 1)
+	if !drawable {
+		t.Fatal("planCard refused a panel with every face present")
+	}
+
+	if narrow.values != 0 || narrow.columns != 0 {
+		t.Errorf("narrow plan = %+v, want no value line", narrow)
+	}
+
+	wide, drawable := scene.planCard(chrome + cardPairs*scene.cardPairWidest())
+	if !drawable {
+		t.Fatal("planCard refused a wide panel")
+	}
+
+	if wide.columns != cardPairs {
+		t.Errorf("wide plan drew %d value columns, want %d", wide.columns, cardPairs)
+	}
+
+	if wide.total <= narrow.total {
+		t.Errorf("wide total %d, narrow total %d, want the value line to add height", wide.total, narrow.total)
+	}
+}
+
+// TestCapOn checks which key caps are drawn filled: the four toggles follow
+// their own setting, and everything else is always on, because a key with no
+// off state has nothing to say by being hollow.
+func TestCapOn(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		scene  Scene
+		toggle capToggle
+		want   bool
+	}{
+		{name: "auto on", scene: Scene{autoRange: true}, toggle: capAuto, want: true},
+		{name: "auto off", scene: Scene{}, toggle: capAuto, want: false},
+		{name: "trails on", scene: Scene{trails: true}, toggle: capTrails, want: true},
+		{name: "trails off", scene: Scene{}, toggle: capTrails, want: false},
+		{name: "airports on", scene: Scene{airports: true}, toggle: capAirports, want: true},
+		{name: "airports off", scene: Scene{}, toggle: capAirports, want: false},
+		{name: "shore on", scene: Scene{shoreOn: true}, toggle: capShore, want: true},
+		{name: "shore off", scene: Scene{}, toggle: capShore, want: false},
+		{name: "quit is always on", scene: Scene{}, toggle: capAlways, want: true},
+		{name: "the colour cap is always on", scene: Scene{}, toggle: capColour, want: true},
+		{name: "the theme cap is always on", scene: Scene{}, toggle: capTheme, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := testCase.scene
+			if got := scene.capOn(testCase.toggle); got != testCase.want {
+				t.Errorf("capOn(%d) = %v, want %v", testCase.toggle, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestCapLabel checks what the two cycling keys say. They carry the value they
+// are on rather than the name of the setting, because a cap reading COLOUR
+// says there is a colour mode without saying which one.
+func TestCapLabel(t *testing.T) {
+	t.Parallel()
+
+	// The two cycling entries, taken from the bar itself rather than written
+	// out again, so a rename of either label cannot leave this table testing a
+	// cap that is no longer on screen.
+	colourCap, themeCap := keyCaps[7], keyCaps[8]
+
+	for _, testCase := range []struct {
+		name  string
+		scene Scene
+		entry keyCap
+		want  string
+	}{
+		{
+			name: "altitude mode", scene: Scene{colour: ColourAltitude},
+			entry: colourCap, want: labelAltitude,
+		},
+		{
+			name: "airline mode", scene: Scene{colour: ColourAirline},
+			entry: colourCap, want: labelAirline,
+		},
+		{
+			name: "the zero colour mode reads as altitude", scene: Scene{},
+			entry: colourCap, want: labelAltitude,
+		},
+		{
+			name: "night", scene: Scene{},
+			entry: themeCap, want: labelNight,
+		},
+		{
+			name: "paper", scene: Scene{light: true},
+			entry: themeCap, want: labelPaper,
+		},
+		{
+			name: "a toggle keeps its own label", scene: Scene{},
+			entry: keyCap{key: "T", label: "TRAILS", state: capTrails}, want: "TRAILS",
+		},
+		{
+			name: "so does a key that is not a toggle", scene: Scene{},
+			entry: keyCap{key: "Q", label: "QUIT"}, want: "QUIT",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := testCase.scene
+			if got := scene.capLabel(testCase.entry); got != testCase.want {
+				t.Errorf("capLabel(%+v) = %q, want %q", testCase.entry, got, testCase.want)
 			}
 		})
 	}

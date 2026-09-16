@@ -161,6 +161,11 @@ type Settings struct {
 	// Minimal starts the scene in minimal mode: the aircraft and their trails
 	// on the bare field, edge to edge. Zero is off, which is the full scope.
 	Minimal bool
+
+	// NoDecay draws every trail segment at full strength instead of fading the
+	// tail out. Zero is off, which is the fade: on a busy field it is what says
+	// which end of a track is the aeroplane.
+	NoDecay bool
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
@@ -170,6 +175,7 @@ func (s *Scene) Apply(set Settings) {
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
 	s.minimal = set.Minimal
+	s.noDecay = set.NoDecay
 	s.applyRange(set.RangeNm)
 }
 

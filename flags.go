@@ -124,6 +124,7 @@ type config struct {
 	shore       radar.Toggle
 	rangeNm     float64
 	minimal     bool
+	noDecay     bool
 
 	// battery is the power-supply file to read instead of looking one up. It
 	// is empty for the normal case, which is autodiscovery.
@@ -163,6 +164,7 @@ type rawFlags struct {
 	frames      int
 	testPattern bool
 	minimal     bool
+	noDecay     bool
 	demo        bool
 }
 
@@ -216,6 +218,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
 	set.BoolVar(&raw.minimal, "minimal", false,
 		"draw only the aircraft and their trails, edge to edge, with no header, key bar or column")
+	set.BoolVar(&raw.noDecay, "no-decay", false,
+		"draw every trail segment at full strength instead of fading the tail out")
 	set.StringVar(&raw.battery, "battery", "",
 		"power-supply uevent file to read the battery from; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
@@ -312,6 +316,7 @@ func (raw rawFlags) display() (display, error) {
 			Shore:    shoreToggle,
 			RangeNm:  rangeNm,
 			Minimal:  raw.minimal,
+			NoDecay:  raw.noDecay,
 		},
 	}, nil
 }
@@ -372,6 +377,7 @@ func (raw rawFlags) validated() (config, error) {
 		shore:       show.radar.Shore,
 		rangeNm:     show.radar.RangeNm,
 		minimal:     show.radar.Minimal,
+		noDecay:     show.radar.NoDecay,
 		battery:     raw.battery,
 		source:      chosen,
 		beast:       raw.beast,

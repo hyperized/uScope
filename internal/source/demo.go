@@ -64,6 +64,13 @@ const (
 
 	degreesPerCircle = 360.0
 	halfCircle       = 180.0
+
+	// undecoded is what a Snapshot carries for a heading or a velocity no
+	// message has supplied yet. It is uAirwaves' own default, in
+	// pkg/airplane's defaultHeading and defaultVelocity, and the demo uses the
+	// same number so the scene cannot tell an invented fleet from a real one
+	// by how it spells "nobody knows".
+	undecoded = -1.0
 )
 
 // craftSpec is one row of the invented fleet.
@@ -86,10 +93,12 @@ type craftSpec struct {
 
 // demoFleet is the twelve aircraft.
 //
-// Two of them are deliberately awkward. LFV21 has no velocity and a track of
-// zero, which is how an aircraft whose velocity message has not arrived yet
-// looks in a Snapshot, and the scope draws it as a bare circle rather than a
-// silhouette pointing north. 4951BA has no callsign, so the card and the rows
+// Two of them are deliberately awkward. LFV21 has a velocity and a heading of
+// -1, which is uAirwaves' own sentinel for a figure no velocity message has
+// carried yet: the scope draws it as a bare circle rather than a silhouette,
+// and the panel reads TRACK --- and a speed of ---. It used to hold zeroes,
+// which was the wrong shape of awkward, since zero is a real heading (due
+// north) and a real speed. 4951BA has no callsign, so the panel and the rows
 // have to fall back to the ICAO hex.
 //
 // The altitudes cover all three bands on purpose, so the legend has something
@@ -149,7 +158,7 @@ var demoFleet = [...]craftSpec{
 	},
 	{
 		icao: "484B0D", callsign: "LFV21", squawk: "7600",
-		altitude: 1200, velocity: 0, track: 0,
+		altitude: 1200, velocity: undecoded, track: undecoded,
 		bearing: 60, distance: 4, emergency: true,
 	},
 	{
@@ -393,7 +402,11 @@ func newCraft(spec craftSpec, latitude, longitude float64) craft {
 		messages:  int64(demoSeedFixes),
 	}
 
-	stepNm := spec.velocity * demoHistoryInterval.Hours()
+	// A negative velocity is the undecoded sentinel rather than a speed, so the
+	// trail is back-filled with no step at all: every seeded fix lands on the
+	// aircraft's own position, which is what a track nobody has moved looks
+	// like.
+	stepNm := max(spec.velocity, 0) * demoHistoryInterval.Hours()
 	back := reciprocal(spec.track)
 
 	// Fill from the end so the newest fix lands last, which is the order the

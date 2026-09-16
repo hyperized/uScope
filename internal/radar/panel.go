@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -48,16 +49,57 @@ const (
 	// coordinateSeparator sits between the two halves of a position.
 	coordinateSeparator = " / "
 
-	// maxSourceLabel is how much of the source label is drawn. A BEAST
-	// address is operator-supplied and could be any length; the stats line is
-	// not the place to find that out.
-	maxSourceLabel = 24
+	// sourceLabelGap is the air the source label leaves between itself and the
+	// clocks on the other side of the band. It is what stops a long label
+	// running up against the UTC label rather than stopping short of it.
+	sourceLabelGap = 24
+
+	// cutEllipsis marks a label the band had to cut, and cutDot stands in on a
+	// face with no ellipsis glyph. The four embedded Terminus faces are
+	// console fonts and nothing guarantees U+2026, which is the check the
+	// vertical-rate triangle and the degree sign both went through.
+	cutEllipsis  = "…"
+	cutDot       = "."
+	ellipsisRune = '…'
 )
 
-// keyCap is one entry in the bottom bar: the cap, then what the key does.
+// capToggle names the setting a key cap reflects.
+//
+// The bar used to draw every cap the same way, so nothing on screen said
+// whether auto range was on. It was, and the scope had widened itself to 180
+// nautical miles because the feed hears traffic that far out, which is exactly
+// the state a bar of identical caps cannot explain.
+type capToggle uint8
+
+// The settings a cap can reflect. capAlways is the default, which is what a
+// key that is not a toggle gets: q has no off state, so its cap is always
+// filled.
+const (
+	capAlways capToggle = iota
+	capAuto
+	capTrails
+	capAirports
+	capShore
+	capColour
+	capTheme
+)
+
+// The two cycling keys are labelled with the value they are on rather than
+// with the name of the setting. A cap reading COLOUR says there is a colour
+// mode without saying which one, which is the question it was being asked.
+const (
+	labelAltitude = "ALT"
+	labelAirline  = "AIRLINE"
+	labelNight    = "NIGHT"
+	labelPaper    = "PAPER"
+)
+
+// keyCap is one entry in the bottom bar: the cap, then what the key does, then
+// which setting its state comes from.
 type keyCap struct {
 	key   string
 	label string
+	state capToggle
 }
 
 // keyCaps is the key legend, in the order the keys are worth reaching for:
@@ -79,12 +121,12 @@ var keyCaps = [...]keyCap{
 	{key: "Q", label: "QUIT"},
 	{key: "↑↓", label: "SELECT"},
 	{key: "+/-", label: "RANGE"},
-	{key: "R", label: "AUTO"},
-	{key: "T", label: "TRAILS"},
-	{key: "A", label: "AIRPORTS"},
-	{key: "M", label: "SHORE"},
-	{key: "C", label: "COLOUR"},
-	{key: "L", label: "THEME"},
+	{key: "R", label: "AUTO", state: capAuto},
+	{key: "T", label: "TRAILS", state: capTrails},
+	{key: "A", label: "AIRPORTS", state: capAirports},
+	{key: "M", label: "SHORE", state: capShore},
+	{key: "C", label: "COLOUR", state: capColour},
+	{key: "L", label: "THEME", state: capTheme},
 	{key: "V", label: "VIEW"},
 }
 
@@ -106,9 +148,9 @@ func (s *Scene) drawKeyBar(lay *layout) {
 	pen := lay.left
 
 	for _, entry := range keyCaps {
-		pen = s.drawCap(lay.dst, pen, top, entry.key)
+		pen = s.drawCap(lay.dst, pen, top, entry.key, s.capOn(entry.state))
 		pen += capGap
-		pen = text.Draw(lay.dst, face, pen, top+capPadY, entry.label, s.pal.Muted)
+		pen = text.Draw(lay.dst, face, pen, top+capPadY, s.capLabel(entry), s.pal.Muted)
 		pen += entryGap
 
 		if pen >= lay.right {
@@ -140,16 +182,75 @@ func (s *Scene) keyBarHeight(lay *layout) int {
 	return height + blockGap
 }
 
-// drawCap draws one key cap, the letter knocked out of a filled box, and
-// returns the x just past it.
-func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string) int {
-	width, height := text.Measure(s.faces.Small, key)
-
+// drawCap draws one key cap and returns the x just past it.
+//
+// A cap for a setting that is on is the letter knocked out of a filled box,
+// which is what every cap used to look like. One that is off is the same box
+// as a hairline outline with the letter in ink, so the two read as a switch
+// thrown and a switch not thrown rather than as two different words.
+//
+//nolint:revive // flag-parameter: on picks which of two caps to draw, not a mode to branch deeper on.
+func (s *Scene) drawCap(dst *canvas.Canvas, left, top int, key string, on bool) int {
+	face := s.faces.Small
+	width, height := text.Measure(face, key)
 	box := image.Rect(left, top, left+width+2*capPadX, top+height+2*capPadY)
+
+	if !on {
+		dst.Rect(box, s.pal.Ink)
+		text.Draw(dst, face, left+capPadX, top+capPadY, key, s.pal.Ink)
+
+		return box.Max.X
+	}
+
 	dst.FillRect(box, s.pal.Ink)
-	text.Draw(dst, s.faces.Small, left+capPadX, top+capPadY, key, s.pal.Field)
+	text.Draw(dst, face, left+capPadX, top+capPadY, key, s.pal.Field)
 
 	return box.Max.X
+}
+
+// capOn reports whether a cap is drawn filled. Everything that is not a
+// toggle is, because there is no state for it to be in.
+func (s *Scene) capOn(which capToggle) bool {
+	switch which {
+	case capAuto:
+		return s.autoRange
+	case capTrails:
+		return s.trails
+	case capAirports:
+		return s.airports
+	case capShore:
+		return s.shoreOn
+	case capAlways, capColour, capTheme:
+		fallthrough
+	default:
+		return true
+	}
+}
+
+// capLabel is what one entry's cap says.
+//
+// The theme is read off the palette rather than kept as a second field, for
+// the reason SetPalette takes the light flag off the palette: two fields can
+// disagree about which theme is on and one cannot.
+func (s *Scene) capLabel(entry keyCap) string {
+	switch entry.state {
+	case capColour:
+		if s.colour == ColourAirline {
+			return labelAirline
+		}
+
+		return labelAltitude
+	case capTheme:
+		if s.light {
+			return labelPaper
+		}
+
+		return labelNight
+	case capAlways, capAuto, capTrails, capAirports, capShore:
+		fallthrough
+	default:
+		return entry.label
+	}
 }
 
 // drawHeader draws the band across the top: the wordmark and the source on
@@ -174,10 +275,14 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 
 	top := lay.top + headerPadY
 
-	s.drawWordmark(lay, top, frame)
-	s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
+	// The right of the band is drawn first because it is the only thing that
+	// can say where the left of it has to stop. Its width depends on whether
+	// there is a battery and on how wide the two clocks set, so measuring it
+	// any other way would mean measuring it twice.
+	edge := s.drawHeaderRight(lay, lay.top+band/2, frame.Now)
 
-	s.drawHeaderRight(lay, lay.top+band/2, frame.Now)
+	s.drawWordmark(lay, top, frame, edge-sourceLabelGap)
+	s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
 
 	rule := lay.top + band
 	lay.dst.FillRect(image.Rect(lay.left, rule, lay.right, rule+ruleHeight), s.pal.Rule)
@@ -218,7 +323,7 @@ func (s *Scene) headerHeight(lay *layout) int {
 // green rather than the accent, because the accent marks the selected
 // aircraft and nothing else, and it is left in its own colour rather than
 // moved onto the band's BandInk/Muted split: it is a status light, not text.
-func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame) {
+func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int) {
 	// Both faces are known to be present: drawHeader drops the whole band
 	// unless all three of its faces loaded, so there is nothing to check here.
 	face := s.faces.Small
@@ -237,8 +342,45 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame) {
 	}
 
 	pen += 2*dotRadius + dotGap
-	text.Draw(lay.dst, face, pen, top+(markHeight-face.Height())/2,
-		clip(frame.Source.Label, maxSourceLabel), s.pal.BandInk, text.WithSpacing(labelTracking))
+	label := top + (markHeight-face.Height())/2
+
+	head, marker := fitLabel(face, frame.Source.Label, limit-pen)
+	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.BandInk, text.WithSpacing(labelTracking))
+	text.Draw(lay.dst, face, pen, label, marker, s.pal.BandInk, text.WithSpacing(labelTracking))
+}
+
+// fitLabel cuts a label to the pixel width it has been given, and says what
+// marker belongs after it.
+//
+// A source label is whatever the operator typed after --beast, so nothing here
+// can know its length in advance. It used to be cut at twenty-four runes,
+// which turned "BEAST 192.168.1.159:30005" into a label ending ":3000" on a
+// band with two hundred pixels to spare, because a rune count cannot see how
+// much room there is. Measuring can, and a label that fits is never cut.
+//
+// An empty marker means nothing was cut, so the caller draws the label and
+// then draws nothing, which costs one call that measures zero.
+func fitLabel(face *psf.Font, label string, width int) (string, string) {
+	room := fitRunes(face, width, labelTracking)
+	if room <= 0 {
+		return "", ""
+	}
+
+	if utf8.RuneCountInString(label) <= room {
+		return label, ""
+	}
+
+	return clip(label, room-1), cutMarker(face)
+}
+
+// cutMarker is the single glyph a cut label ends with: an ellipsis where the
+// face has one, and a full stop where it does not.
+func cutMarker(face *psf.Font) string {
+	if _, has := face.Glyph(ellipsisRune); has {
+		return cutEllipsis
+	}
+
+	return cutDot
 }
 
 // drawReceiverLine says where the scope is centred and how much that is
@@ -400,7 +542,9 @@ func (s *Scene) bandMuted() color.RGBA {
 // there. The battery's width depends on whether there is a battery at all, and
 // the clocks are set in two different faces, so anything measured from the
 // left would have to be measured twice.
-func (s *Scene) drawHeaderRight(lay *layout, middle int, now time.Time) {
+// It returns the x the whole block starts at, which is where the source label
+// on the other side of the band has to stop.
+func (s *Scene) drawHeaderRight(lay *layout, middle int, now time.Time) int {
 	pen := lay.right
 	if left, drawn := s.drawBattery(lay, pen, middle); drawn {
 		pen = left - clockGap
@@ -410,7 +554,8 @@ func (s *Scene) drawHeaderRight(lay *layout, middle int, now time.Time) {
 	pen = s.drawClock(lay, pen, middle, labelLocal, s.faces.Large, local) - clockGap
 
 	utc := append(now.UTC().AppendFormat(s.clock[:0], clockFormat), utcSuffix)
-	s.drawClock(lay, pen, middle, labelUTC, s.faces.Body, utc)
+
+	return s.drawClock(lay, pen, middle, labelUTC, s.faces.Body, utc)
 }
 
 // drawClock sets one labelled clock ending at rightX and returns the x its

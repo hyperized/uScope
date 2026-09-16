@@ -38,6 +38,11 @@ type layerKey struct {
 	shore    bool
 	airports bool
 	fix      source.FixMode
+
+	// auto is in the key because the outer ring's label opens with AUTO while
+	// auto range is on. Toggling r on a still scope changes no other field, so
+	// without this the word would appear only once something else moved.
+	auto bool
 }
 
 // paintBackground puts the background layer under the frame, redrawing it
@@ -80,6 +85,7 @@ func (s *Scene) layerKeyFor(dst *canvas.Canvas, frame source.Frame) layerKey {
 		shore:    s.shoreOn,
 		airports: s.airports,
 		fix:      frame.Receiver.Mode,
+		auto:     s.autoRange,
 	}
 }
 

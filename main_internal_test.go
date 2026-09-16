@@ -70,6 +70,7 @@ const (
 	flagShore    = "--shore"
 	flagRange    = "--range"
 	flagMinimal  = "--minimal"
+	flagNoDecay  = "--no-decay"
 
 	// patternValue and specimenValue are the two non-default --scene
 	// spellings, named because they turn up in several tables.
@@ -2000,32 +2001,44 @@ func TestParseFlagsRangeRejections(t *testing.T) {
 	}
 }
 
-func TestParseFlagsMinimal(t *testing.T) {
+// TestParseFlagsBooleans covers the two flags that are a bare switch: each in
+// its default state, given on its own, and given with an explicit value,
+// because the flag package accepts all three spellings and a switch that only
+// worked as --flag would be a surprise to anyone scripting it.
+func TestParseFlagsBooleans(t *testing.T) {
 	t.Parallel()
 
-	for _, testCase := range []struct {
-		name string
-		args []string
-		want bool
+	for _, flagCase := range []struct {
+		flag  string
+		apply func(*config, bool)
 	}{
-		{name: caseDefault, args: nil, want: false},
-		{name: "given", args: []string{flagMinimal}, want: true},
-		{name: "given as true", args: []string{flagMinimal + "=true"}, want: true},
-		{name: "given as false", args: []string{flagMinimal + "=false"}, want: false},
+		{flag: flagMinimal, apply: func(cfg *config, on bool) { cfg.minimal = on }},
+		{flag: flagNoDecay, apply: func(cfg *config, on bool) { cfg.noDecay = on }},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+		for _, testCase := range []struct {
+			name string
+			args []string
+			want bool
+		}{
+			{name: caseDefault, args: nil, want: false},
+			{name: "given", args: []string{flagCase.flag}, want: true},
+			{name: "given as true", args: []string{flagCase.flag + "=true"}, want: true},
+			{name: "given as false", args: []string{flagCase.flag + "=false"}, want: false},
+		} {
+			t.Run(flagCase.flag+" "+testCase.name, func(t *testing.T) {
+				t.Parallel()
 
-			got, err := parseFlags(testCase.args)
-			if err != nil {
-				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
-			}
+				got, err := parseFlags(testCase.args)
+				if err != nil {
+					t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+				}
 
-			want := defaultConfig()
-			want.minimal = testCase.want
+				want := defaultConfig()
+				flagCase.apply(&want, testCase.want)
 
-			checkConfig(t, got, want)
-		})
+				checkConfig(t, got, want)
+			})
+		}
 	}
 }
 

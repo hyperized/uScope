@@ -14,22 +14,33 @@ import (
 
 // The compact row list's bounds.
 const (
-	// minRowCount is the shortest list worth keeping. Below three the list
-	// stops being something to scan and the details block gives up its room
-	// instead.
-	minRowCount = 3
-
-	// maxRowCount is where the list stops growing on a tall canvas. Sixteen
-	// rows is already more traffic than a five inch panel can be read at a
-	// glance, and a longer list would push the details block off the bottom on
-	// nothing but a taller screen.
-	maxRowCount = 16
+	// maxRowCount is where the list stops growing on a tall canvas.
+	//
+	// It was sixteen while a fixed-height details block sat under the list and
+	// a longer table would have pushed that block off the bottom. The block is
+	// gone, so the rows take the height it had: twenty-four fills the column at
+	// 720 pixels without a gap under it, and on a live feed with eighty
+	// aircraft in range those eight extra lines are eight fewer in the
+	// "+N MORE" tail.
+	maxRowCount = 24
 
 	// The "+N MORE" line that closes a list longer than the window. N counts
 	// every aircraft not on screen, above the window as well as below it, so
 	// the row list plus that number always adds up to the fleet.
 	morePrefix = "+"
 	moreSuffix = " MORE"
+
+	// rowsCountSuffix follows the aircraft count at the right end of the
+	// column-title line. The count used to be a stats line of its own under
+	// the legend, next to the source label the header already carried.
+	rowsCountSuffix = " AIRCRAFT"
+
+	// rowsCountWidest is the count the title line reserves room for, whatever
+	// the count actually is. Sizing from the widest keeps the table's right
+	// edge still, the same way every column is sized from its widest value: a
+	// right-aligned figure that grew a digit would otherwise pull the whole
+	// table left on the frame a hundredth aircraft arrived.
+	rowsCountWidest = "9999" + rowsCountSuffix
 )
 
 // Each column's width in characters, taken from the widest value that column
@@ -245,15 +256,50 @@ func (s *Scene) rowsHeight(count int) int {
 	return lineHeight(s.faces.Small) + rowLead + count*step
 }
 
-// drawRows draws the compact list under the card: a header line, then one line
-// per aircraft, as many as the room left in the column holds.
+// rowsCountWidth is the room the aircraft count needs at the right end of the
+// title line, the gap back to the last column title included, or zero without
+// a face to set it in.
+func (s *Scene) rowsCountWidth() int {
+	face := s.faces.Small
+	if face == nil {
+		return 0
+	}
+
+	width, _ := text.Measure(face, rowsCountWidest, text.WithSpacing(labelTracking))
+
+	return width + columnGap
+}
+
+// planRowTable fits the table between left and right, reserving room for the
+// aircraft count when the columns still fit without it, and reports how much
+// it reserved.
+//
+// A reserve of zero means the count is not drawn. That is better than dropping
+// a column to make room for it: the count is a reading about the list and the
+// columns are the list itself.
+func (s *Scene) planRowTable(left, right int) (rowPlan, int, bool) {
+	reserve := s.rowsCountWidth()
+	if plan, fits := s.planRows(left, right-reserve); fits {
+		return plan, reserve, true
+	}
+
+	plan, fits := s.planRows(left, right)
+
+	return plan, 0, fits
+}
+
+// drawRows draws the compact list under the panel: a title line carrying the
+// column names and the aircraft count, then one line per aircraft, as many as
+// the room left in the column holds.
 func (s *Scene) drawRows(col *layout, frame source.Frame) {
 	step := s.rowStep()
 	if step == 0 || len(frame.Planes) == 0 {
 		return
 	}
 
-	plan, drawable := s.planRows(col.left+accentWidth+cardPadX, col.right-cardPadX)
+	right := col.right - cardPadX
+
+	plan, reserved, drawable := s.planRowTable(col.left+accentWidth+cardPadX, right)
 	if !drawable {
 		return
 	}
@@ -275,6 +321,10 @@ func (s *Scene) drawRows(col *layout, frame source.Frame) {
 
 	s.trackWindow(visible, len(frame.Planes))
 	s.drawRowHeader(col, plan)
+
+	if reserved > 0 {
+		s.drawRowCount(col.dst, right, col.top, len(frame.Planes))
+	}
 
 	pen := rowPen{
 		dst: col.dst, face: s.faces.Body, plan: plan,
@@ -316,6 +366,22 @@ func (s *Scene) drawRowHeader(col *layout, plan rowPlan) {
 		text.Draw(col.dst, face, plan.edge[index]-column.chars*glyph, col.top, column.title, s.pal.Muted,
 			text.WithSpacing(labelTracking))
 	}
+}
+
+// drawRowCount writes how many aircraft are being tracked, right-aligned on
+// the column-title line and set in the same small muted face the titles are,
+// so it reads as part of the table's heading rather than as another figure.
+//
+//nolint:varnamelen // y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawRowCount(dst *canvas.Canvas, rightX, y, count int) {
+	face := s.faces.Small
+
+	suffix, _ := text.Measure(face, rowsCountSuffix, text.WithSpacing(labelTracking))
+	value := s.count(count)
+	left := rightX - suffix - trackedWidth(face, len(value))
+
+	pen := drawBytesTracked(dst, face, left, y, value, s.pal.Muted)
+	text.Draw(dst, face, pen, y, rowsCountSuffix, s.pal.Muted, text.WithSpacing(labelTracking))
 }
 
 // trackWindow scrolls the row list so the selected aircraft is always one of
@@ -360,7 +426,7 @@ func (s *Scene) drawRow(
 	pen.left(colICAO, clip(plane.ICAO, maxICAO), s.pal.Muted)
 
 	s.drawRowAltitude(pen, plane)
-	pen.right(colSpeed, s.whole(plane.Velocity), s.pal.Muted)
+	pen.right(colSpeed, s.speed(plane.Velocity), s.pal.Muted)
 
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 	pen.right(colDistance, s.distance(away), s.pal.Muted)

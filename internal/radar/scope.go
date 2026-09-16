@@ -66,6 +66,13 @@ const (
 	// rangeUnit is the suffix on every range number. It carries its own
 	// leading space so it can be drawn straight after the number.
 	rangeUnit = " NM"
+
+	// autoPrefix opens the outer ring's label while auto range is on, so the
+	// scope says for itself why it is as wide as it is. Without it the only
+	// evidence was the key cap, and a range that had climbed to 180 nautical
+	// miles on its own looked exactly like one somebody had typed in. It
+	// carries its own trailing space, the way rangeUnit carries a leading one.
+	autoPrefix = "AUTO "
 )
 
 // projector turns a position into a pixel on the scope.
@@ -350,7 +357,17 @@ func (s *Scene) drawRings(lay *layout, geom scopeGeometry, scopeNm float64) {
 	for ring := 1; ring <= ringCount; ring++ {
 		radius := geom.rangeR * ring / ringCount
 		lay.dst.DashedCircle(geom.centerX, geom.centerY, radius, dashOn, dashOff, s.pal.Rule)
-		s.drawRangeLabel(lay, geom, radius, spacing, scopeNm*float64(ring)/ringCount)
+
+		// Only the outer ring carries the AUTO word. It is the one that says
+		// how far the scope reaches, so it is the one the mode belongs to, and
+		// three copies of the same word would be furniture rather than a
+		// reading.
+		prefix := ""
+		if ring == ringCount && s.autoRange {
+			prefix = autoPrefix
+		}
+
+		s.drawRangeLabel(lay, geom, radius, spacing, scopeNm*float64(ring)/ringCount, prefix)
 	}
 }
 
@@ -360,7 +377,9 @@ func (s *Scene) drawRings(lay *layout, geom scopeGeometry, scopeNm float64) {
 // A label wider than the gap to the ring inside it is dropped rather than
 // drawn. Three numbers running into each other say less than no numbers at
 // all, and on a small scope the rings are only a couple of dozen pixels apart.
-func (s *Scene) drawRangeLabel(lay *layout, geom scopeGeometry, radius, spacing int, valueNm float64) {
+func (s *Scene) drawRangeLabel(
+	lay *layout, geom scopeGeometry, radius, spacing int, valueNm float64, prefix string,
+) {
 	face := s.faces.Small
 	if !lay.labels || face == nil || radius <= 0 {
 		return
@@ -368,7 +387,8 @@ func (s *Scene) drawRangeLabel(lay *layout, geom scopeGeometry, radius, spacing 
 
 	value := s.whole(valueNm)
 	unit, _ := text.Measure(face, rangeUnit)
-	width := measureBytes(face, value) + unit
+	lead, _ := text.Measure(face, prefix)
+	width := lead + measureBytes(face, value) + unit
 
 	if width+2*rangeLabelGap > spacing {
 		return
@@ -377,7 +397,8 @@ func (s *Scene) drawRangeLabel(lay *layout, geom scopeGeometry, radius, spacing 
 	left := geom.centerX + radius - rangeLabelGap - width
 	top := geom.centerY - face.Height() - rangeLabelGap
 
-	pen := drawBytes(lay.dst, face, left, top, value, s.pal.Muted)
+	pen := text.Draw(lay.dst, face, left, top, prefix, s.pal.Muted)
+	pen = drawBytes(lay.dst, face, pen, top, value, s.pal.Muted)
 	text.Draw(lay.dst, face, pen, top, rangeUnit, s.pal.Muted)
 
 	s.recordRangeLabel(image.Rect(left, top, left+width, top+face.Height()))
@@ -541,7 +562,11 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 
 		s.drawContact(lay.dst, x, y, plane)
 
-		if plane.ICAO == s.selICAO {
+		// Minimal is the traffic and nothing else, the selection included.
+		// The ring used to survive so n and p could show they had done
+		// something, but minimal sets no type on screen at all, so the only
+		// thing the ring could refer to was a panel that is not there.
+		if !s.minimal && plane.ICAO == s.selICAO {
 			s.drawSelection(lay, x, y, plane)
 		}
 	}
@@ -571,25 +596,42 @@ func (s *Scene) drawTrail(dst *canvas.Canvas, proj projector, plane airplane.Sna
 		x, y, inside := proj.at(history[index].Latitude, history[index].Longitude)
 
 		if inside && prevInside {
-			alpha := trailMinAlpha + (trailMaxAlpha-trailMinAlpha)*float64(index)/span
-			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), s.fade(col, alpha))
+			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y),
+				s.fade(col, s.trailAlpha(index, span)))
 		}
 
 		prevX, prevY, prevInside = x, y, inside
 	}
 }
 
+// trailAlpha is how strongly one trail segment is drawn, where 1 is the
+// aircraft's own colour and 0 is the field.
+//
+// With --no-decay every segment is the colour itself, so the whole track reads
+// as one line rather than as a line that arrives from nowhere. The fade is the
+// default because on a busy field it says which end of a track is the
+// aeroplane; turning it off is for looking at the shapes the traffic makes,
+// where an even line is easier to follow across the scope.
+func (s *Scene) trailAlpha(index int, span float64) float64 {
+	if s.noDecay {
+		return trailMaxAlpha
+	}
+
+	return trailMinAlpha + (trailMaxAlpha-trailMinAlpha)*float64(index)/span
+}
+
 // drawContact draws one aircraft.
 //
-// A heading of exactly zero means nobody has decoded one yet rather than due
-// north: an aircraft starts at zero and stays there until a velocity message
-// arrives, and a real decoded heading lands on an exact zero about never. An
-// aircraft without one is a bare circle, because a silhouette would be
-// claiming to know which way it is pointing.
+// A negative heading means nobody has decoded one yet. uAirwaves starts an
+// Airplane at airplane's own defaultHeading of -1 and leaves it there until a
+// velocity message arrives, which is the sentinel this reads: zero is due
+// north and gets a silhouette pointing up the screen. An aircraft without a
+// heading is a bare circle, because a silhouette would be claiming to know
+// which way it is pointing.
 func (s *Scene) drawContact(dst *canvas.Canvas, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
 	col := s.aircraftColour(plane)
 
-	if plane.Heading == 0 {
+	if !knownHeading(plane.Heading) {
 		dst.Circle(x, y, noHeadingRadius, col)
 
 		return
@@ -598,19 +640,23 @@ func (s *Scene) drawContact(dst *canvas.Canvas, x, y int, plane airplane.Snapsho
 	s.icon.Draw(dst, x, y, plane.Heading, col)
 }
 
+// knownHeading reports whether a heading was decoded.
+//
+// It is one function rather than a comparison at each call site because the
+// scope and the panel have to agree: a silhouette pointing north beside a
+// panel reading TRACK --- would be the same aircraft contradicting itself on
+// one screen. NaN counts as unknown for the same reason every other formatter
+// here guards against it: the figure came off the air and is never trusted.
+func knownHeading(heading float64) bool {
+	return !math.IsNaN(heading) && heading >= 0
+}
+
 // drawSelection rings the selected aircraft and labels it on a leader line,
-// so the card on the right and the dot on the scope are obviously the same
-// aeroplane.
+// so the panel on the right and the dot on the scope are obviously the same
+// aeroplane. Minimal mode never calls it.
 func (s *Scene) drawSelection(lay *layout, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
 	dst := lay.dst
 	dst.Circle(x, y, selectionRadius, s.pal.Accent)
-
-	// Minimal keeps the ring and drops the rest. The leader line exists to
-	// carry a callsign out to where it can be read, and minimal sets no type
-	// on screen at all, so the line would be a tick pointing at nothing.
-	if s.minimal {
-		return
-	}
 
 	endX, endY := x+leaderRun, y-leaderRun
 	dst.Line(x+selectionRadius/2, y-selectionRadius/2, endX, endY, s.pal.Accent)

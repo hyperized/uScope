@@ -87,6 +87,21 @@ func (s *Scene) whole(value float64) []byte {
 	return strconv.AppendInt(s.digits[:0], int64(math.Round(value)), decimalBase)
 }
 
+// speed writes an airspeed, or three dashes when nobody has decoded one.
+//
+// uAirwaves marks an undecoded velocity with -1, which is airplane's own
+// defaultVelocity and not a reading. Passing that straight to whole is what
+// put "-1" in the panel's speed figure and in the SPD column on the live
+// scope. A negative figure is never a speed, so the whole half-line is the
+// guard rather than an equality test against the sentinel.
+func (s *Scene) speed(value float64) []byte {
+	if math.IsNaN(value) || value < 0 {
+		return append(s.digits[:0], '-', '-', '-')
+	}
+
+	return s.whole(value)
+}
+
 // count writes a count. It is separate from whole because a count is already
 // an integer and rounding one through float64 would be a lie about where it
 // came from.
@@ -238,9 +253,29 @@ func drawBytesRight(dst *canvas.Canvas, face *psf.Font, rightX, y int, value []b
 	text.DrawRight(dst, face, rightX, y, string(value), ink)
 }
 
+// drawBytesTracked draws a formatted number at the scene's label tracking and
+// returns the x just past it, so a number can open a run that a tracked label
+// finishes.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func drawBytesTracked(dst *canvas.Canvas, face *psf.Font, x, y int, value []byte, ink color.RGBA) int {
+	return text.Draw(dst, face, x, y, string(value), ink, text.WithSpacing(labelTracking))
+}
+
 // measureBytes reports how wide a formatted number will be.
 func measureBytes(face *psf.Font, value []byte) int {
 	width, _ := text.Measure(face, string(value))
 
 	return width
+}
+
+// trackedWidth is how wide a run of that many glyphs is at labelTracking. It
+// is the inverse of fitRunes, and it exists so a right-aligned tracked run can
+// be placed from a byte slice without converting it to a string first.
+func trackedWidth(face *psf.Font, runes int) int {
+	if runes <= 0 {
+		return 0
+	}
+
+	return runes*glyphWidth(face) + (runes-1)*labelTracking
 }

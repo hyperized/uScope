@@ -13,8 +13,13 @@ import (
 // key.
 //
 // A key it does not take falls through to the run loop, which is what keeps q
-// and s working while the radar is on screen. Both letter cases are bound
+// and v working while the radar is on screen. Both letter cases are bound
 // because caps lock is easy to hit by accident on the uConsole's keyboard.
+//
+// Esc is taken rather than passed on, so it no longer quits while the radar is
+// up: it is the way back to following the nearest aircraft, which is the
+// commoner thing to want once a selection has been pinned. Ctrl-C and q still
+// quit, and both are reachable without letting go of the keyboard.
 func (s *Scene) Handle(key input.Key) bool {
 	switch key.Kind {
 	case input.Down:
@@ -25,9 +30,13 @@ func (s *Scene) Handle(key input.Key) bool {
 		s.step(-1)
 
 		return true
+	case input.Esc:
+		s.unpin()
+
+		return true
 	case input.Rune:
 		return s.handleRune(key.Rune)
-	case input.Left, input.Right, input.Enter, input.Esc, input.CtrlC:
+	case input.Left, input.Right, input.Enter, input.CtrlC:
 		fallthrough
 	default:
 		return false
@@ -71,11 +80,16 @@ func (s *Scene) handleRune(value rune) bool {
 	return true
 }
 
-// step moves the selection through the list, wrapping at both ends.
+// step moves the selection through the list, wrapping at both ends, and pins
+// it to whichever aircraft it lands on.
 //
 // It works on the ICAO list the last frame left behind rather than asking the
 // source for a new one, so a key press never costs a snapshot of the whole
 // fleet and the index the operator sees is the index that moves.
+//
+// Pinning here rather than on a key of its own is what makes the rule one
+// rule: an operator who has not chosen an aircraft is shown the nearest one,
+// and pressing a select key is the choosing.
 func (s *Scene) step(delta int) {
 	count := len(s.icaos)
 	if count == 0 {
@@ -84,6 +98,15 @@ func (s *Scene) step(delta int) {
 
 	s.selIndex = ((s.selIndex+delta)%count + count) % count
 	s.selICAO = s.icaos[s.selIndex]
+	s.pinned = true
+}
+
+// unpin hands the selection back to the nearest aircraft, which is what Esc
+// does. The next frame's syncSelection is what actually moves it, so this only
+// has to forget the choice.
+func (s *Scene) unpin() {
+	s.pinned = false
+	s.selICAO, s.selIndex, s.rowStart = "", 0, 0
 }
 
 // stepRange changes the range by one increment and turns auto off, because
@@ -96,14 +119,20 @@ func (s *Scene) stepRange(delta int) {
 	s.scopeRange.Update(scope.WithCurrent(s.scopeRange.GetCurrent() + float64(delta)*increment))
 }
 
-// syncSelection rebuilds the ICAO index from the frame and re-finds the
-// selected aircraft in it.
+// syncSelection rebuilds the ICAO index from the frame and works out which
+// aircraft the panel is about.
 //
-// The selection is kept by ICAO rather than by position, because the list is
-// sorted by distance and one aircraft overtaking another would otherwise move
-// the selection to a different aeroplane without anyone pressing a key. When
-// the selected aircraft disappears, or nothing is selected yet, the nearest
-// wins: the list is already sorted, so that is index zero.
+// Two rules, and which one applies is the pin. Unpinned, the selection is the
+// nearest contact, which is index zero because the list arrives sorted by
+// distance; the rows go back to the top with it. That is the useful default on
+// a live feed, where the first aircraft to arrive with a position used to keep
+// the panel for as long as it stayed in range, however far away it drifted.
+//
+// Pinned, the selection is kept by ICAO rather than by position, because one
+// aircraft overtaking another would otherwise hand the panel to a different
+// aeroplane without anyone pressing a key. A pinned aircraft that leaves the
+// list takes its pin with it: there is nothing left to hold, so the selection
+// goes back to following the nearest.
 func (s *Scene) syncSelection(frame source.Frame) {
 	s.icaos = s.icaos[:0]
 	for _, plane := range frame.Planes {
@@ -116,10 +145,18 @@ func (s *Scene) syncSelection(frame source.Frame) {
 		return
 	}
 
-	// A miss reports -1, and max pulls that up to index zero, which is the
-	// nearest aircraft because the list arrives sorted by distance.
-	s.selIndex = max(indexOf(s.icaos, s.selICAO), 0)
-	s.selICAO = s.icaos[s.selIndex]
+	if s.pinned {
+		if index := indexOf(s.icaos, s.selICAO); index >= 0 {
+			s.selIndex = index
+
+			return
+		}
+
+		s.pinned = false
+	}
+
+	s.selIndex, s.rowStart = 0, 0
+	s.selICAO = s.icaos[0]
 }
 
 // indexOf finds an ICAO in the list, or reports -1.

@@ -498,7 +498,7 @@ func TestHandleTakesItsOwnKeys(t *testing.T) {
 		{name: "s falls through", key: input.Key{Kind: input.Rune, Rune: 's'}},
 		{name: "S falls through", key: input.Key{Kind: input.Rune, Rune: 'S'}},
 		{name: "v falls through", key: input.Key{Kind: input.Rune, Rune: 'v'}},
-		{name: "esc falls through", key: input.Key{Kind: input.Esc}},
+		{name: "esc is taken, it unpins rather than quitting", key: input.Key{Kind: input.Esc}, want: true},
 		{name: "ctrl-c falls through", key: input.Key{Kind: input.CtrlC}},
 		{name: "left falls through", key: input.Key{Kind: input.Left}},
 		{name: "right falls through", key: input.Key{Kind: input.Right}},
@@ -1293,7 +1293,7 @@ func TestAirlineLegendShowsOther(t *testing.T) {
 	// otherSwatchBox is where the fifth legend slot's swatch lands once OTHER
 	// is showing, worked out the same way the legend itself divides its width
 	// among however many slots are on screen.
-	otherSwatchBox := image.Rect(1133, 630, 1143, 640)
+	otherSwatchBox := image.Rect(1133, 658, 1143, 668)
 
 	withOther, withOtherCanvas, _ := sceneOn(t, panelWidth, panelHeight,
 		sceneFrame(append(append([]airplane.Snapshot{}, top4...), unknown)...), radar.WithColour(radar.ColourAirline))
@@ -1314,12 +1314,14 @@ func TestAirlineLegendShowsOther(t *testing.T) {
 	}
 }
 
-// detailsBlockBox is the details block's own area at the panel's resolution.
-var detailsBlockBox = image.Rect(620, 500, 1264, 615) //nolint:gochecknoglobals // a rectangle is data.
+// panelBox is the selected-flight panel's own area at the panel's resolution,
+// inside its border. Everything the old card and the old details block held is
+// in here now.
+var panelBox = image.Rect(626, 79, 1264, 278) //nolint:gochecknoglobals // a rectangle is data.
 
-// TestDetailsBlockShowsNoTrafficWhenEmpty checks that the block keeps its
-// room and says NO TRAFFIC with an empty sky, rather than collapsing away.
-func TestDetailsBlockShowsNoTrafficWhenEmpty(t *testing.T) {
+// TestPanelShowsNoTrafficWhenEmpty checks that the panel keeps its room and
+// says NO TRAFFIC with an empty sky, rather than collapsing away.
+func TestPanelShowsNoTrafficWhenEmpty(t *testing.T) {
 	t.Parallel()
 
 	withTraffic := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
@@ -1328,25 +1330,25 @@ func TestDetailsBlockShowsNoTrafficWhenEmpty(t *testing.T) {
 	loaded, loadedCanvas, _ := sceneOn(t, panelWidth, panelHeight, withTraffic)
 	loaded.Draw(loadedCanvas, 0)
 
-	if painted(loadedCanvas, detailsBlockBox) == 0 {
-		t.Fatal("the details block drew nothing with an aircraft selected")
+	if painted(loadedCanvas, panelBox) == 0 {
+		t.Fatal("the panel drew nothing with an aircraft selected")
 	}
 
 	bare, bareCanvas, _ := sceneOn(t, panelWidth, panelHeight, empty)
 	bare.Draw(bareCanvas, 0)
 
-	if painted(bareCanvas, detailsBlockBox) == 0 {
-		t.Fatal("the details block drew nothing with an empty sky, want the NO TRAFFIC state")
+	if painted(bareCanvas, panelBox) == 0 {
+		t.Fatal("the panel drew nothing with an empty sky, want the NO TRAFFIC state")
 	}
 
-	if identicalIn(loadedCanvas, bareCanvas, detailsBlockBox) {
-		t.Error("the details block looks the same with and without traffic")
+	if identicalIn(loadedCanvas, bareCanvas, panelBox) {
+		t.Error("the panel looks the same with and without traffic")
 	}
 }
 
-// TestDetailsVerticalRateTriangle checks that a climbing, a descending and a
-// level aircraft each leave a different picture in the details block.
-func TestDetailsVerticalRateTriangle(t *testing.T) {
+// TestPanelVerticalRateTriangle checks that a climbing, a descending and a
+// level aircraft each leave a different picture in the panel.
+func TestPanelVerticalRateTriangle(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -1371,24 +1373,30 @@ func TestDetailsVerticalRateTriangle(t *testing.T) {
 	descending := draw(t, descentRate)
 	level := draw(t, levelRateVal)
 
-	if identicalIn(climbing, descending, detailsBlockBox) {
-		t.Error("a climbing and a descending aircraft drew the same details block")
+	if identicalIn(climbing, descending, panelBox) {
+		t.Error("a climbing and a descending aircraft drew the same panel")
 	}
 
-	if identicalIn(climbing, level, detailsBlockBox) {
-		t.Error("a climbing and a level aircraft drew the same details block")
+	if identicalIn(climbing, level, panelBox) {
+		t.Error("a climbing and a level aircraft drew the same panel")
 	}
 
-	if identicalIn(descending, level, detailsBlockBox) {
-		t.Error("a descending and a level aircraft drew the same details block")
+	if identicalIn(descending, level, panelBox) {
+		t.Error("a descending and a level aircraft drew the same panel")
 	}
 }
 
-// rowListRightBand sits inside the tenth compact row's line, in the columns
+// rowWindow is how many compact rows fit at the panel's resolution now the
+// details block has gone and the list has the height it used to take: the
+// column runs from y=297 to y=642, a title line takes 16 of that and each row
+// 20, which is sixteen rows.
+const rowWindow = 16
+
+// rowListRightBand sits inside the last compact row's line, in the columns
 // only a real aircraft row fills (altitude, speed, distance, bearing). The
 // "+N MORE" line is short and left-aligned, so it never reaches this far
 // right: painted pixels here mean a real row, not the tail.
-var rowListRightBand = image.Rect(1100, 460, 1264, 480) //nolint:gochecknoglobals // a rectangle is data.
+var rowListRightBand = image.Rect(1100, 613, 1264, 629) //nolint:gochecknoglobals // a rectangle is data.
 
 // TestRowListMoreLine checks the window boundary the "+N MORE" line closes: a
 // fleet exactly the size of the window leaves a real row on the last line,
@@ -1402,9 +1410,9 @@ func TestRowListMoreLine(t *testing.T) {
 		count       int
 		wantRealRow bool
 	}{
-		{name: "fewer than the window: no tenth line at all", count: 9, wantRealRow: false},
-		{name: "exactly the window: the tenth line is a real row", count: 10, wantRealRow: true},
-		{name: "one more than the window: the tenth line is the more line", count: 11, wantRealRow: false},
+		{name: "fewer than the window: no last line at all", count: rowWindow - 1, wantRealRow: false},
+		{name: "exactly the window: the last line is a real row", count: rowWindow, wantRealRow: true},
+		{name: "one more than the window: the last line is the more line", count: rowWindow + 1, wantRealRow: false},
 		{name: "a light fleet of twelve still draws", count: 12, wantRealRow: false},
 		{name: "a busy fleet of forty still draws", count: benchPlanes, wantRealRow: false},
 	} {
@@ -1420,7 +1428,7 @@ func TestRowListMoreLine(t *testing.T) {
 			}
 
 			if got := painted(canv, rowListRightBand) > 0; got != testCase.wantRealRow {
-				t.Errorf("tenth line is a real row = %v, want %v", got, testCase.wantRealRow)
+				t.Errorf("last line is a real row = %v, want %v", got, testCase.wantRealRow)
 			}
 		})
 	}
@@ -1643,7 +1651,7 @@ func TestAirlineColourAdaptsToThePalette(t *testing.T) {
 // TestDetailsSquawkEmergency checks that an emergency squawk carries the
 // accent into the details block, the one place besides the selection that
 // colour marks.
-func TestDetailsSquawkEmergency(t *testing.T) {
+func TestPanelSquawkEmergency(t *testing.T) {
 	t.Parallel()
 
 	plane := scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)
@@ -1653,8 +1661,8 @@ func TestDetailsSquawkEmergency(t *testing.T) {
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(plane))
 	scene.Draw(canv, 0)
 
-	if countColour(canv, detailsBlockBox, theme.Night.Accent) == 0 {
-		t.Error("an emergency squawk did not paint the accent colour in the details block")
+	if countColour(canv, panelBox, theme.Night.Accent) == 0 {
+		t.Error("an emergency squawk did not paint the accent colour in the panel")
 	}
 }
 
@@ -1746,8 +1754,11 @@ func TestShoreNilSetDrawsNothing(t *testing.T) {
 	toggledOff.Apply(radar.Settings{Shore: radar.ToggleOff})
 	toggledOff.Draw(toggledOffCanvas, 0)
 
-	if !identical(noSetCanvas, toggledOffCanvas) {
-		t.Error("a nil shore set drew differently from the shore being toggled off, want the same frame")
+	// The scope only: the key bar's SHORE cap is hollow in the toggled-off
+	// scene and filled in the other, which is the cap doing its job. What this
+	// test is about is the field under it.
+	if !identicalIn(noSetCanvas, toggledOffCanvas, scopeBox) {
+		t.Error("a nil shore set drew differently from the shore being toggled off, want the same scope")
 	}
 }
 
@@ -1860,14 +1871,14 @@ func TestMinimalModeDropsTheColumn(t *testing.T) {
 	})
 }
 
-// TestMinimalModeSelectionWithoutLabel checks that the selected aircraft
-// keeps its accent ring in minimal mode but gets no callsign label: two
-// callsigns of different lengths draw identical pictures once neither is
-// labelled.
+// TestMinimalModeSelectionWithoutLabel checks that minimal mode draws nothing
+// at all for the selected aircraft: no ring, no leader line and no callsign
+// label. The ring used to survive so n and p could show they had done
+// something, but there is no panel in minimal mode for the ring to point at.
 func TestMinimalModeSelectionWithoutLabel(t *testing.T) {
 	t.Parallel()
 
-	t.Run("the ring survives", func(t *testing.T) {
+	t.Run("nothing marks the selection", func(t *testing.T) {
 		t.Parallel()
 
 		frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
@@ -1875,8 +1886,8 @@ func TestMinimalModeSelectionWithoutLabel(t *testing.T) {
 		scene.Apply(radar.Settings{Minimal: true})
 		scene.Draw(canv, 0)
 
-		if countColour(canv, canv.Bounds(), theme.Night.Accent) == 0 {
-			t.Error("minimal mode drew no accent pixels, want the selection ring to survive")
+		if got := countColour(canv, canv.Bounds(), theme.Night.Accent); got != 0 {
+			t.Errorf("minimal mode painted %d accent pixels, want none for the selection", got)
 		}
 	})
 
@@ -1955,5 +1966,498 @@ func TestMinimalModeKeyFlipsBothWays(t *testing.T) {
 
 	if !identical(canv, full) {
 		t.Error("Z did not undo z, so minimal mode does not flip back")
+	}
+}
+
+// eastboundTrail is an aircraft whose whole track runs due east along the
+// receiver's own latitude, so every fix projects onto one row of pixels and a
+// test can read the trail off that row from tail to head.
+//
+// The aircraft itself is parked far outside the range, so neither a silhouette
+// nor a selection ring lands on the row the trail is read from.
+func eastboundTrail() airplane.Snapshot {
+	const (
+		nmPerDegree = 60.0
+		halfCircle  = 180.0
+		fixes       = 5
+		firstNm     = 10.0
+		spacingNm   = 5.0
+		outsideNm   = 200.0
+		trailAlt    = 2400.0
+	)
+
+	east := func(nm float64) float64 {
+		return receiverLon + nm/(nmPerDegree*math.Cos(receiverLat*math.Pi/halfCircle))
+	}
+
+	trail := make([]airplane.PositionEntry, 0, fixes)
+	for fix := range fixes {
+		trail = append(trail, airplane.PositionEntry{
+			Latitude:  receiverLat,
+			Longitude: east(firstNm + float64(fix)*spacingNm),
+			Altitude:  trailAlt,
+		})
+	}
+
+	return airplane.Snapshot{
+		ICAO: "484AC1", Callsign: "KLM123", Altitude: trailAlt, Heading: 90, Velocity: 420,
+		Latitude: receiverLat, Longitude: east(outsideNm),
+		LastUpdate: sceneClock, Squawk: "1000", PositionHistory: trail,
+	}
+}
+
+// trailRun collects the colours of every pixel on one row of the scope that
+// came from a trail: not the field, and not the rings and cardinals drawn in
+// the palette's rule colour.
+func trailRun(canv *canvas.Canvas, row, fromX, toX int) []color.RGBA {
+	var out []color.RGBA
+
+	for x := fromX; x < toX; x++ {
+		col := canv.Image().RGBAAt(x, row)
+		if col == theme.Night.Field || col == theme.Night.Rule {
+			continue
+		}
+
+		out = append(out, col)
+	}
+
+	return out
+}
+
+// TestNoDecayDrawsTheWholeTrailInOneColour is what --no-decay is for: every
+// segment carries the aircraft's own colour instead of fading towards the
+// field, so the tail reads exactly as the head does.
+func TestNoDecayDrawsTheWholeTrailInOneColour(t *testing.T) {
+	t.Parallel()
+
+	// The row the eastbound trail projects onto, and a window along it that
+	// starts clear of the home marker and ends clear of the outer ring.
+	row := scopeBox.Min.Y + scopeBox.Dy()/2
+	fromX := scopeBox.Min.X + scopeBox.Dx()/2 + 20
+	toX := scopeBox.Max.X - 20
+
+	draw := func(tb testing.TB, noDecay bool) []color.RGBA {
+		tb.Helper()
+
+		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, sceneFrame(eastboundTrail()))
+
+		// The airfield markers and their ICAO labels are the only other thing
+		// that lands on this row, so they go: what is left is the trail.
+		scene.Apply(radar.Settings{
+			RangeNm: sceneRangeNm, NoDecay: noDecay,
+			Airports: radar.ToggleOff, Shore: radar.ToggleOff,
+		})
+		scene.Draw(canv, 0)
+
+		run := trailRun(canv, row, fromX, toX)
+		if len(run) < 2 {
+			tb.Fatalf("the trail drew %d pixels on row %d, want a run to read", len(run), row)
+		}
+
+		return run
+	}
+
+	flat := draw(t, true)
+	fading := draw(t, false)
+
+	if flat[0] != flat[len(flat)-1] {
+		t.Errorf("--no-decay tail %v, head %v, want the same colour", flat[0], flat[len(flat)-1])
+	}
+
+	if flat[0] != theme.Night.AltLow {
+		t.Errorf("--no-decay tail = %v, want the aircraft's own band colour %v", flat[0], theme.Night.AltLow)
+	}
+
+	if fading[0] == fading[len(fading)-1] {
+		t.Error("the default trail drew its tail in the head's colour, want it faded towards the field")
+	}
+}
+
+// The source label the operator's own live feed produces, which is what
+// exposed the fixed rune cap: it is twenty-five characters, and the old cap
+// of twenty-four cut the last digit off a port number on a band with nine
+// hundred pixels to spare.
+const (
+	beastLabel      = "BEAST 192.168.1.159:30005"
+	beastLabelTwin  = "BEAST 192.168.1.159:30009"
+	narrowPanelWide = 480
+)
+
+// headerBand is the row of the header the source label and the clocks are set
+// on, from just past the connection dot to the frame's right margin.
+func headerBand(width int) image.Rectangle {
+	const (
+		pastDot   = 98
+		bandTop   = 18
+		bandUnder = 42
+	)
+
+	return image.Rect(pastDot, bandTop, width-16, bandUnder)
+}
+
+// paintedExtent reports the leftmost and rightmost columns of box that have
+// anything drawn in them, or -1 for an empty box.
+//
+//nolint:varnamelen // x is the pixel-addressing idiom used throughout uScope.
+func paintedExtent(canv *canvas.Canvas, box image.Rectangle) (int, int) {
+	first, last := -1, -1
+
+	for x := box.Min.X; x < box.Max.X; x++ {
+		if painted(canv, image.Rect(x, box.Min.Y, x+1, box.Max.Y)) == 0 {
+			continue
+		}
+
+		if first < 0 {
+			first = x
+		}
+
+		last = x
+	}
+
+	return first, last
+}
+
+// sourceLabelScene draws one frame with a given source label at a given width.
+func sourceLabelScene(tb testing.TB, width int, label string) *canvas.Canvas {
+	tb.Helper()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+	frame.Source = adsb.SourceInfo{Label: label, Connected: true}
+
+	scene, canv, _ := sceneOn(tb, width, panelHeight, frame)
+	scene.Draw(canv, 0)
+
+	return canv
+}
+
+// TestSourceLabelFitsTheBand checks the measured fit that replaced the rune
+// cap: a label with room to spare is drawn whole, and one without room is cut
+// short of the clocks rather than over them.
+func TestSourceLabelFitsTheBand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a label with room to spare is drawn whole", func(t *testing.T) {
+		t.Parallel()
+
+		band := headerBand(panelWidth)
+		blockLeft, _ := paintedExtent(sourceLabelScene(t, panelWidth, ""), band)
+		labelBand := image.Rect(band.Min.X, band.Min.Y, blockLeft, band.Max.Y)
+
+		_, full := paintedExtent(sourceLabelScene(t, panelWidth, beastLabel), labelBand)
+		_, twin := paintedExtent(sourceLabelScene(t, panelWidth, beastLabelTwin), labelBand)
+		_, shorter := paintedExtent(sourceLabelScene(t, panelWidth, beastLabel[:len(beastLabel)-1]), labelBand)
+
+		// Two labels that differ only in their last character reach the same
+		// column, and both reach one glyph further than the same label with
+		// that character removed. A cut label would do neither.
+		if full != twin {
+			t.Errorf("two labels differing in their last character ended at %d and %d, want the same", full, twin)
+		}
+
+		if full <= shorter {
+			t.Errorf("the whole label ended at %d and a shorter one at %d, want the whole one further right",
+				full, shorter)
+		}
+
+		if full > blockLeft {
+			t.Errorf("the label reached %d, past the clocks at %d", full, blockLeft)
+		}
+	})
+
+	t.Run("a label with no room is cut short of the clocks", func(t *testing.T) {
+		t.Parallel()
+
+		const gap = 24 // radar's own sourceLabelGap.
+
+		band := headerBand(narrowPanelWide)
+		blockLeft, _ := paintedExtent(sourceLabelScene(t, narrowPanelWide, ""), band)
+		labelBand := image.Rect(band.Min.X, band.Min.Y, blockLeft, band.Max.Y)
+
+		cut := sourceLabelScene(t, narrowPanelWide, beastLabel)
+		_, end := paintedExtent(cut, labelBand)
+
+		if end < 0 {
+			t.Fatal("nothing at all was drawn for the source label")
+		}
+
+		if end > blockLeft-gap {
+			t.Errorf("the cut label ended at %d, want it to stop by %d", end, blockLeft-gap)
+		}
+
+		// Cut at the same place, so two labels that differ only past the cut
+		// draw the same band. That is what proves a cut happened at all.
+		twin := sourceLabelScene(t, narrowPanelWide, beastLabelTwin)
+		if !identicalIn(cut, twin, labelBand) {
+			t.Error("two labels differing only after the cut drew differently, want both cut at the same place")
+		}
+
+		// The marker is a glyph of its own, so the cut label reaches further
+		// than the bare prefix it was cut to.
+		runes := []rune(beastLabel)
+
+		bare := sourceLabelScene(t, narrowPanelWide, string(runes[:len(runes)/2]))
+		if identicalIn(cut, bare, labelBand) {
+			t.Error("the cut label drew nothing a shorter label would not, want a marker after it")
+		}
+	})
+}
+
+// keyCapBox is where one cap lands in the bottom bar at the panel's
+// resolution. The three caps before AUTO are all fixed-width, so AUTO's own
+// box does not move when a label further along changes.
+//
+//nolint:gochecknoglobals // a rectangle is data.
+var (
+	quitCapBox = image.Rect(16, 686, 32, 704)
+	autoCapBox = image.Rect(244, 686, 260, 704)
+	keyBarBox  = image.Rect(0, 686, 1280, 704)
+)
+
+// TestKeyCapsShowToggleState checks the one thing the bar could not say
+// before: whether a toggle is on. A cap that is on is a filled box with the
+// letter knocked out of it, and one that is off is an outline with the letter
+// in ink, so the two read as a switch thrown and a switch not thrown.
+func TestKeyCapsShowToggleState(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	on, onCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	on.Draw(onCanvas, 0)
+
+	off, offCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	press(off, 'r')
+	off.Draw(offCanvas, 0)
+
+	filledInk := countColour(onCanvas, autoCapBox, theme.Night.Ink)
+	filledField := countColour(onCanvas, autoCapBox, theme.Night.Field)
+	hollowInk := countColour(offCanvas, autoCapBox, theme.Night.Ink)
+	hollowField := countColour(offCanvas, autoCapBox, theme.Night.Field)
+
+	if filledInk <= filledField {
+		t.Errorf("auto on: %d ink and %d field pixels, want a filled cap", filledInk, filledField)
+	}
+
+	if hollowField <= hollowInk {
+		t.Errorf("auto off: %d ink and %d field pixels, want a hollow cap", hollowInk, hollowField)
+	}
+
+	if hollowInk == 0 {
+		t.Error("the hollow cap drew no ink at all, want an outline and a letter")
+	}
+
+	// q is not a toggle, so its cap is filled in both, which is what keeps a
+	// hollow cap meaning something.
+	if countColour(onCanvas, quitCapBox, theme.Night.Ink) != countColour(offCanvas, quitCapBox, theme.Night.Ink) {
+		t.Error("the quit cap changed with a toggle it has nothing to do with")
+	}
+}
+
+// TestKeyCapsShowTheColourMode checks the other half of item seven: the
+// cycling keys are labelled with the value they are on. ALT and AIRLINE are
+// different lengths, so the caps after them move, which is what this measures.
+func TestKeyCapsShowTheColourMode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		labelDelta = 4 // AIRLINE is four characters longer than ALT.
+		smallGlyph = 6
+	)
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	altitude, altitudeCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
+	altitude.Draw(altitudeCanvas, 0)
+
+	airline, airlineCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
+	airline.Draw(airlineCanvas, 0)
+
+	_, altitudeEnd := paintedExtent(altitudeCanvas, keyBarBox)
+	_, airlineEnd := paintedExtent(airlineCanvas, keyBarBox)
+
+	if got := airlineEnd - altitudeEnd; got != labelDelta*smallGlyph {
+		t.Errorf("the key bar grew by %d pixels in airline mode, want %d", got, labelDelta*smallGlyph)
+	}
+}
+
+// liveScene builds a scene over a source whose frame a test can replace
+// between draws, which is what a re-sorted aircraft list looks like from here.
+func liveScene(tb testing.TB, frame source.Frame) (*radar.Scene, *fakeSource, *canvas.Canvas) {
+	tb.Helper()
+
+	src := &fakeSource{frame: frame}
+	scene := radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(sceneRangeNm)))
+
+	canv, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	return scene, src, canv
+}
+
+// TestSelectionFollowsTheNearestUntilPinned is the rule the live scope was
+// getting wrong: the first aircraft to arrive with a position kept the panel
+// for as long as it stayed in range, however far away it drifted.
+func TestSelectionFollowsTheNearestUntilPinned(t *testing.T) {
+	t.Parallel()
+
+	fleet := selectionFleet()
+
+	t.Run("unpinned, the selection follows a re-sorted list", func(t *testing.T) {
+		t.Parallel()
+
+		scene, src, canv := liveScene(t, sceneFrame(fleet...))
+		scene.Draw(canv, 0)
+
+		nearest, nearestCanvas, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(fleet...))
+		nearest.Draw(nearestCanvas, 0)
+
+		if !identicalIn(canv, nearestCanvas, panelBox) {
+			t.Fatal("the first frame did not select the nearest aircraft")
+		}
+
+		// A different aircraft is now nearest. The panel has to move with it.
+		reordered := []airplane.Snapshot{fleet[1], fleet[0], fleet[2]}
+		src.frame = sceneFrame(reordered...)
+
+		scene.Draw(canv, 0)
+
+		moved, movedCanvas, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(reordered...))
+		moved.Draw(movedCanvas, 0)
+
+		if !identicalIn(canv, movedCanvas, panelBox) {
+			t.Error("the selection stayed behind when a nearer aircraft arrived, want it on the nearest")
+		}
+	})
+
+	t.Run("pinned, the selection survives a re-sorted list", func(t *testing.T) {
+		t.Parallel()
+
+		scene, src, canv := liveScene(t, sceneFrame(fleet...))
+		scene.Draw(canv, 0)
+		press(scene, 'n') // pins MIDDLE.
+		scene.Draw(canv, 0)
+
+		pinned, pinnedCanvas, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(fleet...))
+		pinned.Draw(pinnedCanvas, 0)
+		press(pinned, 'n')
+		pinned.Draw(pinnedCanvas, 0)
+
+		// MIDDLE is pinned. Re-sort so a different aircraft is nearest and
+		// MIDDLE is last: an unpinned scene would follow the new nearest, and
+		// this one has to stay where it was put.
+		reordered := []airplane.Snapshot{fleet[2], fleet[0], fleet[1]}
+		src.frame = sceneFrame(reordered...)
+
+		scene.Draw(canv, 0)
+
+		nearestNow, nearestCanvas, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(reordered...))
+		nearestNow.Draw(nearestCanvas, 0)
+
+		if identicalIn(canv, nearestCanvas, panelBox) {
+			t.Error("a pinned selection moved to the nearest aircraft, want it to stay where it was put")
+		}
+	})
+
+	t.Run("esc lets go and the nearest wins again", func(t *testing.T) {
+		t.Parallel()
+
+		scene, _, canv := liveScene(t, sceneFrame(fleet...))
+		scene.Draw(canv, 0)
+		press(scene, 'n')
+		scene.Draw(canv, 0)
+
+		if !scene.Handle(input.Key{Kind: input.Esc}) {
+			t.Fatal("Esc was not taken by the radar scene, want it to unpin rather than quit")
+		}
+
+		scene.Draw(canv, 0)
+
+		nearest, nearestCanvas, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(fleet...))
+		nearest.Draw(nearestCanvas, 0)
+
+		if !identicalIn(canv, nearestCanvas, panelBox) {
+			t.Error("Esc left the selection where it was, want it back on the nearest")
+		}
+	})
+}
+
+// sentinelPlane is one aircraft with a heading and a velocity set by hand, so
+// a test can hand the scene the figures uAirwaves marks as undecoded.
+func sentinelPlane(heading, velocity float64) airplane.Snapshot {
+	plane := scenePlane("484AC1", "KLM123", 45, 12, 2400, heading)
+	plane.Heading = heading
+	plane.Velocity = velocity
+
+	return plane
+}
+
+// TestSentinelsAreNotDrawnAsFigures covers the sentinels uAirwaves uses for a
+// heading and a velocity no message has carried: -1 for both, where zero is
+// due north and a genuine standstill. The live scope drew the velocity
+// sentinel as "-1" and treated a heading of zero as undecoded, which are the
+// same mistake made in both directions.
+func TestSentinelsAreNotDrawnAsFigures(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sentinel  = -1.0
+		dueNorth  = 0.0
+		eastwards = 90.0
+		cruise    = 420.0
+	)
+
+	draw := func(tb testing.TB, heading, velocity float64) *canvas.Canvas {
+		tb.Helper()
+
+		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, sceneFrame(sentinelPlane(heading, velocity)))
+		scene.Draw(canv, 0)
+
+		return canv
+	}
+
+	northKnown := draw(t, dueNorth, cruise)
+	headingUnknown := draw(t, sentinel, cruise)
+	eastKnown := draw(t, eastwards, cruise)
+	speedUnknown := draw(t, dueNorth, sentinel)
+	stationary := draw(t, dueNorth, 0)
+
+	for _, testCase := range []struct {
+		name  string
+		left  *canvas.Canvas
+		right *canvas.Canvas
+		same  bool
+	}{
+		{
+			name: "due north is a course, not the undecoded state",
+			left: northKnown, right: headingUnknown, same: false,
+		},
+		{
+			name: "due north draws a silhouette like any other course",
+			left: northKnown, right: eastKnown, same: false,
+		},
+		{
+			name: "an undecoded velocity is not the same figure as a standstill",
+			left: speedUnknown, right: stationary, same: false,
+		},
+		{
+			name: "a known speed and an undecoded one differ in the panel",
+			left: northKnown, right: speedUnknown, same: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := identical(testCase.left, testCase.right); got != testCase.same {
+				t.Errorf("the two frames were identical = %v, want %v", got, testCase.same)
+			}
+		})
+	}
+
+	// The undecoded heading is the only one drawn as a bare circle, so it is
+	// the only one whose silhouette does not rotate with the course.
+	if !identicalIn(headingUnknown, draw(t, sentinel, cruise), scopeBox) {
+		t.Error("two frames with the same undecoded heading drew different scopes")
 	}
 }

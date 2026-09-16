@@ -2,6 +2,7 @@ package termbackend
 
 import (
 	"image"
+	"math"
 	"os"
 	"testing"
 
@@ -396,4 +397,121 @@ func TestNotifyResizeAndStopResize(t *testing.T) {
 
 	notifyResize(ch)
 	stopResize(ch)
+}
+
+// The two Ghostty-shaped windows the aspect test drives, and the cell the
+// terminal reports for both. Nine by eighteen is a common monospaced cell on a
+// laptop panel, and it is exactly the 1:2 shape the fallback assumes, which is
+// what makes the third case below comparable with the first.
+const (
+	aspectCellW = 9
+	aspectCellH = 18
+
+	aspectWideCols = 200
+	aspectWideRows = 50
+
+	aspectShortCols = 92
+	aspectShortRows = 12
+
+	// aspectSlack is how far the fitted picture may sit from the canvas's own
+	// shape, in cells. One cell is the finest a terminal can be asked to place
+	// an image to; anything inside that is rounding rather than distortion.
+	aspectSlack = 1.0
+)
+
+// TestCellsKeepTheCanvasAspect measures what a Ghostty-shaped window actually
+// gets: cellPixels reads the cell out of what the terminal reported, fitCells
+// picks the cell area, and the picture that lands has to keep the canvas's own
+// 16:9 shape to within one cell.
+//
+// This is the calculation behind a report of a stretched frame, so it is
+// checked end to end through cells() rather than on fitCells alone: a correct
+// fit fed a wrong cell size would draw exactly the reported stretch, and only
+// the pair together can rule that out.
+func TestCellsKeepTheCanvasAspect(t *testing.T) {
+	t.Parallel()
+
+	for _, tcase := range []struct {
+		name               string
+		size               winsize.Size
+		wantCols, wantRows int
+		wantCellW          int
+		wantCellH          int
+	}{
+		{
+			name: "a wide window with the cell size reported",
+			size: winsize.Size{
+				Cols: aspectWideCols, Rows: aspectWideRows,
+				XPixels: aspectWideCols * aspectCellW, YPixels: aspectWideRows * aspectCellH,
+			},
+			wantCols: 174, wantRows: 49, wantCellW: aspectCellW, wantCellH: aspectCellH,
+		},
+		{
+			name: "a short window with the cell size reported",
+			size: winsize.Size{
+				Cols: aspectShortCols, Rows: aspectShortRows,
+				XPixels: aspectShortCols * aspectCellW, YPixels: aspectShortRows * aspectCellH,
+			},
+			wantCols: 39, wantRows: 11, wantCellW: aspectCellW, wantCellH: aspectCellH,
+		},
+		{
+			// Most terminals report nothing for the pixel fields, so the 1:2
+			// fallback is the common case rather than the exception. It lands
+			// on the same cell area as the first case, because a 9x18 cell is
+			// 1:2: the fallback is right in proportion to how close the real
+			// cell is to that shape, and wrong in proportion to how far it is.
+			name:     "a wide window with no cell size reported",
+			size:     winsize.Size{Cols: aspectWideCols, Rows: aspectWideRows},
+			wantCols: 174, wantRows: 49,
+			wantCellW: fallbackCellWidth, wantCellH: fallbackCellHeight,
+		},
+	} {
+		t.Run(tcase.name, func(t *testing.T) {
+			t.Parallel()
+
+			term := &Terminal{
+				mode:   Kitty,
+				canvas: image.Pt(defaultCanvasWidth, defaultCanvasHeight),
+				size:   tcase.size,
+			}
+
+			if gotW, gotH := term.cellPixels(); gotW != tcase.wantCellW || gotH != tcase.wantCellH {
+				t.Fatalf("cellPixels() = (%d, %d), want (%d, %d)", gotW, gotH, tcase.wantCellW, tcase.wantCellH)
+			}
+
+			cols, rows := term.cells()
+			if cols != tcase.wantCols || rows != tcase.wantRows {
+				t.Fatalf("cells() = (%d, %d), want (%d, %d)", cols, rows, tcase.wantCols, tcase.wantRows)
+			}
+
+			if rows > tcase.size.Rows-1 || cols > tcase.size.Cols {
+				t.Errorf("cells() = (%d, %d), which does not fit a %dx%d window with a row held back",
+					cols, rows, tcase.size.Cols, tcase.size.Rows)
+			}
+
+			// The picture covers cols*cellWidth by rows*cellHeight physical
+			// pixels, and that box has to have the canvas's own shape. Both
+			// directions are checked: a fit that is right in one and a
+			// cell short in the other is still a stretched frame.
+			assertAspect(t, cols, rows, aspectCellW, aspectCellH)
+		})
+	}
+}
+
+// assertAspect checks that a cols by rows area of cellW by cellH pixels holds
+// the default canvas's shape to within aspectSlack cells, in both directions.
+func assertAspect(t *testing.T, cols, rows, cellW, cellH int) {
+	t.Helper()
+
+	idealRows := float64(cols*cellW*defaultCanvasHeight) / float64(defaultCanvasWidth*cellH)
+	if diff := math.Abs(idealRows - float64(rows)); diff > aspectSlack {
+		t.Errorf("%d columns want %.2f rows to keep the canvas shape, got %d, off by %.2f",
+			cols, idealRows, rows, diff)
+	}
+
+	idealCols := float64(rows*cellH*defaultCanvasWidth) / float64(defaultCanvasHeight*cellW)
+	if diff := math.Abs(idealCols - float64(cols)); diff > aspectSlack {
+		t.Errorf("%d rows want %.2f columns to keep the canvas shape, got %d, off by %.2f",
+			rows, idealCols, cols, diff)
+	}
 }

@@ -565,7 +565,10 @@ func TestDemoFallbackAircraft(t *testing.T) {
 			noCallsign++
 		}
 
-		if plane.Heading == 0 && plane.Velocity == 0 {
+		// The undecoded sentinel is negative, not zero: zero is due north and
+		// a genuine standstill, and the fleet carries one aircraft whose
+		// velocity message has simply never arrived.
+		if plane.Heading < 0 && plane.Velocity < 0 {
 			noMotion++
 		}
 	}
@@ -575,7 +578,7 @@ func TestDemoFallbackAircraft(t *testing.T) {
 	}
 
 	if noMotion != 1 {
-		t.Errorf("aircraft with heading 0 and velocity 0 = %d, want exactly 1", noMotion)
+		t.Errorf("aircraft with an undecoded heading and velocity = %d, want exactly 1", noMotion)
 	}
 }
 
@@ -808,7 +811,7 @@ func TestDemoAdvanceMovesAircraft(t *testing.T) {
 	for _, plane := range demo.Frame().Planes {
 		before[plane.ICAO] = position{plane.Latitude, plane.Longitude}
 
-		if plane.Velocity == 0 && stationaryICAO == "" {
+		if plane.Velocity <= 0 && stationaryICAO == "" {
 			stationaryICAO = plane.ICAO
 		}
 

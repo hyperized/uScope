@@ -175,6 +175,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			Shore:    cfg.shore,
 			RangeNm:  cfg.rangeNm,
 			Minimal:  cfg.minimal,
+			NoDecay:  cfg.noDecay,
 		},
 	}
 

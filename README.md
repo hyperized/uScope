@@ -96,53 +96,59 @@ one function rather than a change in the scene as well.
 
 Aircraft are 15 pixel silhouettes rotated to their heading. An aircraft whose
 heading nobody has decoded is drawn as a bare circle, because a silhouette
-would be claiming to know which way it is facing.
+would be claiming to know which way it is facing. uAirwaves marks an undecoded
+heading and an undecoded velocity with -1, so a heading of zero is due north
+and gets a silhouette like any other course, and a speed the receiver has not
+heard reads `---` rather than a negative number.
 
 Behind each aircraft is its trail, drawn as an anti-aliased polyline from the
 oldest fix it still holds to the newest, brightening towards the head. The
 trails are the reason this project exists. A character cell cannot draw one,
 and a scope full of them says in one glance what a scope full of dots cannot:
-who is turning and who came from where.
+who is turning and who came from where. `--no-decay` draws every segment at
+full strength instead, which trades "which end is the aeroplane" for a track
+that is easier to follow across a busy field.
 
-The right column runs card, rows, details, legend, stats, top to bottom.
+The right column runs panel, rows, legend, top to bottom.
 
-The card is the selected aircraft. Its callsign is set at 64 pixels with the
-ICAO hex and squawk beside it, its track in degrees and compass points under
-that, and three figures along the bottom: distance in nautical miles, altitude
-in feet, speed in knots.
+The panel is the selected aircraft, and it is one block rather than two. Its
+callsign is set at 64 pixels, with the ICAO hex and the squawk beside it, its
+track in degrees and compass points under that, three figures across the
+middle (distance in nautical miles, altitude in feet, speed in knots), and a
+line of smaller values under those: vertical rate with a climb or descent
+triangle, position to two decimals, and how long ago the aircraft was heard.
+`SEEN` reports in coarse buckets rather than in seconds, because a figure
+counting up is movement the eye keeps going back to. A squawk with the
+emergency flag set says `EMERGENCY` after it in the accent colour, which is the
+one place on the scope the accent means something other than the selection.
+With nothing in the sky the panel reads `NO TRAFFIC` and keeps its height, so
+the column does not change shape when the last aircraft leaves range.
+
+An aircraft with no callsign has its ICAO hex set in the large face, so the
+corner drops the hex rather than printing the same six characters twice.
 
 Under it is the row table, nearest aircraft first, with a small header line
 naming its columns: number, callsign, ICAO hex, altitude, speed, distance and
-bearing from the receiver. The selected row carries the accent bar. Altitude
+bearing from the receiver, and the aircraft count right-aligned at the end of
+that same line. The selected row carries the accent bar. Altitude
 gets a small triangle beside it when the aircraft is climbing or descending,
 and both the figure and the triangle are set in that aircraft's altitude band
 whichever colour mode is on. That is the one column where a number and a
 colour say the same thing, so the band survives airline mode instead of being
 the price of turning it on: the list still answers "how high" while the scope
-answers "who". The card's altitude figure is set the same way.
+answers "who". The panel's altitude figure is set the same way.
 
-Every column, and the card's three figures, are sized from the widest value
+Every column, and the panel's three figures, are sized from the widest value
 they could hold rather than from the values on screen, so a table full of
 moving numbers stays still and a value climbing through a digit never nudges
-its neighbour. On a narrow right column the card gives its figures up units
+its neighbour. On a narrow right column the panel gives its figures up units
 first, then a smaller face, then the speed and distance figures in that
-order, keeping altitude to the last. The rows take whatever height is left
-between the card and the block under them, between three and sixteen of
-them, and a longer list ends on a muted `+N MORE` that counts everything not
-on screen.
+order, keeping altitude to the last; narrower still and the line of values
+under them wraps and then goes. The rows take whatever height is left under
+the panel, up to twenty-four of them, and a longer list ends on a muted
+`+N MORE` that counts everything not on screen.
 
-The details block holds the five things about the selected aircraft the card
-has no room for: vertical rate with the same climb or descent triangle,
-bearing from the receiver, position to two decimals, how long ago it was heard,
-and the squawk. `SEEN` reports in coarse buckets rather than in seconds,
-because a figure counting up is movement the eye keeps going back to. A squawk
-with the emergency flag set says `EMERGENCY` after it in the accent colour,
-which is the one place on the scope the accent means something other than the
-selection. With nothing in the sky the block reads `NO TRAFFIC` and keeps its
-room, so the column does not change shape when the last aircraft leaves range.
-
-Under that, the legend and a line saying how many aircraft are being tracked
-and where from.
+Under that, the legend.
 
 Units are nautical miles, feet and knots throughout, because that is what
 aviation uses and converting would only make the numbers harder to check
@@ -175,9 +181,9 @@ or shore.
 
 The projection is centred on the canvas with the range mapped to half the short
 edge, and nothing is clipped to a ring, so the corners show traffic that the
-ring would have cut off. The selected aircraft keeps its accent ring, which is
-the only feedback `n` and `p` have left, and loses its callsign label along
-with the card.
+ring would have cut off. Nothing is drawn for the selected aircraft: no ring,
+no leader line, no label. There is no panel here for a ring to refer to, and on
+an otherwise bare field a ring around one contact reads as another contact.
 
 Every key still works, including `a` and `m`. They change whether the airfields
 and the shore would be drawn rather than whether they are, so turning one off
@@ -478,7 +484,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `z`, `Z` | minimal view on or off |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `l`, `L` | cycle the colour theme |
-| `Esc` | quit |
+| `Esc` | in the radar, hand the selection back to the nearest aircraft |
 | `Ctrl-C` | quit |
 
 Both cases are bound because caps lock is easy to hit by accident on the
@@ -493,11 +499,18 @@ minimal is what hides the bar the cap would sit on.
 
 The radar scene gets first refusal on every key and passes on the ones it does
 not want, which is what keeps `q` and `v` working while it is on screen. The
-other two scenes bind nothing.
+other two scenes bind nothing, so Esc still quits from either of them.
 
-Selection is by ICAO rather than by position in the list, so an aircraft
-overtaking another does not move the selection to a different aeroplane. When
-the selected one goes out of range the selection falls to the nearest.
+Until you choose an aircraft, the selection is the nearest contact and the rows
+start at the top. `n`, `p`, Up and Down pin it to whatever they land on, and it
+then stays with that aeroplane by ICAO however the distance-sorted list moves
+under it. Esc lets go again, and so does the aircraft leaving the list.
+
+The key caps carry their own state. A cap for a toggle that is on is filled,
+one that is off is a hollow outline, and the two cycling keys are labelled with
+the value they are on rather than with the name of the setting: `C ALT` or
+`C AIRLINE`, `L NIGHT` or `L PAPER`. The scope says the same thing from its own
+side, writing `AUTO` before the outer ring's range while auto range is on.
 
 ## Flags
 
@@ -511,6 +524,7 @@ the selected one goes out of range the selection falls to the nearest.
 | `--shore` | `on` | draw the coastline: `on` or `off` |
 | `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
 | `--minimal` | off | aircraft and trails only, edge to edge |
+| `--no-decay` | off | draw every trail segment at full strength, no fade to the tail |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
 | `--demo` | off | fly twelve invented aircraft instead of decoding any |
 | `--beast` | | take Mode S frames from `HOST:PORT` |
