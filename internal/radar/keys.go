@@ -13,8 +13,8 @@ import (
 // key.
 //
 // A key it does not take falls through to the run loop, which is what keeps q
-// and v working while the radar is on screen. Both letter cases are bound
-// because caps lock is easy to hit by accident on the uConsole's keyboard.
+// working while the radar is on screen. Both letter cases are bound because
+// caps lock is easy to hit by accident on the uConsole's keyboard.
 //
 // Esc is taken rather than passed on, so it no longer quits while the radar is
 // up: it is the way back to following the nearest aircraft, which is the
@@ -49,7 +49,7 @@ func (s *Scene) Handle(key input.Key) bool {
 // shift to change the range on a thumb keyboard is a nuisance.
 //
 // m and a work in minimal mode and draw there, on minimal's own pair of
-// toggles rather than on the scope's. z is how you get back out.
+// toggles rather than on the scope's. v is how you get back out.
 func (s *Scene) handleRune(value rune) bool {
 	switch value {
 	case 'n', 'N':
@@ -68,7 +68,7 @@ func (s *Scene) handleRune(value rune) bool {
 		s.toggleAirports()
 	case 'm', 'M':
 		s.toggleShore()
-	case 'z', 'Z':
+	case 'v', 'V':
 		s.minimal = !s.minimal
 	case 'c', 'C':
 		s.colour = s.colour.Next()
@@ -83,7 +83,7 @@ func (s *Scene) handleRune(value rune) bool {
 //
 // Minimal mode keeps its own, off at the start and independent of the
 // scope's. Pressing m in minimal is a choice about minimal, not a change to
-// the view you get back when you press z, and the same the other way round.
+// the view you get back when you press v, and the same the other way round.
 func (s *Scene) toggleShore() {
 	if s.minimal {
 		s.minimalShore = !s.minimalShore

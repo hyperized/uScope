@@ -38,10 +38,7 @@ that always works.
 That coarseness used to show up in the pattern scene, whose shapes are sized
 in pixels for the panel. Below a 720 pixel short edge the scene scales those
 sizes down to fit; at 1280x720 and above, on the panel and in `kitty` mode, it
-draws exactly as before. The specimen scene handles the same problem
-differently, by dropping whole blocks that will not fit rather than shrinking
-them. A bitmap face has one design size, and scaling it down does not make
-small text, it makes unreadable text.
+draws exactly as before.
 
 With `--backend auto`, which is the default, uScope tries in this order:
 
@@ -174,9 +171,11 @@ packed format and how to rebuild it; `make shore-data` is the one command.
 
 ### Minimal
 
-`--minimal`, or `z` while it is running, strips the scene back to the aircraft
-sprites and their trails on the bare field, edge to edge. No header, no key
-bar, no right column, no rings, cardinals, range labels or home marker.
+`v` while the radar is running strips the scene back to the aircraft sprites
+and their trails on the bare field, edge to edge. No header, no key bar, no
+right column, no rings, cardinals, range labels or home marker. A run always
+starts on the full scope; `v` is what gets you to minimal and what gets you
+back.
 
 The picture fills the canvas with the range mapped to half the short edge, and
 nothing is clipped to a ring, so the corners show traffic that a ring would
@@ -185,7 +184,8 @@ selected aircraft either: no ring, no leader line, no label. There is no panel
 here for a ring to refer to, and on an otherwise bare field a ring around one
 contact reads as another contact.
 
-`z` is not on the key bar, because minimal is what hides the key bar.
+Pressing `v` also takes the key bar with it, `V VIEW` included: there is
+nothing left on screen for the cap to sit on.
 
 #### Following the traffic
 
@@ -337,31 +337,15 @@ and auto range will not show you a coastline three countries wide. It takes
 anything from 20 to 500, or `auto`, and refuses the rest rather than clamping
 it silently.
 
-## The other two scenes
+## The other scene
 
-`--scene` picks what gets drawn. In live mode `v` steps through all three
-without restarting.
-
-`pattern` is the orientation check from slice 1: four coloured corner
-squares, a triangle pointing up, a circle and a sweeping line. Red square
-top-left and cyan triangle at the top means the frame landed the right way
-up, and the sweep moving means the loop is running.
-
-`specimen` is the slice 3 scene. It is half a font sample and half a mock of
-what the radar turned out to look like: a header band with a clock, a
-selected-flight card with the callsign set large, two compact aircraft rows,
-all four embedded faces rendering the alphabet, and a key bar along the
-bottom. The aircraft in it are invented and always the same. It stays in
-because it is the fastest way to judge a font change, and because a scene with
-no moving parts is a useful thing to have when the radar is misbehaving and
-you want to know whether the drawing or the data is at fault.
-
-Every block in the specimen sizes itself from the canvas bounds and the
-metrics of the font it is set in. A block that does not fit is skipped rather
-than drawn over its neighbour, so the same scene renders at 1280x720 on the
-panel and on a canvas of a few dozen pixels. An 80x24 terminal of half blocks
-is a canvas 80 by 48, and all that fits there is the key bar. Give it a
-320x200 window and the header band and the two compact rows come back.
+`--scene pattern` is a flags-only diagnostic: the orientation check from
+slice 1, four coloured corner squares, a triangle pointing up, a circle and a
+sweeping line. Red square top-left and cyan triangle at the top means the
+frame landed the right way up, and the sweep moving means the loop is
+running. It is never reached from a running radar; there is no key that
+switches to it, and none of the radar's own keys do anything there either.
+`--scene pattern` is the only way to see it.
 
 ## Themes
 
@@ -456,8 +440,7 @@ make pattern
 ```
 
 That cross-compiles for arm64, ships the binary, and paints the test pattern
-on the panel. `make specimen` does the same with the type specimen, which is
-the check that matters for the fonts.
+on the panel.
 
 Red square top-left and the cyan triangle at the top means the rotation is
 right. The triangle points up, so it tells you which way up the frame landed.
@@ -476,15 +459,9 @@ make run
 ```
 
 That is `go run .`, and auto detection lands on the kitty backend. Press `q`
-to quit, `v` to switch views. To start on the type specimen instead:
-
-```sh
-make run-specimen
-```
-
-Ghostty draws the frame at its real pixel size, so that is the closest look
-at the fonts available without a uConsole on the desk. To see the half-block
-renderer:
+to quit, `v` to flip between the scope and the minimal view. Ghostty draws
+the frame at its real pixel size, so that is the closest look at the fonts
+available without a uConsole on the desk. To see the half-block renderer:
 
 ```sh
 make run-blocks
@@ -527,7 +504,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | Key | Does |
 |---|---|
 | `q`, `Q` | quit |
-| `v`, `V` | step to the next view |
+| `v`, `V` | view: flip between the scope and the minimal view |
 | `n`, `N`, Down | select the next aircraft |
 | `p`, `P`, Up | select the previous one |
 | `+`, `=` | widen the range by one step, and turn auto off |
@@ -536,7 +513,6 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `t`, `T` | trails on or off |
 | `a`, `A` | airfield markers on or off; minimal keeps its own |
 | `m`, `M` | coastline on or off; minimal keeps its own |
-| `z`, `Z` | minimal view on or off |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `l`, `L` | cycle the colour theme |
 | `Esc` | in the radar, hand the selection back to the nearest aircraft |
@@ -548,13 +524,13 @@ same reason.
 
 The letters name what they do rather than where the thing lives: `r` for range,
 `a` for airports, `m` for map, `t` for trails, `c` for colour, `l` for look,
-`v` for view. `z` is the odd one out and is meant to be: it is an escape hatch
-back out of minimal rather than a feature, and it has no key cap because
-minimal is what hides the bar the cap would sit on.
+`v` for view.
 
 The radar scene gets first refusal on every key and passes on the ones it does
-not want, which is what keeps `q` and `v` working while it is on screen. The
-other two scenes bind nothing, so Esc still quits from either of them.
+not want, which is what keeps `q` working while it is on screen. `v` is one of
+the ones it takes: pressing it never reaches the run loop, because it is the
+radar's own toggle between the scope and minimal. The pattern scene binds
+nothing, so Esc still quits from it.
 
 Until you choose an aircraft, the selection is the nearest contact and the rows
 start at the top. `n`, `p`, Up and Down pin it to whatever they land on, and it
@@ -572,13 +548,12 @@ side, writing `AUTO` before the outer ring's range while auto range is on.
 | Flag | Default | Does |
 |---|---|---|
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
-| `--scene` | `radar` | `radar`, `pattern` or `specimen` |
+| `--scene` | `radar` | `radar` or `pattern`; `pattern` is a flags-only diagnostic with no key back to it |
 | `--theme` | `night` | `night` or `paper` colour theme |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
 | `--airports` | `on` | draw the airfield markers: `on` or `off` |
 | `--shore` | `on` | draw the coastline: `on` or `off` |
 | `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
-| `--minimal` | off | aircraft and trails only, edge to edge |
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` to stay on the receiver |
 | `--no-decay` | off | draw every trail segment at full strength, no fade to the tail |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
@@ -617,15 +592,12 @@ make run-demo       # go run . --demo
 make run-airline    # go run . --demo --colour airline
 make run-beast      # go run . --beast $(BEAST)
 make run-blocks     # go run . --backend blocks --demo
-make run-minimal    # go run . --demo --minimal
 make run-pattern    # go run . --scene pattern
-make run-specimen   # go run . --scene specimen
 make shore-data     # rebuild pkg/shore/shore.bin.gz from Natural Earth
 make test           # go test -race -cover ./...
 make lint           # golangci-lint run ./...
 make radar          # ship, then paint one radar frame on the panel
 make pattern        # ship, then paint the test pattern on the panel
-make specimen       # ship, then paint the type specimen on the panel
 make test-device    # cross-compile the integration tests and run them on the device
 ```
 
@@ -666,7 +638,6 @@ internal/theme        the colour palettes
 internal/source       where aircraft come from: the radio, a feed, or invented
 internal/radar        the radar scene
 internal/pattern      the orientation scene
-internal/specimen     the type specimen scene
 internal/app          the run loop
 internal/tools/shoregen  packs Natural Earth into pkg/shore/shore.bin.gz
 ```

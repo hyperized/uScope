@@ -107,9 +107,7 @@ type keyCap struct {
 // is on the field, then the two that change how it looks.
 //
 // Ten caps and their labels come to 736 pixels of the 1248 the panel leaves
-// between its margins, so nothing here has to be shortened to fit. z is bound
-// and deliberately absent: it hides this bar, so a cap advertising it would be
-// pointing at the thing it is about to remove.
+// between its margins, so nothing here has to be shortened to fit.
 //
 // The select cap is drawn as the two arrow glyphs rather than as N/P. Both are
 // bound, but the arrows are what a hand reaches for first, and all four

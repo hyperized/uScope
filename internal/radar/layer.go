@@ -44,7 +44,7 @@ type layerKey struct {
 	// without this the word would appear only once something else moved.
 	auto bool
 
-	// minimal is in the key because z changes the whole picture behind the
+	// minimal is in the key because v changes the whole picture behind the
 	// aircraft: the same canvas size, range and palette draw rings and a home
 	// marker in one view and two overlays around a different centre in the
 	// other.

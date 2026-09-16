@@ -167,7 +167,7 @@ type Scene struct {
 	shoreSet *shore.Set
 
 	// minimal strips the scene back to the aircraft and their trails on the
-	// whole canvas, which the z key flips.
+	// whole canvas, which the v key flips.
 	minimal bool
 
 	// minimalShore and minimalAirports are minimal mode's own copies of the

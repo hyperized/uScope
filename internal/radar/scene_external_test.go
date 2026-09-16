@@ -492,8 +492,8 @@ func TestHandleTakesItsOwnKeys(t *testing.T) {
 		{name: "A toggles airports", key: input.Key{Kind: input.Rune, Rune: 'A'}, want: true},
 		{name: "m toggles the shore", key: input.Key{Kind: input.Rune, Rune: 'm'}, want: true},
 		{name: "M toggles the shore", key: input.Key{Kind: input.Rune, Rune: 'M'}, want: true},
-		{name: "z flips minimal", key: input.Key{Kind: input.Rune, Rune: 'z'}, want: true},
-		{name: "Z flips minimal", key: input.Key{Kind: input.Rune, Rune: 'Z'}, want: true},
+		{name: "v flips minimal", key: input.Key{Kind: input.Rune, Rune: 'v'}, want: true},
+		{name: "V flips minimal", key: input.Key{Kind: input.Rune, Rune: 'V'}, want: true},
 		{name: "c cycles the colour mode", key: input.Key{Kind: input.Rune, Rune: 'c'}, want: true},
 		{name: "C cycles the colour mode", key: input.Key{Kind: input.Rune, Rune: 'C'}, want: true},
 		{name: "down selects the next", key: input.Key{Kind: input.Down}, want: true},
@@ -501,12 +501,12 @@ func TestHandleTakesItsOwnKeys(t *testing.T) {
 
 		// The false cases are the ones that matter. Anything the scene takes
 		// here is a key the run loop never sees, and q is how you get out. s
-		// moved to v, so it falls through as an ordinary unbound letter.
+		// used to cycle scenes and falls through now as an ordinary unbound
+		// letter, the same as it always has.
 		{name: "q falls through", key: input.Key{Kind: input.Rune, Rune: 'q'}},
 		{name: "Q falls through", key: input.Key{Kind: input.Rune, Rune: 'Q'}},
 		{name: "s falls through", key: input.Key{Kind: input.Rune, Rune: 's'}},
 		{name: "S falls through", key: input.Key{Kind: input.Rune, Rune: 'S'}},
-		{name: "v falls through", key: input.Key{Kind: input.Rune, Rune: 'v'}},
 		{name: "esc is taken, it unpins rather than quitting", key: input.Key{Kind: input.Esc}, want: true},
 		{name: "ctrl-c falls through", key: input.Key{Kind: input.CtrlC}},
 		{name: "left falls through", key: input.Key{Kind: input.Left}},
@@ -1951,7 +1951,7 @@ func TestMinimalModeCornerTraffic(t *testing.T) {
 	}
 }
 
-// TestMinimalModeKeyFlipsBothWays checks that z and Z flip minimal mode
+// TestMinimalModeKeyFlipsBothWays checks that v and V flip minimal mode
 // through Handle, proved by the picture changing and then changing back.
 func TestMinimalModeKeyFlipsBothWays(t *testing.T) {
 	t.Parallel()
@@ -1967,21 +1967,21 @@ func TestMinimalModeKeyFlipsBothWays(t *testing.T) {
 
 	scene.Draw(full, 0)
 
-	if !press(scene, 'z') {
-		t.Fatal("Handle('z') = false, want the scene to take it")
+	if !press(scene, 'v') {
+		t.Fatal("Handle('v') = false, want the scene to take it")
 	}
 
 	scene.Draw(canv, 0)
 
 	if identical(canv, full) {
-		t.Fatal("z did not change the picture, so minimal mode did not engage")
+		t.Fatal("v did not change the picture, so minimal mode did not engage")
 	}
 
-	press(scene, 'Z')
+	press(scene, 'V')
 	scene.Draw(canv, 0)
 
 	if !identical(canv, full) {
-		t.Error("Z did not undo z, so minimal mode does not flip back")
+		t.Error("V did not undo v, so minimal mode does not flip back")
 	}
 }
 
@@ -2765,7 +2765,7 @@ func TestMinimalShoreToggle(t *testing.T) {
 		t.Fatal("the full scope drew no coastline, so this comparison proves nothing")
 	}
 
-	press(scene, 'z')
+	press(scene, 'v')
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Shore); got != 0 {
@@ -2779,7 +2779,7 @@ func TestMinimalShoreToggle(t *testing.T) {
 		t.Error("minimal drew no shore pixels after m, want the coastline")
 	}
 
-	press(scene, 'z')
+	press(scene, 'v')
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Shore); got != fullScope {
@@ -2805,7 +2805,7 @@ func TestMinimalAirportsToggle(t *testing.T) {
 		t.Fatal("the full scope drew no rule-coloured pixels, so this comparison proves nothing")
 	}
 
-	press(scene, 'z')
+	press(scene, 'v')
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != 0 {
@@ -2819,7 +2819,7 @@ func TestMinimalAirportsToggle(t *testing.T) {
 		t.Error("minimal drew no airfield pixels after a, want the markers")
 	}
 
-	press(scene, 'z')
+	press(scene, 'v')
 	scene.Draw(canv, 0)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != fullScope {

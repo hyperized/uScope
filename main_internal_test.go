@@ -74,8 +74,10 @@ const (
 	flagRecenter   = "--recenter"
 	flagDemoSector = "--demo-sector"
 
-	// patternValue and specimenValue are the two non-default --scene
-	// spellings, named because they turn up in several tables.
+	// patternValue is the one non-default --scene spelling, named because it
+	// turns up in several tables. specimenValue is the spelling --scene no
+	// longer accepts, named for the rejection tests that check it stays that
+	// way.
 	patternValue  = "pattern"
 	specimenValue = "specimen"
 
@@ -941,7 +943,6 @@ func TestParseFlagsScene(t *testing.T) {
 		{name: caseDefault, args: nil, want: app.Radar},
 		{name: "radar explicit", args: []string{flagScene, defaultScene}, want: app.Radar},
 		{name: patternValue, args: []string{flagScene, patternValue}, want: app.Pattern},
-		{name: specimenValue, args: []string{flagScene, specimenValue}, want: app.Specimen},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -968,6 +969,7 @@ func TestParseFlagsSceneRejections(t *testing.T) {
 	}{
 		{name: "unknown scene", args: []string{flagScene, "waterfall"}},
 		{name: "empty scene", args: []string{flagScene, ""}},
+		{name: "specimen no longer accepted", args: []string{flagScene, specimenValue}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -992,13 +994,13 @@ func TestParseFlagsSceneRejections(t *testing.T) {
 func TestSceneReachesConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := parseFlags([]string{flagScene, specimenValue})
+	cfg, err := parseFlags([]string{flagScene, patternValue})
 	if err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
-	if cfg.scene != app.Specimen {
-		t.Errorf("config.scene = %v, want %v", cfg.scene, app.Specimen)
+	if cfg.scene != app.Pattern {
+		t.Errorf("config.scene = %v, want %v", cfg.scene, app.Pattern)
 	}
 }
 
@@ -2095,7 +2097,7 @@ func TestParseFlagsRecenterRejections(t *testing.T) {
 	}
 }
 
-// TestParseFlagsBooleans covers the three flags that are a bare switch: each
+// TestParseFlagsBooleans covers the two flags that are a bare switch: each
 // in its default state, given on its own, and given with an explicit value,
 // because the flag package accepts all three spellings and a switch that only
 // worked as --flag would be a surprise to anyone scripting it.
@@ -2106,7 +2108,6 @@ func TestParseFlagsBooleans(t *testing.T) {
 		flag  string
 		apply func(*config, bool)
 	}{
-		{flag: flagMinimal, apply: func(cfg *config, on bool) { cfg.minimal = on }},
 		{flag: flagNoDecay, apply: func(cfg *config, on bool) { cfg.noDecay = on }},
 		{flag: flagDemoSector, apply: func(cfg *config, on bool) { cfg.demoSector = on }},
 	} {
@@ -2134,6 +2135,18 @@ func TestParseFlagsBooleans(t *testing.T) {
 				checkConfig(t, got, want)
 			})
 		}
+	}
+}
+
+// TestMinimalFlagRemoved guards against --minimal reappearing by accident. It
+// used to seed the radar's minimal view at startup; a run now always starts
+// on the full scope, and v, inside the radar's own Handle, is the only way
+// into minimal.
+func TestMinimalFlagRemoved(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseFlags([]string{flagMinimal}); err == nil {
+		t.Fatalf("parseFlags([%s]) = nil error, want a parse failure: the flag no longer exists", flagMinimal)
 	}
 }
 

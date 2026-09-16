@@ -19,8 +19,8 @@ GOARCH_DEV ?= arm64
 BEAST ?=
 
 .PHONY: all build build-aarch64 build-macos run run-demo run-airline run-beast \
-        run-blocks run-minimal run-pattern run-specimen shore-data test \
-        test-coverage lint fmt ship pattern specimen radar test-device clean
+        run-blocks run-pattern shore-data test \
+        test-coverage lint fmt ship pattern radar test-device clean
 
 all: build
 
@@ -65,21 +65,11 @@ run-beast:
 run-blocks:
 	go run . --backend blocks --demo
 
-# The stripped-back view: aircraft and trails on the bare field, edge to edge,
-# nothing else. z switches back while it runs.
-run-minimal:
-	go run . --demo --minimal
-
-# The orientation pattern, live. v steps on to the specimen and round to the
-# radar; q quits.
+# The orientation pattern, a still frame's worth of live loop. It is a
+# flags-only diagnostic: there is no key back to the radar once it is
+# running, so q is the only way out.
 run-pattern:
 	go run . --scene pattern
-
-# The type specimen, live. In Ghostty this lands on the kitty backend and the
-# fonts render at their real pixel sizes, which is the only way to judge them
-# without a uConsole on the desk. v switches back to the pattern, q quits.
-run-specimen:
-	go run . --scene specimen
 
 # Rebuild the embedded shorelines from Natural Earth.
 #
@@ -132,13 +122,6 @@ ship: build-aarch64
 # changes no console or terminal state.
 pattern: ship
 	@ssh $(DEVICE) './uScope --scene pattern --test-pattern'
-
-# Paint the type specimen on the panel and leave it there. Same one-frame,
-# no-state-changed deal as pattern, so it is safe over ssh. This is the check
-# that matters for slice 3: whether Terminus at 12, 16 and 32 pixels is
-# readable at arm's length on the real screen.
-specimen: ship
-	@ssh $(DEVICE) './uScope --scene specimen --test-pattern'
 
 # Paint one frame of the radar on the panel. With no source flag this opens the
 # uConsole's own SDR, which is the whole point of the machine. To watch it live

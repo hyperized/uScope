@@ -14,9 +14,9 @@
 // field, so the whole of Run is exercised on a Mac with fakes.
 //
 // Slice 3 made the scene a set rather than a single drawer. --scene picks
-// which one starts, and in the live loop s steps to the next. Building the
-// set loads the embedded fonts, which is why a font that will not parse
-// stops the program before it opens a device.
+// which one starts, and that is the one the whole run draws: nothing cycles
+// between them. Building the set loads the embedded fonts, which is why a
+// font that will not parse stops the program before it opens a device.
 package app
 
 import (
@@ -72,7 +72,7 @@ type Blitter interface {
 	String() string
 }
 
-// Drawer paints one frame. All three scenes implement it.
+// Drawer paints one frame. Both scenes implement it.
 type Drawer interface {
 	Draw(dst *canvas.Canvas, elapsed time.Duration)
 }
@@ -80,7 +80,7 @@ type Drawer interface {
 // KeyHandler is the optional other half of the scene contract. A scene that
 // binds keys of its own implements it and gets first refusal on every key;
 // anything it does not take falls through to the loop, which is what keeps q
-// and s working whichever scene is on screen.
+// working whichever scene is on screen.
 //
 // It is declared here, where it is consumed, so a scene does not have to
 // import internal/app to be one.
@@ -169,8 +169,8 @@ type session struct {
 	canv  *canvas.Canvas
 	label string
 
-	// scenes is the whole set in SceneKind order and active is the one on
-	// screen, because s cycles between them while the loop runs.
+	// scenes is the whole set in SceneKind order and active is the one
+	// --scene picked at startup. Nothing changes it once the run has begun.
 	scenes []Drawer
 	active int
 
@@ -215,10 +215,6 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 //
 //nolint:ireturn // a scene is a Drawer; that is the whole point of the seam.
 func (s *session) scene() Drawer { return s.scenes[s.active] }
-
-// nextScene steps to the following scene, wrapping at the end. This is what
-// the s key is bound to.
-func (s *session) nextScene() { s.active = (s.active + 1) % len(s.scenes) }
 
 // cycleTheme steps to the next colour theme and applies it to every scene
 // that takes one, not only the one on screen, so switching scenes later
@@ -281,7 +277,6 @@ const (
 	// key to unlearn later.
 	cmdNone command = iota
 	cmdQuit
-	cmdNextScene
 	cmdNextTheme
 )
 
@@ -303,15 +298,13 @@ func classify(key input.Key) command {
 // the keys keep working with caps lock on, which is easy to hit by accident
 // on the uConsole's small keyboard.
 //
-// v rather than s cycles the views. The radar wanted the single letters that
-// name what they do, and s was the odd one out: it stood for scene, which is
-// what this program calls a thing the operator calls a view.
+// v is not among them. It used to cycle which scene was on screen; now it
+// toggles the radar's own minimal view, so Scene.Handle claims it before the
+// loop ever gets to classify it.
 func runeCommand(value rune) command {
 	switch value {
 	case 'q', 'Q':
 		return cmdQuit
-	case 'v', 'V':
-		return cmdNextScene
 	case 'l', 'L':
 		return cmdNextTheme
 	default:
@@ -326,10 +319,6 @@ func runeCommand(value rune) command {
 func dispatch(ses *session, action command) bool {
 	if action == cmdQuit {
 		return true
-	}
-
-	if action == cmdNextScene {
-		ses.nextScene()
 	}
 
 	if action == cmdNextTheme {

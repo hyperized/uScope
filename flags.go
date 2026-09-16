@@ -92,7 +92,7 @@ var (
 	errSize       = errors.New(appName + ": --size must be WxH")
 	errFrames     = errors.New(appName + ": --frames out of range")
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
-	errScene      = errors.New(appName + ": --scene must be radar, pattern or specimen")
+	errScene      = errors.New(appName + ": --scene must be radar or pattern")
 	errTheme      = errors.New(appName + ": --theme must be night or paper")
 	errColour     = errors.New(appName + ": --colour must be altitude or airline")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
@@ -126,7 +126,6 @@ type config struct {
 	airports    radar.Toggle
 	shore       radar.Toggle
 	rangeNm     float64
-	minimal     bool
 	noDecay     bool
 	recentre    time.Duration
 
@@ -173,7 +172,6 @@ type rawFlags struct {
 	fps         int
 	frames      int
 	testPattern bool
-	minimal     bool
 	noDecay     bool
 	demo        bool
 	demoSector  bool
@@ -216,7 +214,7 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.backend, "backend", defaultBackend,
 		"where to draw: auto, fb, kitty, blocks or png")
 	set.StringVar(&raw.scene, "scene", defaultScene,
-		"what to draw: radar, pattern or specimen")
+		"what to draw: radar or pattern. pattern is a flags-only diagnostic with no key back to it")
 	set.StringVar(&raw.theme, "theme", defaultTheme,
 		"colour theme: night or paper")
 	set.StringVar(&raw.colour, "colour", defaultColour,
@@ -227,8 +225,6 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"draw the coastline under the scope: on or off")
 	set.StringVar(&raw.scopeRange, "range", defaultRange,
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
-	set.BoolVar(&raw.minimal, "minimal", false,
-		"draw only the aircraft and their trails, edge to edge, with no header, key bar or column")
 	// The flag is spelled the American way and the Go identifiers behind it
 	// are spelled the British one, which is deliberate rather than a slip:
 	// "recenter" is what anyone reaching for this flag will type, and
@@ -340,7 +336,6 @@ func (raw rawFlags) display() (display, error) {
 			Airports: airports,
 			Shore:    shoreToggle,
 			RangeNm:  rangeNm,
-			Minimal:  raw.minimal,
 			NoDecay:  raw.noDecay,
 			Recentre: recentre,
 		},
@@ -402,7 +397,6 @@ func (raw rawFlags) validated() (config, error) {
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
 		rangeNm:     show.radar.RangeNm,
-		minimal:     show.radar.Minimal,
 		noDecay:     show.radar.NoDecay,
 		recentre:    show.radar.Recentre,
 		battery:     raw.battery,

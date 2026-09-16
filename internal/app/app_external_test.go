@@ -1462,12 +1462,11 @@ func TestRunDrawsTheSelectedScene(t *testing.T) {
 	}{
 		{name: "radar is the first scene", kind: app.Radar, want: "first"},
 		{name: "pattern is the second", kind: app.Pattern, want: "second"},
-		{name: "specimen is the third", kind: app.Specimen, want: "third"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			calls := make(chan string, 3)
+			calls := make(chan string, 2)
 			cfg := app.Config{
 				PNG:   filepath.Join(t.TempDir(), "out.png"),
 				Size:  image.Pt(16, 16),
@@ -1477,8 +1476,7 @@ func TestRunDrawsTheSelectedScene(t *testing.T) {
 			err := app.Run(t.Context(), cfg, io.Discard,
 				app.WithScenes(
 					newNamedDrawer("first", calls),
-					newNamedDrawer("second", calls),
-					newNamedDrawer("third", calls)))
+					newNamedDrawer("second", calls)))
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -1503,7 +1501,7 @@ func TestRunSceneOutOfRange(t *testing.T) {
 	cfg := app.Config{
 		PNG:   filepath.Join(t.TempDir(), "out.png"),
 		Size:  image.Pt(16, 16),
-		Scene: app.Specimen,
+		Scene: app.Pattern,
 	}
 
 	// Only one scene was built, so there is no second one to start on. The
@@ -1537,96 +1535,10 @@ func TestRunSceneLoaderError(t *testing.T) {
 	}
 }
 
-// sceneSwitchBudget bounds how long a test will keep ticking while it waits
-// for the v keypress to be picked up. It is half of testTimeout so the run
-// context, which is bounded by the whole of it, cannot expire first and turn
-// a slow keypress into a timed-out tick.
-const sceneSwitchBudget = testTimeout / 2
-
-func TestRunLiveSwitchesScene(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
-	defer cancel()
-
-	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
-
-	calls := make(chan string, 1)
-	blitter := newFakeBlitter(16, 16, 16, 32, "fake")
-	ticker := newFakeTicker()
-
-	done := runAsync(runCtx, liveConfig(30), io.Discard,
-		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScenes(newNamedDrawer("first", calls), newNamedDrawer("second", calls)),
-		app.WithConsoleSwitch((&switchSpy{}).switchMode),
-		app.WithRawMode((&switchSpy{}).switchMode),
-		app.WithInput(&onceReader{data: []byte("v")}),
-		app.WithTicker(ticker.new),
-	)
-
-	if !drewSecondScene(t, ticker, blitter, calls) {
-		t.Error("the second scene never drew after v, want the loop to switch to it")
-	}
-
-	cancelRun()
-
-	if err := recvOrTimeout(t, done, testTimeout, "Run to return"); err != nil {
-		t.Errorf("Run: %v, want nil", err)
-	}
-}
-
-// drewSecondScene ticks the loop until the second scene paints a frame, or
-// until the budget runs out.
-//
-// Ticking in a loop rather than once is the whole point. The v keypress
-// arrives on the reader's own goroutine, and nothing in the test can say when
-// that goroutine is scheduled or, once the key is queued, whether the loop's
-// select takes the key or a waiting tick first. A fixed number of tries is
-// not enough: on a loaded machine the reader can still be waiting to run
-// after a dozen frames have been drawn, which is exactly how the first
-// version of this test failed about once in a hundred runs. What is certain
-// is that once the key has been handled, every later tick draws the second
-// scene, so the test keeps ticking until it sees one.
-//
-// Both the draw and the blit channel are drained every round. The blitter's
-// buffer is small, and a full one stops the loop dead, which would wedge the
-// next tick rather than fail the test.
-func drewSecondScene(t *testing.T, ticker *fakeTicker, blitter *fakeBlitter, calls chan string) bool {
-	t.Helper()
-
-	deadline := time.Now().Add(sceneSwitchBudget)
-
-	for time.Now().Before(deadline) {
-		sendTick(t, ticker)
-
-		name := recvOrTimeout(t, calls, testTimeout, "a Draw call")
-		recvOrTimeout(t, blitter.calls, testTimeout, "a Blit call")
-
-		if name == "second" {
-			return true
-		}
-	}
-
-	return false
-}
-
-// sendTick delivers one frame tick, failing the test rather than blocking
-// for ever if the run loop has already stopped receiving.
-func sendTick(t *testing.T, ticker *fakeTicker) {
-	t.Helper()
-
-	select {
-	case ticker.ch <- time.Now():
-	case <-time.After(testTimeout):
-		t.Fatal("timed out delivering a tick to the run loop")
-	}
-}
-
 // themedNamedDrawer is a namedDrawer that also implements app.Themed,
 // reporting every palette it is handed on its own channel. It stands in for
-// the radar and specimen scenes, which is what lets the l key be tested
-// without loading a font.
+// the radar scene, which is what lets the l key be tested without loading a
+// font.
 type themedNamedDrawer struct {
 	name     string
 	calls    chan string
@@ -1645,13 +1557,11 @@ func (d *themedNamedDrawer) SetPalette(pal theme.Palette) {
 	d.palettes <- pal
 }
 
-// TestRunLiveSwitchesTheme mirrors TestRunLiveSwitchesScene, but for the l
-// key rather than s. Unlike a scene switch, a palette change is reported
-// synchronously by SetPalette itself, so this does not need
-// drewSecondScene's tick-until-you-see-it loop: building the scene set
-// applies the starting theme once up front (so the first palette every scene
-// reports is Night), and the l keypress is the second and last report from
-// each, with no tick required to observe either.
+// TestRunLiveSwitchesTheme checks the l key's effect on a running loop. A
+// palette change is reported synchronously by SetPalette itself, so this
+// needs no ticking to observe it: building the scene set applies the
+// starting theme once up front (so the first palette every scene reports is
+// Night), and the l keypress is the second and last report from each.
 func TestRunLiveSwitchesTheme(t *testing.T) {
 	t.Parallel()
 
@@ -1784,9 +1694,9 @@ func (d *keyDrawer) Handle(key input.Key) bool {
 }
 
 // TestRunLiveSceneTakesItsOwnKeys covers the scene getting first refusal. A
-// scene that claims v must stop the loop switching away from it, which is
-// the whole point of letting a scene bind keys at all; v is what the loop
-// itself would otherwise take the key to mean.
+// scene that claims q must stop the loop's own classification from ever
+// seeing it, which is the whole point of letting a scene bind keys at all:
+// even a key that would otherwise quit the program never reaches classify.
 func TestRunLiveSceneTakesItsOwnKeys(t *testing.T) {
 	t.Parallel()
 
@@ -1800,21 +1710,21 @@ func TestRunLiveSceneTakesItsOwnKeys(t *testing.T) {
 
 	done := runAsync(ctx, liveConfig(30), &bytes.Buffer{},
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
-		app.WithScenes(newKeyDrawer("first", 'v', calls, handled), newNamedDrawer("second", calls)),
+		app.WithScenes(newKeyDrawer("first", 'q', calls, handled), newNamedDrawer("second", calls)),
 		app.WithConsoleSwitch((&switchSpy{}).switchMode),
 		app.WithRawMode((&switchSpy{}).switchMode),
-		app.WithInput(&onceReader{data: []byte{'v'}}),
+		app.WithInput(&onceReader{data: []byte{'q'}}),
 		app.WithTicker(ticker.new),
 	)
 
-	if got := recvOrTimeout(t, handled, testTimeout, "the scene to take v"); got != 'v' {
-		t.Errorf("scene handled %q, want %q", got, 'v')
+	if got := recvOrTimeout(t, handled, testTimeout, "the scene to take q"); got != 'q' {
+		t.Errorf("scene handled %q, want %q", got, 'q')
 	}
 
 	ticker.ch <- time.Now()
 
 	if got := recvOrTimeout(t, calls, testTimeout, "a Draw call"); got != "first" {
-		t.Errorf("scene after s is %q, want the loop to have left it alone", got)
+		t.Errorf("scene after q is %q, want the loop to have left it alone and kept running", got)
 	}
 
 	cancel()

@@ -10,8 +10,9 @@
 // The radar is the default scene. Where its aircraft come from is settled
 // here, from the flags: a captured IQ file, a BEAST feed, the invented demo
 // fleet, or the radio on the uConsole. --scene picks which scene starts, and
-// in the live loop s steps between the radar, the orientation pattern and the
-// type specimen.
+// there is no key back to the orientation pattern once running: it is a
+// flags-only diagnostic. v flips the radar between the scope and minimal
+// view instead.
 //
 // Exit status is 0 on a clean quit and 1 on any failure, with the reason on
 // stderr.
@@ -174,7 +175,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 			Airports: cfg.airports,
 			Shore:    cfg.shore,
 			RangeNm:  cfg.rangeNm,
-			Minimal:  cfg.minimal,
 			NoDecay:  cfg.noDecay,
 			Recentre: cfg.recentre,
 		},

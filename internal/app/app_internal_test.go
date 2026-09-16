@@ -204,11 +204,16 @@ func TestClassify(t *testing.T) {
 	}{
 		{name: "lowercase q quits", key: input.Key{Kind: input.Rune, Rune: 'q'}, want: cmdQuit},
 		{name: "uppercase Q quits", key: input.Key{Kind: input.Rune, Rune: 'Q'}, want: cmdQuit},
-		{name: "lowercase v switches scene", key: input.Key{Kind: input.Rune, Rune: 'v'}, want: cmdNextScene},
-		{name: "uppercase V switches scene", key: input.Key{Kind: input.Rune, Rune: 'V'}, want: cmdNextScene},
 		{
-			// s used to switch scenes; the key moved to v, and s must not
-			// still be bound to anything left over from that.
+			// v used to switch scenes; it now flips the radar's own minimal
+			// view, entirely inside Scene.Handle, so classify itself must no
+			// longer bind it to anything.
+			name: "lowercase v is no longer bound here", key: input.Key{Kind: input.Rune, Rune: 'v'}, want: cmdNone,
+		},
+		{name: "uppercase V is no longer bound here", key: input.Key{Kind: input.Rune, Rune: 'V'}, want: cmdNone},
+		{
+			// s used to switch scenes before that; it must not still be bound
+			// to anything left over from that either.
 			name: "s is no longer bound", key: input.Key{Kind: input.Rune, Rune: 's'}, want: cmdNone,
 		},
 		{name: "lowercase l cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'l'}, want: cmdNextTheme},
@@ -267,9 +272,9 @@ func (optionOverrideSource) Frame() source.Frame { return source.Frame{} }
 
 func (optionOverrideSource) Close() error { return nil }
 
-// wantSceneCount is how many scenes the production set holds: the radar, the pattern
-// and the specimen.
-const wantSceneCount = 3
+// wantSceneCount is how many scenes the production set holds: the radar and
+// the pattern.
+const wantSceneCount = 2
 
 func TestNewRunnerDefaults(t *testing.T) {
 	t.Parallel()
@@ -790,7 +795,7 @@ func TestParseScene(t *testing.T) {
 	}{
 		{name: sceneRadar, text: sceneRadar, want: Radar},
 		{name: scenePattern, text: scenePattern, want: Pattern},
-		{name: sceneSpecimen, text: sceneSpecimen, want: Specimen},
+		{name: "specimen is no longer a scene", text: "specimen", wantErr: true},
 		{name: "unknown name", text: "waterfall", wantErr: true},
 		{name: "empty", text: "", wantErr: true},
 		{name: "wrong case", text: "Pattern", wantErr: true},
@@ -840,7 +845,6 @@ func TestSceneKindString(t *testing.T) {
 	}{
 		{name: sceneRadar, kind: Radar, want: sceneRadar},
 		{name: scenePattern, kind: Pattern, want: scenePattern},
-		{name: sceneSpecimen, kind: Specimen, want: sceneSpecimen},
 		{name: "out of range", kind: outOfRange, want: "invalid"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -856,7 +860,7 @@ func TestSceneKindString(t *testing.T) {
 func TestSceneKindRoundTrips(t *testing.T) {
 	t.Parallel()
 
-	for _, kind := range [...]SceneKind{Pattern, Specimen} {
+	for _, kind := range [...]SceneKind{Pattern} {
 		t.Run(kind.String(), func(t *testing.T) {
 			t.Parallel()
 
@@ -922,35 +926,9 @@ type markerDrawer struct {
 
 func (*markerDrawer) Draw(*canvas.Canvas, time.Duration) {}
 
-func TestSessionScene(t *testing.T) {
-	t.Parallel()
-
-	first := &markerDrawer{name: "first"}
-	second := &markerDrawer{name: "second"}
-	ses := &session{scenes: []Drawer{first, second}}
-
-	if got := ses.scene(); got != Drawer(first) {
-		t.Fatalf("scene() = %v, want the first scene", got)
-	}
-
-	ses.nextScene()
-
-	if got := ses.scene(); got != Drawer(second) {
-		t.Fatalf("after nextScene(), scene() = %v, want the second scene", got)
-	}
-
-	// The step wraps rather than running off the end, so holding s down
-	// cycles instead of panicking on the third press.
-	ses.nextScene()
-
-	if got := ses.scene(); got != Drawer(first) {
-		t.Errorf("after two nextScene() calls, scene() = %v, want the first scene again", got)
-	}
-}
-
 // themedMarker is a Drawer that also implements Themed, recording every
-// palette it is handed. It stands in for the radar and specimen scenes,
-// which is what lets cycleTheme's fan-out be tested without loading a font.
+// palette it is handed. It stands in for the radar scene, which is what lets
+// cycleTheme's fan-out be tested without loading a font.
 type themedMarker struct {
 	palettes []theme.Palette
 }

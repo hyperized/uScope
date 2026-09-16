@@ -8,7 +8,6 @@ import (
 	"github.com/hyperized/uScope/internal/pattern"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
-	"github.com/hyperized/uScope/internal/specimen"
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/shore"
@@ -17,9 +16,8 @@ import (
 // The --scene spellings, kept next to the Kind they parse into so the flag
 // help and the parser cannot drift apart.
 const (
-	sceneRadar    = "radar"
-	scenePattern  = "pattern"
-	sceneSpecimen = "specimen"
+	sceneRadar   = "radar"
+	scenePattern = "pattern"
 )
 
 // Scene selection errors.
@@ -38,22 +36,19 @@ var (
 // through to a default would draw something nobody asked for.
 type SceneKind uint8
 
-// The scenes, in the order the s key steps through them and in the order
-// buildScenes returns them.
+// The two scenes, in the order buildScenes returns them.
 const (
 	// Radar is the slice 4 scope: aircraft, trails, range rings and the
 	// selected-flight card. It is first because it is what uScope is for;
-	// the other two are diagnostics.
+	// Pattern is a diagnostic.
 	Radar SceneKind = iota
 
 	// Pattern is the slice 1 orientation pattern: corner squares, a
 	// triangle and a sweep. It is the one that answers "is the frame the
-	// right way up".
+	// right way up". It is a flags-only diagnostic: nothing in the run
+	// loop can reach it once uScope is running, so --scene pattern is the
+	// only way to see it.
 	Pattern
-
-	// Specimen is the slice 3 type specimen: the four faces and a mock of
-	// the radar's furniture.
-	Specimen
 )
 
 // ParseScene turns a --scene value into a SceneKind.
@@ -63,8 +58,6 @@ func ParseScene(text string) (SceneKind, error) {
 		return Radar, nil
 	case scenePattern:
 		return Pattern, nil
-	case sceneSpecimen:
-		return Specimen, nil
 	default:
 		return Radar, fmt.Errorf("%w: %q", ErrScene, text)
 	}
@@ -78,8 +71,6 @@ func (k SceneKind) String() string {
 		return sceneRadar
 	case Pattern:
 		return scenePattern
-	case Specimen:
-		return sceneSpecimen
 	default:
 		return "invalid"
 	}
@@ -114,20 +105,19 @@ func (r *runner) defaultScenes() ([]Drawer, error) {
 	})
 }
 
-// buildScenes loads the fonts and builds all three scenes, in SceneKind order.
+// buildScenes loads the fonts and builds both scenes, in SceneKind order.
 //
 // The fonts are loaded here, at startup, rather than when a scene first draws.
 // A font that will not parse is then a clear error before anything takes the
 // screen over, instead of an empty block ten frames into a run on a device
 // with no other diagnostics.
 //
-// All three are built even when --scene picks one of them, because v switches
-// between them while the loop is running and a set that was only half built
-// would fail at the moment someone pressed a key. A nil source or range gets
-// an empty stand-in for the same reason: the radar has to exist even when
-// nothing has been wired to it. A nil shore set is not a stand-in but the
-// ordinary answer for a caller that has no coastline data, and the scope draws
-// without one.
+// Both are built even when --scene picks one of them, because SceneKind
+// indexes into the slice this returns: leaving the other one out would break
+// selecting it. A nil source or range gets an empty stand-in for the same
+// reason: the radar has to exist even when nothing has been wired to it. A
+// nil shore set is not a stand-in but the ordinary answer for a caller that
+// has no coastline data, and the scope draws without one.
 func buildScenes(small, body, bodyBold, large fontLoader, deps sceneDeps) ([]Drawer, error) {
 	src := deps.source
 	if src == nil {
@@ -148,13 +138,12 @@ func buildScenes(small, body, bodyBold, large fontLoader, deps sceneDeps) ([]Dra
 		radar.New(radar.Faces(faces), src, scopeRange,
 			radar.WithBattery(deps.battery), radar.WithShore(deps.shoreSet)),
 		pattern.New(),
-		specimen.New(specimen.Faces(faces)),
 	}, nil
 }
 
-// faceSet is the four loaded faces. It is converted to each scene's own Faces
-// type rather than shared, so internal/radar and internal/specimen do not
-// have to import one another.
+// faceSet is the four loaded faces. It is converted to internal/radar's own
+// Faces type rather than shared, so the two packages do not have to import
+// one another.
 type faceSet struct {
 	Small    *psf.Font
 	Body     *psf.Font
