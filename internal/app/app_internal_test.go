@@ -221,6 +221,8 @@ func TestClassify(t *testing.T) {
 		},
 		{name: "lowercase l cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'l'}, want: cmdNextTheme},
 		{name: "uppercase L cycles the theme", key: input.Key{Kind: input.Rune, Rune: 'L'}, want: cmdNextTheme},
+		{name: "lowercase k cycles the look", key: input.Key{Kind: input.Rune, Rune: 'k'}, want: cmdNextLook},
+		{name: "uppercase K cycles the look", key: input.Key{Kind: input.Rune, Rune: 'K'}, want: cmdNextLook},
 		{name: "another rune is unbound", key: input.Key{Kind: input.Rune, Rune: 'x'}, want: cmdNone},
 		{name: "esc quits", key: input.Key{Kind: input.Esc}, want: cmdQuit},
 		{name: "ctrl-c quits", key: input.Key{Kind: input.CtrlC}, want: cmdQuit},
@@ -926,6 +928,11 @@ func TestBuildScenesSucceeds(t *testing.T) {
 	}
 }
 
+// plainSceneName is the name every markerDrawer test scene gets when the
+// point is that it does not implement Themed or Configured and so must be
+// left alone by a fan-out.
+const plainSceneName = "plain"
+
 // markerDrawer is a Drawer whose identity a test can check, which an empty
 // struct's would not be.
 type markerDrawer struct {
@@ -952,7 +959,7 @@ func TestSessionCycleTheme(t *testing.T) {
 	t.Parallel()
 
 	themed := &themedMarker{}
-	plain := &markerDrawer{name: "plain"}
+	plain := &markerDrawer{name: plainSceneName}
 
 	ses := &session{scenes: []Drawer{themed, plain}, themeKind: theme.KindNight}
 
@@ -977,6 +984,198 @@ func TestSessionCycleTheme(t *testing.T) {
 	}
 }
 
+// TestSessionCycleLook checks the k key's fan-out directly: every scene that
+// implements Themed gets the new palette, a plain Drawer is left alone, and
+// three cycles land back on glass. Missing a scene here means switching to it
+// after pressing k still shows the look it had before the cycle.
+func TestSessionCycleLook(t *testing.T) {
+	t.Parallel()
+
+	themed := &themedMarker{}
+	plain := &markerDrawer{name: plainSceneName}
+
+	ses := &session{scenes: []Drawer{themed, plain}, look: theme.LookGlass}
+
+	ses.cycleLook()
+
+	if ses.look != theme.LookPhosphor {
+		t.Errorf("look after one cycle = %v, want %v", ses.look, theme.LookPhosphor)
+	}
+
+	if len(themed.palettes) != 1 || themed.palettes[0] != theme.PhosphorNight {
+		t.Errorf("SetPalette calls = %v, want exactly one call with theme.PhosphorNight", themed.palettes)
+	}
+
+	ses.cycleLook()
+
+	if ses.look != theme.LookMono {
+		t.Errorf("look after two cycles = %v, want %v", ses.look, theme.LookMono)
+	}
+
+	if len(themed.palettes) != 2 || themed.palettes[1] != theme.MonoNight {
+		t.Errorf("SetPalette calls = %v, want a second call with theme.MonoNight", themed.palettes)
+	}
+
+	ses.cycleLook()
+
+	if ses.look != theme.LookGlass {
+		t.Errorf("look after three cycles = %v, want %v", ses.look, theme.LookGlass)
+	}
+
+	if len(themed.palettes) != 3 || themed.palettes[2] != theme.Night {
+		t.Errorf("SetPalette calls = %v, want a third call with theme.Night", themed.palettes)
+	}
+}
+
+// TestSessionCyclesLeaveTheOtherAxisAlone checks that k moves only the look
+// and l moves only the theme. If cycleLook touched themeKind, pressing k at
+// night would silently jump to a day page; if cycleTheme touched look,
+// pressing l would silently change which look is on screen instead of just
+// its time of day.
+func TestSessionCyclesLeaveTheOtherAxisAlone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("k does not move the theme", func(t *testing.T) {
+		t.Parallel()
+
+		themed := &themedMarker{}
+		ses := &session{scenes: []Drawer{themed}, themeKind: theme.KindNight, look: theme.LookGlass}
+
+		ses.cycleLook()
+
+		if ses.themeKind != theme.KindNight {
+			t.Errorf("themeKind after cycleLook = %v, want it left at %v", ses.themeKind, theme.KindNight)
+		}
+	})
+
+	t.Run("l does not move the look", func(t *testing.T) {
+		t.Parallel()
+
+		themed := &themedMarker{}
+		ses := &session{scenes: []Drawer{themed}, themeKind: theme.KindNight, look: theme.LookPhosphor}
+
+		ses.cycleTheme()
+
+		if ses.look != theme.LookPhosphor {
+			t.Errorf("look after cycleTheme = %v, want it left at %v", ses.look, theme.LookPhosphor)
+		}
+
+		if len(themed.palettes) != 1 || themed.palettes[0] != theme.PhosphorDay {
+			t.Errorf("SetPalette calls = %v, want exactly one call with theme.PhosphorDay", themed.palettes)
+		}
+	})
+}
+
+// dispatchFixture builds a session with one Themed scene, so a dispatch test
+// can check the cases that mutate the session (cmdNextTheme, cmdNextLook)
+// alongside the ones that only affect control flow (cmdQuit, cmdNone). It
+// returns a fresh session on every call so parallel subtests do not share one.
+func dispatchFixture() (*session, *themedMarker) {
+	themed := &themedMarker{}
+
+	return &session{scenes: []Drawer{themed}, themeKind: theme.KindNight, look: theme.LookGlass}, themed
+}
+
+// dispatchCase is one TestDispatch table row. wantPalette is only meaningful
+// when wantRepaint is true; cmdQuit and cmdNone never repaint.
+type dispatchCase struct {
+	name          string
+	action        command
+	wantStop      bool
+	wantThemeKind theme.Kind
+	wantLook      theme.Look
+	wantRepaint   bool
+	wantPalette   theme.Palette
+}
+
+// dispatchCases covers every branch dispatch's switch has: the one that ends
+// the loop, the two that each drive one cycle and leave the other axis alone,
+// and the one that does nothing at all.
+func dispatchCases() []dispatchCase {
+	return []dispatchCase{
+		{
+			name:          "cmdQuit stops the loop without repainting",
+			action:        cmdQuit,
+			wantStop:      true,
+			wantThemeKind: theme.KindNight,
+			wantLook:      theme.LookGlass,
+		},
+		{
+			name:          "cmdNextTheme cycles the theme, leaves the look alone, and keeps running",
+			action:        cmdNextTheme,
+			wantThemeKind: theme.KindDay,
+			wantLook:      theme.LookGlass,
+			wantRepaint:   true,
+			wantPalette:   theme.Day,
+		},
+		{
+			name:          "cmdNextLook cycles the look, leaves the theme alone, and keeps running",
+			action:        cmdNextLook,
+			wantThemeKind: theme.KindNight,
+			wantLook:      theme.LookPhosphor,
+			wantRepaint:   true,
+			wantPalette:   theme.PhosphorNight,
+		},
+		{
+			name:          "cmdNone leaves the session untouched and keeps running",
+			action:        cmdNone,
+			wantThemeKind: theme.KindNight,
+			wantLook:      theme.LookGlass,
+		},
+	}
+}
+
+// checkDispatchRepaint asserts one dispatchCase's expectation about whether
+// the session repainted: no SetPalette call at all, or exactly one carrying
+// the palette the case names.
+func checkDispatchRepaint(t *testing.T, themed *themedMarker, testCase dispatchCase) {
+	t.Helper()
+
+	if !testCase.wantRepaint {
+		if len(themed.palettes) != 0 {
+			t.Errorf("SetPalette calls = %v, want none", themed.palettes)
+		}
+
+		return
+	}
+
+	if len(themed.palettes) != 1 || themed.palettes[0] != testCase.wantPalette {
+		t.Errorf("SetPalette calls = %v, want exactly one call with %v", themed.palettes, testCase.wantPalette)
+	}
+}
+
+// TestDispatch checks the switch that turns a classified command into a
+// session action: cmdQuit stops the loop without touching the session,
+// cmdNextTheme and cmdNextLook each drive their own cycle and keep the loop
+// running, and cmdNone touches nothing. Swapping two cases here would make q
+// merely change colour instead of quitting, or make l or k silently end the
+// program.
+func TestDispatch(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range dispatchCases() {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			ses, themed := dispatchFixture()
+
+			if stop := dispatch(ses, testCase.action); stop != testCase.wantStop {
+				t.Errorf("dispatch(%d) = %v, want %v", testCase.action, stop, testCase.wantStop)
+			}
+
+			if ses.themeKind != testCase.wantThemeKind {
+				t.Errorf("themeKind = %v, want %v", ses.themeKind, testCase.wantThemeKind)
+			}
+
+			if ses.look != testCase.wantLook {
+				t.Errorf("look = %v, want %v", ses.look, testCase.wantLook)
+			}
+
+			checkDispatchRepaint(t, themed, testCase)
+		})
+	}
+}
+
 // configuredMarker is a Drawer that also implements Configured, recording
 // every settings block it is handed. It stands in for the radar scene, the
 // only one with settings of its own, which is what lets applySettings' fan-
@@ -997,7 +1196,7 @@ func TestApplySettings(t *testing.T) {
 	t.Parallel()
 
 	configured := &configuredMarker{}
-	plain := &markerDrawer{name: "plain"}
+	plain := &markerDrawer{name: plainSceneName}
 
 	want := radar.Settings{Colour: radar.ColourAirline, Airports: radar.ToggleOff}
 

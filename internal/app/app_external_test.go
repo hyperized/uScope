@@ -1604,6 +1604,95 @@ func TestRunLiveSwitchesTheme(t *testing.T) {
 	}
 }
 
+// TestRunLiveSwitchesLook checks the k key's effect on a running loop and
+// that renderBackend actually seeded ses.look from cfg.Look: starting on mono
+// and pressing k must land on glass, mono's neighbour going forward in the
+// cycle, not on phosphor, which is where the zero value would have started.
+func TestRunLiveSwitchesLook(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+
+	calls := make(chan string, 4)
+	palettes := make(chan theme.Palette, 4)
+	blitter := newFakeBlitter(16, 16, 16, 32, "fake")
+	ticker := newFakeTicker()
+
+	cfg := liveConfig(30)
+	cfg.Look = theme.LookMono
+
+	done := runAsync(ctx, cfg, io.Discard,
+		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
+		app.WithScenes(
+			newThemedNamedDrawer("first", calls, palettes),
+			newThemedNamedDrawer("second", calls, palettes),
+		),
+		app.WithConsoleSwitch((&switchSpy{}).switchMode),
+		app.WithRawMode((&switchSpy{}).switchMode),
+		app.WithInput(&onceReader{data: []byte("k")}),
+		app.WithTicker(ticker.new),
+	)
+
+	for range 2 {
+		if got := recvOrTimeout(t, palettes, testTimeout, "the starting palette"); got != theme.MonoNight {
+			t.Errorf("starting palette = %v, want %v", got, theme.MonoNight)
+		}
+	}
+
+	for range 2 {
+		if got := recvOrTimeout(t, palettes, testTimeout, "the palette after k"); got != theme.Night {
+			t.Errorf("palette after k = %v, want %v", got, theme.Night)
+		}
+	}
+
+	cancel()
+
+	if err := recvOrTimeout(t, done, testTimeout, "Run to return"); err != nil {
+		t.Errorf("Run: %v, want nil", err)
+	}
+}
+
+// TestRunAppliesTheLookAndTheme checks that Run resolves Config's Look and
+// Theme into one palette before the first frame, the same wiring
+// TestRunAppliesTheConfiguredSettings pins for Config.Radar. Miss this and a
+// run started with --look mono --theme day would draw glass night instead.
+func TestRunAppliesTheLookAndTheme(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		cfg  app.Config
+		want theme.Palette
+	}{
+		{name: "mono day", cfg: app.Config{Look: theme.LookMono, Theme: theme.KindDay}, want: theme.MonoDay},
+		{name: "zero value config starts on glass night", cfg: app.Config{}, want: theme.Night},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			calls := make(chan string, 1)
+			palettes := make(chan theme.Palette, 1)
+
+			cfg := testCase.cfg
+			cfg.PNG = filepath.Join(t.TempDir(), "out.png")
+			cfg.Size = image.Pt(16, 16)
+
+			err := app.Run(t.Context(), cfg, io.Discard,
+				app.WithScenes(newThemedNamedDrawer("radar", calls, palettes)))
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			if got := recvOrTimeout(t, palettes, testTimeout, "the starting palette"); got != testCase.want {
+				t.Errorf("starting palette = %v, want %v", got, testCase.want)
+			}
+
+			recvOrTimeout(t, calls, testTimeout, "a Draw call")
+		})
+	}
+}
+
 // configuredNamedDrawer is a namedDrawer that also implements app.Configured,
 // reporting every settings block it is handed on its own channel. It stands
 // in for the radar scene, the only one with settings of its own, the same

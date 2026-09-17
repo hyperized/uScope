@@ -1723,31 +1723,48 @@ func TestFitRunes(t *testing.T) {
 
 // TestBatteryInk checks the fill colour the battery glyph takes: critical,
 // low and healthy.
+//
+// It runs the three levels over two real palettes rather than over a synthetic
+// one, because the glyph sits on the header band and the colour goes through
+// Palette.OnBand on the way there. On glass night all three read against the
+// band and come back untouched. On mono day the band is filled with the same
+// ink the data is set in, so a healthy battery and a low one both come back as
+// the band's ink instead: a percentage nobody can see would be worse than one
+// drawn in the wrong colour, and mono has no colour to spare for it anyway.
 func TestBatteryInk(t *testing.T) {
 	t.Parallel()
 
-	pal := theme.Palette{
-		Warn:    color.RGBA{R: 1, A: opaque},
-		Caution: color.RGBA{R: 2, A: opaque},
-		Data:    color.RGBA{R: 3, A: opaque},
-	}
-
 	for _, testCase := range []struct {
 		name    string
+		pal     theme.Palette
 		percent int
 		want    color.RGBA
 	}{
-		{name: caseZero, percent: 0, want: pal.Warn},
-		{name: "ten percent is still critical", percent: 10, want: pal.Warn},
-		{name: "eleven percent moves to low", percent: 11, want: pal.Caution},
-		{name: "twenty percent is still low", percent: 20, want: pal.Caution},
-		{name: "twenty-one percent is a healthy charge", percent: 21, want: pal.Data},
-		{name: "a hundred percent is a healthy charge", percent: 100, want: pal.Data},
+		{name: caseZero, pal: theme.Night, percent: 0, want: theme.Night.Warn},
+		{name: "ten percent is still critical", pal: theme.Night, percent: 10, want: theme.Night.Warn},
+		{name: "eleven percent moves to low", pal: theme.Night, percent: 11, want: theme.Night.Caution},
+		{name: "twenty percent is still low", pal: theme.Night, percent: 20, want: theme.Night.Caution},
+		{name: "twenty-one percent is a healthy charge", pal: theme.Night, percent: 21, want: theme.Night.Data},
+		{name: "a hundred percent is a healthy charge", pal: theme.Night, percent: 100, want: theme.Night.Data},
+		{
+			// Mono day's warning red is the one of the three that still reads
+			// against its band, so it is the one that survives the trip.
+			name: "mono day keeps the warning red on a critical battery",
+			pal:  theme.MonoDay, percent: 0, want: theme.MonoDay.Warn,
+		},
+		{
+			name: "mono day lifts a low battery onto the band's ink",
+			pal:  theme.MonoDay, percent: 11, want: theme.MonoDay.BandInk,
+		},
+		{
+			name: "mono day lifts a healthy battery onto the band's ink",
+			pal:  theme.MonoDay, percent: 100, want: theme.MonoDay.BandInk,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			scene := &Scene{pal: pal}
+			scene := &Scene{pal: testCase.pal}
 			if got := scene.batteryInk(testCase.percent); got != testCase.want {
 				t.Errorf("batteryInk(%d) = %v, want %v", testCase.percent, got, testCase.want)
 			}
@@ -3396,6 +3413,14 @@ func TestCapEngaged(t *testing.T) {
 		{name: "quit has no setting behind it", scene: Scene{}, toggle: capAlways, want: false},
 		{name: "the colour cap carries a value, not a state", scene: Scene{colour: ColourAirline}, toggle: capColour},
 		{name: "the theme cap carries a value, not a state", scene: Scene{light: true}, toggle: capTheme},
+		{
+			// The K cap always names the look it is drawn in, the same way C
+			// names the colour mode and L the theme. A bar under it would be
+			// claiming an off position the key does not have.
+			name:   "the look cap carries a value, not a state",
+			scene:  Scene{look: theme.LookPhosphor},
+			toggle: capLook,
+		},
 		{name: "the trail cap carries a value, not a state", scene: Scene{trail: trailAll}, toggle: capTrails},
 		{
 			name:   "the filter cap carries a value, not a state",
@@ -3519,10 +3544,10 @@ func TestDrawCopiesBiasTeeFromFrame(t *testing.T) {
 func TestCapLabel(t *testing.T) {
 	t.Parallel()
 
-	// The four cycling entries, taken from the bar itself rather than written
+	// The five cycling entries, taken from the bar itself rather than written
 	// out again, so a rename of any of their labels cannot leave this table
 	// testing a cap that is no longer on screen.
-	trailCap, colourCap, filterCap, themeCap := keyCaps[4], keyCaps[7], keyCaps[8], keyCaps[9]
+	trailCap, colourCap, filterCap, themeCap, lookCap := keyCaps[4], keyCaps[7], keyCaps[8], keyCaps[9], keyCaps[10]
 
 	for _, testCase := range []struct {
 		name  string
@@ -3530,50 +3555,31 @@ func TestCapLabel(t *testing.T) {
 		entry keyCap
 		want  string
 	}{
+		{name: "altitude mode", scene: Scene{colour: ColourAltitude}, entry: colourCap, want: labelAltitude},
+		{name: "airline mode", scene: Scene{colour: ColourAirline}, entry: colourCap, want: labelAirline},
 		{
-			name: "altitude mode", scene: Scene{colour: ColourAltitude},
-			entry: colourCap, want: labelAltitude,
+			name:  "the zero colour mode reads as altitude",
+			scene: Scene{}, entry: colourCap, want: labelAltitude,
 		},
+		{name: caseNight, scene: Scene{}, entry: themeCap, want: labelNight},
+		{name: caseDay, scene: Scene{light: true}, entry: themeCap, want: labelDay},
+		{name: "the glass look", scene: Scene{look: theme.LookGlass}, entry: lookCap, want: labelGlass},
+		{name: "the phosphor look", scene: Scene{look: theme.LookPhosphor}, entry: lookCap, want: labelPhosphor},
+		{name: "the mono look", scene: Scene{look: theme.LookMono}, entry: lookCap, want: labelMono},
+		{name: "the zero look reads as glass", scene: Scene{}, entry: lookCap, want: labelGlass},
 		{
-			name: "airline mode", scene: Scene{colour: ColourAirline},
-			entry: colourCap, want: labelAirline,
+			name:  "an unrecognised look reads as glass",
+			scene: Scene{look: theme.Look("sepia")}, entry: lookCap, want: labelGlass,
 		},
+		{name: "the long trail mode", scene: Scene{trail: trailLong}, entry: trailCap, want: labelTrailLong},
+		{name: "the short trail mode", scene: Scene{trail: trailShort}, entry: trailCap, want: labelTrailShort},
+		{name: "the all trail mode", scene: Scene{trail: trailAll}, entry: trailCap, want: labelTrailAll},
+		{name: "the off trail mode", scene: Scene{trail: trailOff}, entry: trailCap, want: labelTrailOff},
 		{
-			name: "the zero colour mode reads as altitude", scene: Scene{},
-			entry: colourCap, want: labelAltitude,
+			name:  "the zero trail mode reads as long",
+			scene: Scene{}, entry: trailCap, want: labelTrailLong,
 		},
-		{
-			name: caseNight, scene: Scene{},
-			entry: themeCap, want: labelNight,
-		},
-		{
-			name: caseDay, scene: Scene{light: true},
-			entry: themeCap, want: labelDay,
-		},
-		{
-			name: "the long trail mode", scene: Scene{trail: trailLong},
-			entry: trailCap, want: labelTrailLong,
-		},
-		{
-			name: "the short trail mode", scene: Scene{trail: trailShort},
-			entry: trailCap, want: labelTrailShort,
-		},
-		{
-			name: "the all trail mode", scene: Scene{trail: trailAll},
-			entry: trailCap, want: labelTrailAll,
-		},
-		{
-			name: "the off trail mode", scene: Scene{trail: trailOff},
-			entry: trailCap, want: labelTrailOff,
-		},
-		{
-			name: "the zero trail mode reads as long", scene: Scene{},
-			entry: trailCap, want: labelTrailLong,
-		},
-		{
-			name: "the filter on everything", scene: Scene{},
-			entry: filterCap, want: labelFilterAll,
-		},
+		{name: "the filter on everything", scene: Scene{}, entry: filterCap, want: labelFilterAll},
 		{
 			name:  "the filter on a band",
 			scene: Scene{filter: filterState{kind: filterBand, band: bandMid}},
@@ -3600,7 +3606,7 @@ func TestCapLabel(t *testing.T) {
 		{
 			name:  "the wide cap keeps its own label whichever way it is set",
 			scene: Scene{wide: true},
-			entry: keyCaps[11], want: "WIDE",
+			entry: keyCaps[12], want: "WIDE",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -3611,6 +3617,136 @@ func TestCapLabel(t *testing.T) {
 				t.Errorf("capLabel(%+v) = %q, want %q", testCase.entry, got, testCase.want)
 			}
 		})
+	}
+}
+
+// TestSetPaletteKeepsPalLightAndLookInStep checks that pal, light and look
+// move together: SetPalette takes light and look off the palette it is
+// handed rather than being told either on its own, so the three can never
+// disagree about which colours and which look are on screen.
+//
+// A scene told its look by one path and its colours by another would sooner
+// or later draw one look's colours under the other one's cap. One setter is
+// what rules that out.
+func TestSetPaletteKeepsPalLightAndLookInStep(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		pal       theme.Palette
+		wantLook  theme.Look
+		wantLight bool
+	}{
+		{name: "glass night", pal: theme.Night, wantLook: theme.LookGlass, wantLight: false},
+		{name: "glass day", pal: theme.Day, wantLook: theme.LookGlass, wantLight: true},
+		{name: "phosphor night", pal: theme.PhosphorNight, wantLook: theme.LookPhosphor, wantLight: false},
+		{name: "phosphor day", pal: theme.PhosphorDay, wantLook: theme.LookPhosphor, wantLight: true},
+		{name: "mono night", pal: theme.MonoNight, wantLook: theme.LookMono, wantLight: false},
+		{name: "mono day", pal: theme.MonoDay, wantLook: theme.LookMono, wantLight: true},
+		{
+			// A palette nobody named reads as the zero value, not as glass:
+			// that reading only happens where a Look is asked what it is
+			// called, which is lookLabel's job and not SetPalette's.
+			name:      "a hand-built palette carries the zero look, not a name it was never given",
+			pal:       theme.Palette{},
+			wantLook:  theme.Look(""),
+			wantLight: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			scene.SetPalette(testCase.pal)
+
+			if scene.pal != testCase.pal {
+				t.Errorf("pal = %+v, want %+v", scene.pal, testCase.pal)
+			}
+
+			if scene.look != testCase.wantLook {
+				t.Errorf("look = %q, want %q", scene.look, testCase.wantLook)
+			}
+
+			if scene.light != testCase.wantLight {
+				t.Errorf("light = %v, want %v", scene.light, testCase.wantLight)
+			}
+		})
+	}
+}
+
+// TestNewStartsOnGlassNightWithoutAPalette checks that a scene built with no
+// WithPalette option still comes up with its look and light flag set: New
+// calls SetPalette(theme.Night) itself rather than assigning pal in its
+// struct literal, so the three fields agree from the first frame even when
+// nobody has picked a palette.
+//
+// A literal that assigned pal on its own would leave look and light on their
+// zero values, and the K cap would open on a scene that had never been told
+// which look it was drawn in.
+func TestNewStartsOnGlassNightWithoutAPalette(t *testing.T) {
+	t.Parallel()
+
+	scene := New(layerTestFaces(t), &stubSource{}, scope.New(scope.WithCurrent(layerRangeNm)))
+
+	if scene.pal != theme.Night {
+		t.Errorf("pal = %+v, want theme.Night", scene.pal)
+	}
+
+	if scene.light {
+		t.Error("light = true on a fresh scene, want false: glass night is not a light field")
+	}
+
+	if scene.look != theme.LookGlass {
+		t.Errorf("look = %q, want %q", scene.look, theme.LookGlass)
+	}
+}
+
+// TestDrawCapsFitsAtItsWidestState measures the bar the way the scene itself
+// draws it, at the widest state it ever reaches: the 3D view, a dongle with a
+// bias-tee, airline colour, the short trail, the mid-band filter and the
+// phosphor look, the longest of the three look words.
+//
+// drawCaps stops after the cap that reaches the right margin rather than
+// wrapping or eliding one, so a bar that had grown past its budget would lose
+// its last control silently instead of complaining. This is what would have
+// caught the K cap doing that: it checks both that the bar stops short of the
+// margin and that it still reaches the last control, because a bar that
+// dropped a cap would also "fit".
+func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
+	t.Parallel()
+
+	// widestBarLastCapEnd is where the tilt cap, the last one in the bar,
+	// ends at exactly this state. It is named so a change to any cap's word
+	// shows up here rather than as a number nobody can place.
+	const widestBarLastCapEnd = 1195
+
+	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	scene := &Scene{
+		faces:         layerTestFaces(t),
+		shown:         View3D,
+		biasSupported: true,
+		colour:        ColourAirline,
+		trail:         trailShort,
+		filter:        filterState{kind: filterBand, band: bandMid},
+	}
+	scene.SetPalette(theme.PhosphorNight)
+
+	lay := layout{dst: canv, right: layerCanvasWidth - baseMargin}
+
+	pen := scene.drawCaps(&lay, baseMargin, 0, keyCaps[:])
+	pen = scene.drawCaps(&lay, pen, 0, biasCap[:])
+	pen = scene.drawCaps(&lay, pen, 0, view3DCaps[:])
+
+	if pen >= lay.right {
+		t.Errorf("the widest bar reached x=%d, want it to stop before the %d margin", pen, lay.right)
+	}
+
+	if pen < widestBarLastCapEnd {
+		t.Errorf("the widest bar ended at x=%d, before the last cap at %d", pen, widestBarLastCapEnd)
 	}
 }
 

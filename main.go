@@ -170,6 +170,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Backend:     cfg.backend,
 		Scene:       cfg.scene,
 		Theme:       cfg.theme,
+		Look:        cfg.look,
 		Radar: radar.Settings{
 			Colour:     cfg.colour,
 			Airports:   cfg.airports,

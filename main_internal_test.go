@@ -67,6 +67,7 @@ const (
 	flagPNG        = "--png"
 	flagScene      = "--scene"
 	flagTheme      = "--theme"
+	flagLook       = "--look"
 	flagDemo       = "--demo"
 	flagBeast      = "--beast"
 	flagReplay     = "--replay-iq"
@@ -93,10 +94,13 @@ const (
 	patternValue  = "pattern"
 	specimenValue = "specimen"
 
-	// dayValue is the one non-default --theme spelling, airlineValue the
+	// dayValue is the one non-default --theme spelling. phosphorValue and
+	// monoValue are --look's two non-default spellings. airlineValue is the
 	// one non-default --colour spelling, offValue the one non-default
 	// --airports spelling.
 	dayValue      = "day"
+	phosphorValue = "phosphor"
+	monoValue     = "mono"
 	airlineValue  = "airline"
 	offValue      = "off"
 	demoValue     = "demo"
@@ -163,6 +167,7 @@ func defaultConfig() config {
 		fps:        defaultFPS,
 		size:       image.Pt(widthLandscape, heightLandscape),
 		theme:      theme.KindNight,
+		look:       theme.LookGlass,
 		colour:     radar.ColourAltitude,
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
@@ -857,6 +862,7 @@ func TestBind(t *testing.T) {
 		{name: "backend", flagName: "backend", wantDef: defaultBackend},
 		{name: "frames", flagName: "frames", wantDef: strconv.Itoa(minFrames)},
 		{name: "theme", flagName: "theme", wantDef: defaultTheme},
+		{name: "look", flagName: "look", wantDef: defaultLook},
 		{name: "gpsd", flagName: "gpsd", wantDef: defaultGPSD(runtime.GOOS)},
 	}
 
@@ -1189,6 +1195,91 @@ func TestThemeReachesConfig(t *testing.T) {
 
 	if cfg.theme != theme.KindDay {
 		t.Errorf("config.theme = %v, want %v", cfg.theme, theme.KindDay)
+	}
+}
+
+// TestParseFlagsLook checks every spelling --look accepts lands in
+// config.look, the same way TestParseFlagsTheme pins the other half of the
+// pair. A miswired case here means an operator's --look flag is silently
+// ignored and the run starts on the wrong one of the six palettes.
+func TestParseFlagsLook(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want theme.Look
+	}{
+		{name: caseDefault, args: nil, want: theme.LookGlass},
+		{name: "glass explicit", args: []string{flagLook, defaultLook}, want: theme.LookGlass},
+		{name: phosphorValue, args: []string{flagLook, phosphorValue}, want: theme.LookPhosphor},
+		{name: monoValue, args: []string{flagLook, monoValue}, want: theme.LookMono},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.look = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsLookRejections checks that anything outside the three
+// spellings is refused with errLook wrapping theme.ErrUnknownLook, so a
+// caller can match on either sentinel. Losing this would let a typo in
+// --look start the program on the wrong look instead of stopping it.
+func TestParseFlagsLookRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown look", args: []string{flagLook, "sepia"}},
+		{name: "empty look", args: []string{flagLook, ""}},
+		{
+			// --look is an allow list, not free text: the exact spelling is
+			// what is accepted, not a case-insensitive match of it.
+			name: caseWrongCase, args: []string{flagLook, "Glass"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errLook) {
+				t.Fatalf("parseFlags(%v) error = %v, want errLook", testCase.args, err)
+			}
+
+			// The wrapped cause travels with it, so a reader sees both the
+			// flag that was wrong and the value that was rejected.
+			if !errors.Is(err, theme.ErrUnknownLook) {
+				t.Errorf("parseFlags(%v) error = %v, want theme.ErrUnknownLook wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestLookReachesConfig pins that --look actually arrives in the app.Config
+// main hands to app.Run, which is the one line of wiring no other test in
+// this file covers.
+func TestLookReachesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagLook, phosphorValue})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if cfg.look != theme.LookPhosphor {
+		t.Errorf("config.look = %v, want %v", cfg.look, theme.LookPhosphor)
 	}
 }
 

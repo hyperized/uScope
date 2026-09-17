@@ -602,9 +602,13 @@ func (s *Scene) drawHome(lay *layout, geom scopeGeometry, mode source.FixMode) {
 // the same magenta as the aeroplane the operator had picked out.
 //
 // The reading colour is passed in rather than taken from the palette, because
-// the header band has its own. The palette's Ink is near-black on the day theme
-// and the band is near-black on both, so an Ink word on that band would be a
-// word nobody can read.
+// the header band has its own. The palette's Ink is near-black on a day palette
+// and the band is near-black on most of them, so an Ink word on that band would
+// be a word nobody can read. The caution and OK greens this returns have the
+// same problem on one palette, and the header's own caller answers it by
+// running the result through Palette.OnBand; that is not done here, because
+// the scope and the 3D view call this to colour the home marker on the field,
+// where the band's ink is the wrong answer.
 func (s *Scene) fixColour(mode source.FixMode, ink color.RGBA) color.RGBA {
 	switch mode {
 	case source.FixManual:

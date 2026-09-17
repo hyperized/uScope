@@ -602,14 +602,14 @@ func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	orbitCapBox    = image.Rect(725, 682, 780, 704)
-	envelopeCapBox = image.Rect(785, 682, 861, 704)
-	turnCapBox     = image.Rect(866, 682, 922, 704)
-	tiltCapBox     = image.Rect(927, 682, 991, 704)
+	orbitCapBox    = image.Rect(785, 682, 840, 704)
+	envelopeCapBox = image.Rect(845, 682, 921, 704)
+	turnCapBox     = image.Rect(926, 682, 982, 704)
+	tiltCapBox     = image.Rect(987, 682, 1051, 704)
 
-	// scopeBarTail is the part of the bar row the twelve shared caps never
+	// scopeBarTail is the part of the bar row the thirteen shared caps never
 	// reach, which is where all four of the boxes above sit.
-	scopeBarTail = image.Rect(725, 682, 1280, 704)
+	scopeBarTail = image.Rect(785, 682, 1280, 704)
 
 	// orbitEngagedBar is the strip along the inside of orbitCapBox's bottom
 	// edge the engaged bar is drawn in, worked out the way autoEngagedBar in

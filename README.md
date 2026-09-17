@@ -67,7 +67,7 @@ off` starts without them.
 None of that is redrawn every frame. It goes onto a background layer of its
 own and gets copied under each frame, and the layer is rebuilt only when
 something it depends on moves: the canvas size, the range, the receiver's
-position, the theme, or one of the two overlay toggles. Drawing a few thousand
+position, the palette, or one of the two overlay toggles. Drawing a few thousand
 coastline segments thirty times a second would otherwise be the most expensive
 thing in the frame, and none of it changes between two frames that agree on
 all of that.
@@ -253,9 +253,9 @@ against anything else.
 ### Shore
 
 The coastlines and lake shores are drawn under everything else, in the
-quietest colour either theme has, so the surroundings are recognisable without
-turning the scope into a map with aircraft on it. `m` turns them off and
-`--shore off` starts without them.
+quietest colour any of the six palettes has, so the surroundings are
+recognisable without turning the scope into a map with aircraft on it. `m`
+turns them off and `--shore off` starts without them.
 
 The data is compiled into the binary, about 2 MB of it, covering the whole
 world. uScope runs on a handheld with no network and is used outside the
@@ -800,24 +800,46 @@ running. It is never reached from a running radar; there is no key that
 switches to it, and none of the radar's own keys do anything there either.
 `--scene pattern` is the only way to see it.
 
-## Themes
+## Looks and themes
 
-uScope has two colour themes, night and day, and both are drawn from a glass
-cockpit's own colour grammar rather than from decoration: magenta is the one
-thing that is selected, cyan is a reading about the machine, green is valid or
-engaged, amber is a caution, red is kept for a genuine warning, and every
-control sits in a grey softkey box. Anyone who has flown behind a Garmin panel
-already knows the vocabulary; uScope maps onto it rather than inventing one of
-its own.
+uScope draws in one of three looks, and each look has a night and a day theme,
+so six palettes in all. The layout does not move with them. The flight strips,
+the data block, the tag hanging off the selected aircraft and the row of
+softkeys are the same picture whichever palette is on, and only the colours
+change. `k` cycles the look and `l` cycles night and day, both on whichever
+scene is on screen, and `--look` and `--theme` pick the pair to start on. The
+key bar says which of each is on rather than naming the setting, so the two
+caps read `K PHOSPHOR` and `L NIGHT` rather than `LOOK` and `THEME`.
 
-Night is the default: a true black field, white ink, and it costs the least on
-a backlit handheld used in the dark, where a light field would be a torch in
-the face. Day is the same grammar on a cool light grey, which is the page a
-glass panel puts up for its daytime view, with every hue pulled down far
-enough to still mean the same thing against the lighter field: the magenta
-deepens, the cyan becomes a teal, and the greens and reds darken rather than
-change. `l` cycles between them at run time, on whichever scene is on screen,
-and `--theme night` or `--theme day` picks the one to start on.
+Glass is the default, and the only one of the three with a vocabulary behind
+it. It is a glass cockpit's colour grammar rather than decoration: magenta is
+the one thing that is selected, cyan is a reading about the machine, green is
+valid or engaged, amber is a caution, red is kept for a genuine warning, and
+every control sits in a grey softkey box. Anyone who has flown
+behind a Garmin panel already knows all of it. Night is a true black field with
+white ink. Day is the same grammar on a cool light grey, which is the page a
+glass panel puts up for its daytime view, with every hue pulled down far enough
+to still mean the same thing against the lighter field: the magenta deepens,
+the cyan becomes a teal, and the greens and reds darken rather than change.
+
+Phosphor commits to the CRT. Field, ink and rules are one green and the
+selection is bright phosphor instead of magenta. Because green is the ground
+here rather than a reading, the altitude bands have to move off it: low goes
+cyan, the middle band is the pale phosphor itself, and high is an orange burn.
+Day is the same world as pale green chart paper under a dark green band. It is
+the look nobody mistakes for anything else, and it is also the one that costs
+airline mode the most, since brand colours land on a field that was not picked
+with them in mind.
+
+Mono has no accent hue at all. Selection is made with contrast instead, which
+is the strongest mark a pixel display has and the one thing that survives any
+palette. The only colour left on screen is the three altitude bands and, in
+airline mode, the operators. Red stays on the warning: an emergency is a
+meaning rather than an accent, and it is the one word on the board that has to
+be read from across a room.
+
+Night is the default inside every look. A light field on a backlit handheld is
+a torch in the face in the dark and costs battery all day.
 
 ## Fonts
 
@@ -984,7 +1006,8 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `m`, `M` | coastline on or off; minimal keeps its own |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `f`, `F` | cycle the filter to one entry of the current legend, then back to all |
-| `l`, `L` | cycle the colour theme |
+| `l`, `L` | cycle the colour theme: night or day |
+| `k`, `K` | cycle the look: glass, phosphor or mono |
 | `w`, `W` | hide the right column and give the picture the whole width |
 | `b`, `B` | bias-tee on or off; only bound when the source has one |
 | `e`, `E` | full 3D view only: the receiving envelope on or off |
@@ -1048,7 +1071,8 @@ before the outer ring's range while auto range is on.
 |---|---|---|
 | `--backend` | `auto` | `auto`, `fb`, `kitty`, `blocks` or `png` |
 | `--scene` | `radar` | `radar` or `pattern`; `pattern` is a flags-only diagnostic with no key back to it |
-| `--theme` | `night` | `night` or `day` colour theme |
+| `--theme` | `night` | `night` or `day` colour theme; `l` cycles them while it runs |
+| `--look` | `glass` | which palette to wear: `glass`, `phosphor` or `mono`; `k` cycles them while it runs |
 | `--view` | `scope` | which view the radar starts on: `scope`, `3d`, `minimal` or `minimal3d`; `v` cycles them while it runs |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
@@ -1207,7 +1231,9 @@ next to a version that fades by altitude.
 Two more went with it. The day theme is built (`--theme day`, `l` at run time)
 and airline colouring is built (`--colour airline`, `c` at run time), and
 neither has been judged against its alternative by anyone who was holding the
-device at the time.
+device at the time. Phosphor and Mono join that list: both are built and both
+have only been seen on a monitor, which is not where a palette for a handheld
+gets decided.
 
 The 3D view has been looked at on a monitor and on a live feed, and not on the
 panel. Its two open questions are whether an exaggeration of 8 still reads at a

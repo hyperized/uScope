@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
@@ -116,6 +117,7 @@ const (
 	capColour
 	capFilter
 	capTheme
+	capLook
 	capOrbit
 	capEnvelope
 	capBiasTee
@@ -124,20 +126,29 @@ const (
 
 // The cycling keys are labelled with the value they are on rather than with
 // the name of the setting. A cap reading COLOUR says there is a colour mode
-// without saying which one, which is the question it was being asked. The
-// trail cap is the third of them and gets its four words from trailMode.label,
-// and the filter cap the fourth, from filterState.label.
+// without saying which one, which is the question it was being asked. Five
+// caps work this way. Three of them read their word out of the list below:
+// colour, theme and look. The trail cap gets its four words from
+// trailMode.label and the filter cap its own from filterState.label.
 const (
 	labelAltitude = "ALT"
 	labelAirline  = "AIRLINE"
 	labelNight    = "NIGHT"
 	labelDay      = "DAY"
+	labelGlass    = "GLASS"
+	labelPhosphor = "PHOSPHOR"
+	labelMono     = "MONO"
 
 	// trailBarLabel is what the trail cap falls back to. It is never drawn:
 	// capLabel answers capTrails from the mode itself, and every mode has a
 	// word. It is here so the entry in keyCaps is not the one row of the
 	// table with an empty label in it.
 	trailBarLabel = "TRAILS"
+
+	// lookBarLabel is the same fallback for the look cap, never drawn for the
+	// same reason: capLabel answers capLook from the look itself, and all
+	// three looks have a word.
+	lookBarLabel = "LOOK"
 )
 
 // keyCap is one entry in the bottom bar: the cap, then what the key does, then
@@ -150,16 +161,21 @@ type keyCap struct {
 
 // keyCaps is the key legend, in the order the keys are worth reaching for:
 // leaving, then moving through the list, then the five things that change what
-// is on the field, then the two that change how it looks.
+// is on the field, then the three that change how it looks.
 //
-// Twelve softkeys come to 728 pixels of the 1248 the panel leaves between its
-// margins, with every cycling key on its longest word, so nothing here has to
-// be shortened to fit. See drawSoftkey for how one box is measured and
-// view3DCaps for the widest the bar ever gets.
+// Thirteen softkeys come to 841 pixels of the 1248 the panel leaves between
+// its margins, measured with every cycling key on its longest word: AIRLINE,
+// SHORT, 10-25K and PHOSPHOR. Nothing here has to be shortened to fit. See
+// drawSoftkey for how one box is measured and view3DCaps for the widest the
+// bar ever gets.
 //
 // F sits next to C rather than at the end of the row, because the filter is
 // the colour mode's own legend with one entry picked out of it and the two
 // keys are reached for together.
+//
+// K sits next to L for the same reason. L picks night or day and K picks the
+// palette it is worn in, so the two are one choice about how the panel looks
+// made in two presses.
 //
 // The select cap is drawn as the two arrow glyphs rather than as N/P. Both are
 // bound, but the arrows are what a hand reaches for first, and all four
@@ -178,6 +194,7 @@ var keyCaps = [...]keyCap{
 	{key: "C", label: "COLOUR", state: capColour},
 	{key: "F", label: filterBarLabel, state: capFilter},
 	{key: "L", label: "THEME", state: capTheme},
+	{key: "K", label: lookBarLabel, state: capLook},
 	{key: "V", label: "VIEW"},
 	{key: "W", label: "WIDE", state: capWide},
 }
@@ -199,11 +216,12 @@ var keyCaps = [...]keyCap{
 // That was checked before this was written rather than assumed, the same way
 // the up and down pair was.
 //
-// Sixteen softkeys come to about 1041 pixels of the 1248 the panel leaves
-// between its margins, or about 1103 with the bias-tee key as well, so nothing
-// here has to be shortened: ENVELOPE and AIRPORTS both fit at their full
-// length with about 145 pixels to spare. That is the whole bar at its longest,
-// in the 3D view on a dongle that has a bias-tee. See the note on keyCaps.
+// Seventeen softkeys and the bias-tee key come to 1179 pixels of the 1248 the
+// panel leaves between its margins, which is the whole bar at its longest: the
+// 3D view, on a dongle that has a bias-tee, with every cycling cap on its
+// longest word. Nothing here has to be shortened either, and ENVELOPE,
+// AIRPORTS and PHOSPHOR all fit at full length with 69 pixels to spare. See
+// the note on keyCaps.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
@@ -384,7 +402,7 @@ func (s *Scene) capEngaged(which capToggle) bool {
 		return s.biasEnabled
 	case capWide:
 		return s.wide
-	case capAlways, capColour, capTheme, capTrails, capFilter:
+	case capAlways, capColour, capTheme, capLook, capTrails, capFilter:
 		fallthrough
 	default:
 		return false
@@ -410,6 +428,8 @@ func (s *Scene) capLabel(entry keyCap) string {
 		}
 
 		return labelNight
+	case capLook:
+		return lookLabel(s.look)
 	case capTrails:
 		return s.trail.label()
 	case capFilter:
@@ -418,6 +438,27 @@ func (s *Scene) capLabel(entry keyCap) string {
 		fallthrough
 	default:
 		return entry.label
+	}
+}
+
+// lookLabel is the word the K cap carries. It names the look that is on rather
+// than the setting, the same way the C and L caps name the colour mode and the
+// theme they are on: a cap reading LOOK would say there is a choice without
+// saying which way it has been made.
+//
+// An unrecognised look reads as GLASS, which is the rule theme.Look.Palette
+// already follows, so a scene holding a hand-built palette names the look it
+// is actually being drawn in.
+func lookLabel(look theme.Look) string {
+	switch look {
+	case theme.LookPhosphor:
+		return labelPhosphor
+	case theme.LookMono:
+		return labelMono
+	case theme.LookGlass:
+		fallthrough
+	default:
+		return labelGlass
 	}
 }
 
@@ -434,6 +475,13 @@ func (s *Scene) capLabel(entry keyCap) string {
 // field is set in, and these are the only readings on screen that are about the
 // receiver rather than about an aeroplane. The mode word is whichever of OK,
 // Caution and Muted says what the position under it is worth.
+//
+// Every one of those goes through Palette.OnBand on the way to the canvas. A
+// palette's hues are picked against the field and the band is a strip of its
+// own, so a colour that reads on the page is not guaranteed to read on the
+// masthead. Mono's day palette is the one where that bites: its band is filled
+// with the same ink its data is set in, so without OnBand the whole right-hand
+// side of the header would be black on black.
 //
 // The fill bleeds to all three edges it touches rather than sitting inside
 // the layout margin, and the hairline under it runs the full width with it.
@@ -538,9 +586,9 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	middle := top + markHeight/2
 
 	if frame.Source.Connected {
-		lay.dst.FillCircle(pen+dotRadius, middle, dotRadius, s.pal.OK)
+		lay.dst.FillCircle(pen+dotRadius, middle, dotRadius, s.pal.OnBand(s.pal.OK))
 	} else {
-		lay.dst.Circle(pen+dotRadius, middle, dotRadius, s.pal.Muted)
+		lay.dst.Circle(pen+dotRadius, middle, dotRadius, s.pal.OnBand(s.pal.Muted))
 	}
 
 	pen += 2*dotRadius + dotGap
@@ -556,11 +604,12 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	}
 
 	head, marker := fitLabel(face, frame.Source.Label, limit-pen-reserved)
-	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.Data, text.WithSpacing(labelTracking))
-	pen = text.Draw(lay.dst, face, pen, label, marker, s.pal.Data, text.WithSpacing(labelTracking))
+	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.OnBand(s.pal.Data), text.WithSpacing(labelTracking))
+	pen = text.Draw(lay.dst, face, pen, label, marker, s.pal.OnBand(s.pal.Data), text.WithSpacing(labelTracking))
 
 	if frame.Sweeping {
-		text.Draw(lay.dst, face, pen, label, sweepSuffix, s.pal.Caution, text.WithSpacing(labelTracking))
+		text.Draw(lay.dst, face, pen, label, sweepSuffix, s.pal.OnBand(s.pal.Caution),
+			text.WithSpacing(labelTracking))
 	}
 }
 
@@ -621,7 +670,7 @@ func cutMarker(face *psf.Font) string {
 // drawHeader drops the band rather than half of it.
 func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver) {
 	face := s.faces.Small
-	ink := s.fixColour(receiver.Mode, s.pal.BandInk)
+	ink := s.pal.OnBand(s.fixColour(receiver.Mode, s.pal.BandInk))
 	left := text.Draw(lay.dst, face, lay.left, top, locPrefix, s.pal.BandInk)
 
 	switch receiver.Label {
@@ -634,9 +683,9 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 		text.Draw(lay.dst, face, left, top, noFixText, ink)
 	default:
 		pen := text.Draw(lay.dst, face, left, top, modeWord(receiver.Mode), ink) + modeGap
-		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.Data)
-		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.Data)
-		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.Data)
+		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.OnBand(s.pal.Data))
+		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.OnBand(s.pal.Data))
+		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.OnBand(s.pal.Data))
 	}
 }
 
@@ -657,7 +706,7 @@ func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated
 		return
 	}
 
-	text.Draw(dst, face, pen, top, doubtMarker, s.pal.Caution)
+	text.Draw(dst, face, pen, top, doubtMarker, s.pal.OnBand(s.pal.Caution))
 }
 
 // modeWord opens the receiver line when there are coordinates after it.
@@ -819,7 +868,8 @@ func (s *Scene) drawClock(
 	left := rightX - labelWidth - clockLabelGap - valueWidth
 
 	text.Draw(lay.dst, small, left, middle-labelHeight/2, label, s.bandMuted(), text.WithSpacing(labelTracking))
-	drawBytes(lay.dst, face, left+labelWidth+clockLabelGap, middle-lineHeight(face)/2, value, s.pal.Data)
+	drawBytes(lay.dst, face, left+labelWidth+clockLabelGap, middle-lineHeight(face)/2, value,
+		s.pal.OnBand(s.pal.Data))
 
 	return left
 }
@@ -859,8 +909,9 @@ func (s *Scene) drawBattery(lay *layout, rightX, middle int) (int, bool) {
 		s.drawBatteryLevel(lay.dst, inner, int(percent))
 	}
 
-	pen := drawBytes(lay.dst, face, rightX-fieldWidth, middle-fieldHeight/2, s.count(int(percent)), s.pal.Data)
-	text.Draw(lay.dst, face, pen, middle-fieldHeight/2, percentSign, s.pal.Data)
+	pen := drawBytes(lay.dst, face, rightX-fieldWidth, middle-fieldHeight/2, s.count(int(percent)),
+		s.pal.OnBand(s.pal.Data))
+	text.Draw(lay.dst, face, pen, middle-fieldHeight/2, percentSign, s.pal.OnBand(s.pal.Data))
 
 	return left, true
 }
@@ -899,17 +950,17 @@ func (s *Scene) drawBatteryLevel(dst *canvas.Canvas, inner image.Rectangle, perc
 func (s *Scene) batteryInk(percent int) color.RGBA {
 	switch {
 	case percent <= batteryCritical:
-		return s.pal.Warn
+		return s.pal.OnBand(s.pal.Warn)
 	case percent <= batteryLow:
-		return s.pal.Caution
+		return s.pal.OnBand(s.pal.Caution)
 	default:
-		return s.pal.Data
+		return s.pal.OnBand(s.pal.Data)
 	}
 }
 
 // drawChargingBolt draws the lightning mark inside a charging battery.
 func (s *Scene) drawChargingBolt(dst *canvas.Canvas, inner image.Rectangle) {
-	ink := s.pal.OK
+	ink := s.pal.OnBand(s.pal.OK)
 	topX := inner.Min.X + inner.Dx()/2 + boltInset
 	waistX := inner.Min.X + inner.Dx()/2 - boltInset
 	waistY := inner.Min.Y + boltWaist

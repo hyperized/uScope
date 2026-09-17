@@ -26,7 +26,7 @@ import (
 var (
 	columnBox    = image.Rect(621, 77, 1264, 666)
 	columnGapBox = image.Rect(605, 77, 621, 666)
-	wideCapBox   = image.Rect(672, 682, 720, 704)
+	wideCapBox   = image.Rect(732, 682, 780, 704)
 
 	// columnTypeBox is the column with its first seventy-five pixels left out,
 	// which is where the cases below count the data colour.

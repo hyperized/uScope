@@ -96,9 +96,9 @@ func offerKey(scene Drawer, key input.Key) bool {
 }
 
 // Themed is the optional other half of a scene's colour contract. A scene
-// that carries a theme.Palette implements it, and the l key cycles the
-// theme by calling SetPalette on every scene that does, not only the one on
-// screen, so switching scenes later still shows the theme that was chosen.
+// that carries a theme.Palette implements it, and the l and k keys change the
+// colours by calling SetPalette on every scene that does, not only the one on
+// screen, so switching scenes later still shows the palette that was chosen.
 //
 // It is declared here, where it is consumed, for the same reason KeyHandler
 // is: a scene does not have to import internal/app to satisfy it.
@@ -157,6 +157,11 @@ type Config struct {
 	// theme.KindNight, which is the default on a backlit handheld.
 	Theme theme.Kind
 
+	// Look is the palette look to start on, the other half of the pair Theme
+	// picks from. The zero value reads as theme.LookGlass, the cockpit
+	// palette.
+	Look theme.Look
+
 	// Radar is what the flags picked for the radar scene. Every field's zero
 	// value is that setting's default, for the same reason Theme's is.
 	Radar radar.Settings
@@ -174,9 +179,11 @@ type session struct {
 	scenes []Drawer
 	active int
 
-	// themeKind is the colour theme currently applied, which is what the l
-	// key cycles. It starts at whatever Config.Theme asked for.
+	// themeKind and look are the two halves of the palette currently applied:
+	// l cycles night and day, k cycles glass, phosphor and mono, and the pair
+	// names one of the six. Both start at whatever the flags asked for.
 	themeKind theme.Kind
+	look      theme.Look
 
 	// console is true only for the framebuffer. It is the framebuffer that
 	// needs the VT switched into graphics mode; doing that to a terminal
@@ -201,7 +208,7 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 		return err
 	}
 
-	applyPalette(scenes, cfg.Theme.Palette())
+	applyPalette(scenes, cfg.Look.Palette(cfg.Theme))
 	applySettings(scenes, cfg.Radar)
 
 	active := int(cfg.Scene)
@@ -221,12 +228,26 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 //nolint:ireturn // a scene is a Drawer; that is the whole point of the seam.
 func (s *session) scene() Drawer { return s.scenes[s.active] }
 
-// cycleTheme steps to the next colour theme and applies it to every scene
-// that takes one, not only the one on screen, so switching scenes later
-// still shows the theme that was picked. This is what the l key is bound to.
+// cycleTheme steps to the other colour theme, which is what the l key is bound
+// to. The look it is worn in does not move.
 func (s *session) cycleTheme() {
 	s.themeKind = s.themeKind.Next()
-	applyPalette(s.scenes, s.themeKind.Palette())
+	s.repaint()
+}
+
+// cycleLook steps to the next look, glass to phosphor to mono and back, which
+// is what the k key is bound to. Night or day does not move, so a look picked
+// at three in the morning arrives in the dark palette it was reached for in.
+func (s *session) cycleLook() {
+	s.look = s.look.Next()
+	s.repaint()
+}
+
+// repaint hands the palette the two cycles now name to every scene that takes
+// one, not only the one on screen, so switching scenes later still shows the
+// colours that were picked.
+func (s *session) repaint() {
+	applyPalette(s.scenes, s.look.Palette(s.themeKind))
 }
 
 // sayf writes a line to the console.
@@ -283,6 +304,7 @@ const (
 	cmdNone command = iota
 	cmdQuit
 	cmdNextTheme
+	cmdNextLook
 )
 
 // classify maps a key onto a command.
@@ -312,6 +334,8 @@ func runeCommand(value rune) command {
 		return cmdQuit
 	case 'l', 'L':
 		return cmdNextTheme
+	case 'k', 'K':
+		return cmdNextLook
 	default:
 		return cmdNone
 	}
@@ -322,12 +346,19 @@ func runeCommand(value rune) command {
 // ifs inline in loop, to keep loop's own branching within the cognitive
 // complexity limit.
 func dispatch(ses *session, action command) bool {
-	if action == cmdQuit {
+	switch action {
+	case cmdQuit:
 		return true
-	}
-
-	if action == cmdNextTheme {
+	case cmdNextTheme:
 		ses.cycleTheme()
+	case cmdNextLook:
+		ses.cycleLook()
+	case cmdNone:
+		fallthrough
+	default:
+		// Every key the loop binds nothing to arrives here and changes
+		// nothing. The scene was offered it first and did not want it either,
+		// so there is genuinely nothing left to do with the press.
 	}
 
 	return false
@@ -382,7 +413,7 @@ func (r *runner) renderBackend(ctx context.Context, cfg Config, scenes []Drawer,
 	defer func() { _ = ses.back.Close() }()
 
 	ses.scenes, ses.active = scenes, active
-	ses.themeKind = cfg.Theme
+	ses.themeKind, ses.look = cfg.Theme, cfg.Look
 
 	width, height := ses.back.Size()
 

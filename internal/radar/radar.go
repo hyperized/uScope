@@ -306,6 +306,12 @@ type Scene struct {
 	// between two of them.
 	light bool
 
+	// look is which of the three palettes the scene is drawing in, copied off
+	// the palette by SetPalette. Only the K softkey reads it, and it is kept
+	// here for the reason light is: the answer is fixed for the whole frame,
+	// and asking the palette once is cheaper than asking it per cap.
+	look theme.Look
+
 	// The 3D view's camera. azimuth and elevation are in degrees, and
 	// azimuth is where the last keypress left it rather than where the camera
 	// is pointing now: orbiting winds it forward from azimuthAt, which is the
@@ -416,13 +422,16 @@ func WithPalette(pal theme.Palette) Option {
 // on every scene that implements it, not only the one on screen, so
 // switching scenes later still shows the theme that was chosen.
 //
-// It takes the light-field flag off the palette rather than being told
-// separately. One setter means the two can never disagree, and a palette that
-// is not theme.Paper reads as dark, which is the rule theme.Kind already
-// applies everywhere else.
+// It takes the light-field flag and the look off the palette rather than being
+// told either separately. One setter means the three can never disagree: a
+// scene told its look by one path and its colours by another would sooner or
+// later draw one look under the other one's cap. theme.Palette answers Light
+// by measuring its own field and carries the look it belongs to, so both
+// answers come from the thing being drawn with.
 func (s *Scene) SetPalette(pal theme.Palette) {
 	s.pal = pal
 	s.light = pal.Light()
+	s.look = pal.Look
 }
 
 // WithColour picks what an aircraft's colour means at construction.
@@ -493,7 +502,6 @@ func WithSprite(icon *sprite.Bitmap) Option {
 func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option) *Scene {
 	scene := &Scene{
 		faces:      faces,
-		pal:        theme.Night,
 		src:        src,
 		scopeRange: scopeRange,
 		icon:       sprite.Airplane(),
@@ -510,6 +518,14 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		envelope:   true,
 		exaggerate: DefaultExaggerate,
 	}
+
+	// The starting palette goes in through the setter rather than into the
+	// literal above, so the three fields it keeps in step are set the one way
+	// they are ever set. A literal that assigned pal on its own would leave
+	// the look and the light flag on their zero values, and a scene nobody
+	// passed WithPalette would draw glass night under a cap that had never
+	// been told which look it was naming.
+	scene.SetPalette(theme.Night)
 
 	for _, opt := range opts {
 		opt(scene)

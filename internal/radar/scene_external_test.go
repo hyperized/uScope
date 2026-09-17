@@ -2470,7 +2470,7 @@ var (
 	// a bias-tee, at the panel's resolution. It sits right after the twelve
 	// fixed caps in keyCaps, so its left edge is where the bar's painted
 	// extent ends when the cap is not there at all.
-	biasCapBox     = image.Rect(725, 682, 787, 704)
+	biasCapBox     = image.Rect(785, 682, 847, 704)
 	biasEngagedBar = image.Rect(
 		biasCapBox.Min.X+keyEngagedInsetTest, biasCapBox.Max.Y-keyPadYTest,
 		biasCapBox.Max.X-keyEngagedInsetTest, biasCapBox.Max.Y-keyPadYTest+keyEngagedHeightTest,

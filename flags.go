@@ -32,6 +32,7 @@ const (
 	defaultBackend  = "auto"
 	defaultScene    = "radar"
 	defaultTheme    = "night"
+	defaultLook     = "glass"
 	defaultColour   = "altitude"
 	defaultOn       = "on"
 	defaultRange    = "auto"
@@ -103,6 +104,7 @@ var (
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
 	errScene      = errors.New(appName + ": --scene must be radar or pattern")
 	errTheme      = errors.New(appName + ": --theme must be night or day")
+	errLook       = errors.New(appName + ": --look must be glass, phosphor or mono")
 	errColour     = errors.New(appName + ": --colour must be altitude or airline")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
@@ -134,6 +136,7 @@ type config struct {
 	backend     backend.Kind
 	scene       app.SceneKind
 	theme       theme.Kind
+	look        theme.Look
 	colour      radar.ColourMode
 	airports    radar.Toggle
 	shore       radar.Toggle
@@ -186,6 +189,7 @@ type rawFlags struct {
 	backend     string
 	scene       string
 	theme       string
+	look        string
 	colour      string
 	airports    string
 	shore       string
@@ -247,7 +251,9 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.scene, "scene", defaultScene,
 		"what to draw: radar or pattern. pattern is a flags-only diagnostic with no key back to it")
 	set.StringVar(&raw.theme, "theme", defaultTheme,
-		"colour theme: night or day")
+		"colour theme: night or day. l cycles them while it runs")
+	set.StringVar(&raw.look, "look", defaultLook,
+		"which palette to wear: glass, phosphor or mono. k cycles them while it runs")
 	set.StringVar(&raw.colour, "colour", defaultColour,
 		"what an aircraft's colour means: altitude or airline")
 	set.StringVar(&raw.airports, "airports", defaultOn,
@@ -307,6 +313,7 @@ type display struct {
 	backend    backend.Kind
 	scene      app.SceneKind
 	theme      theme.Kind
+	look       theme.Look
 	radar      radar.Settings
 }
 
@@ -334,6 +341,11 @@ func (raw rawFlags) display() (display, error) {
 	}
 
 	themeKind, err := parseTheme(raw.theme)
+	if err != nil {
+		return display{}, err
+	}
+
+	look, err := parseLook(raw.look)
 	if err != nil {
 		return display{}, err
 	}
@@ -379,6 +391,7 @@ func (raw rawFlags) display() (display, error) {
 		backend:    kind,
 		scene:      scene,
 		theme:      themeKind,
+		look:       look,
 		radar: radar.Settings{
 			Colour:   colour,
 			Airports: airports,
@@ -448,6 +461,7 @@ func (raw rawFlags) validated() (config, error) {
 		backend:     show.backend,
 		scene:       show.scene,
 		theme:       show.theme,
+		look:        show.look,
 		colour:      show.radar.Colour,
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
@@ -626,6 +640,17 @@ func parseTheme(text string) (theme.Kind, error) {
 	}
 
 	return kind, nil
+}
+
+// parseLook reads --look against internal/theme's allow list, the same way
+// parseTheme reads the other half of the pair.
+func parseLook(text string) (theme.Look, error) {
+	look, err := theme.ParseLook(text)
+	if err != nil {
+		return theme.LookGlass, fmt.Errorf("%w: %w", errLook, err)
+	}
+
+	return look, nil
 }
 
 // parseColour reads --colour against internal/radar's allow list.
