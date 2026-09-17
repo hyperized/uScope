@@ -2,818 +2,607 @@ package radar
 
 import (
 	"image"
-	"image/color"
 	"math"
+	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
-	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
-// The right column's spacing and fixed strings.
+// The selected aircraft's panel at the top of the column: the radar data block
+// set large.
+//
+// It is the same object as the tag hanging off the ring on the scope. The tag
+// is three lines in the body face because it has to sit on a field of traffic
+// without covering it; the panel is the block a controller would have in front
+// of them, with the abbreviations spelled out underneath. Reading the two is
+// one habit rather than two.
 const (
-	// The card: padding inside the border, the accent bar down its left edge,
-	// the scale the callsign is set at, and the gap before a unit suffix.
-	cardPadX       = 12
-	cardPadY       = 14
-	accentWidth    = 3
-	cardTitleScale = 2
-	unitGap        = 6
-	rowGap         = 12
-	columnGap      = 12
+	// cardLabel names the block, and cardFiltered follows it while the filter
+	// is hiding the aeroplane the block is about. The pin survives the filter,
+	// so the panel keeps drawing the aircraft and says why it has no strip in
+	// the list under it.
+	cardLabel    = "SELECTED"
+	cardFiltered = " · FILTERED"
 
-	cardLabelSuffix = " / SELECTED FLIGHT"
-	cardNoSelection = "--"
-
-	// filteredTag closes the card's heading while the filter is hiding the
-	// aircraft the panel is about. It is set in the same small muted face the
-	// rest of the heading is, because it is a note about the panel rather than
-	// a reading in it, and it carries its own separator the way
-	// cardLabelSuffix does.
-	filteredTag = " / FILTERED"
-
-	squawkPrefix = "SQ "
-	trackPrefix  = "TRACK "
-
-	// trackUnknown stands in when no heading has been decoded. uAirwaves marks
-	// that with a negative heading, so zero is due north and reads as
-	// 000 / N; it is a negative figure that would have the panel inventing a
-	// course.
-	trackUnknown = "---"
-
-	unitFT = "FT"
-	unitKT = "KT"
-	unitNm = "NM"
-
-	// distanceDecimals is one place. A tenth of a nautical mile is about 180
-	// metres, which is finer than the position under it is worth.
-	distanceDecimals = 1
-
-	// notSelected is the position drawCardLabel reads as "nothing selected".
-	notSelected = -1
-
-	// The caps on what is drawn from a decoded field. A callsign is eight
-	// characters by the standard and a squawk four, but the standard is not
-	// what arrives when a frame is half corrupt.
-	maxCallsign = 8
-	maxICAO     = 6
-	maxSquawk   = 4
-)
-
-// The legend along the bottom of the column.
-const (
-	swatchSide = 10
-	swatchGap  = 6
-	legendGap  = 18
-
-	// swatchMark is how far outside a swatch the ring round the filtered entry
-	// is drawn, so the legend says which of its own rows the scope is showing.
+	// cardRule is the accent hairline down the left edge of the block and
+	// cardPadX the air between it and the type.
 	//
-	// A ring rather than a brighter swatch or a second colour: the swatches are
-	// the one place in the scene where a colour means an altitude or an
-	// operator and nothing else, and changing one to mark a selection would be
-	// the legend lying about the thing it exists to explain.
-	swatchMark = 2
+	// One pixel, where the strip below it wears three. The rule here is a
+	// margin mark on a block that is already the only thing at the top of the
+	// column; the strip's edge has to be found in a list of twenty.
+	cardRule = 1
+	cardPadX = 12
 
-	legendLow  = "< 10K FT"
-	legendMid  = "10-25K FT"
-	legendHigh = "> 25K FT"
+	// cardLead is the air between two rows of the block and cardCellGap the
+	// air between two figures on one row.
+	cardLead    = 6
+	cardCellGap = 14
+
+	// cardScale is how many times over the large face is drawn for the
+	// callsign, and cardPlainScale the scale it drops to on a short column.
+	// Two is the one place in the scene where a face is scaled at all: the
+	// callsign is what the panel is about, and at arm's length on a five-inch
+	// panel thirty-two pixels is not enough to read it across a cockpit.
+	cardScale      = 2
+	cardPlainScale = 1
+
+	// cardRows is how many rows of figures the block carries, cardOneRow how
+	// many are left when the column is too short for both, and cardTopRow the
+	// first of them.
+	cardRows   = 2
+	cardOneRow = 1
+	cardTopRow = 0
+
+	// The words under the five figures. They are the tag's own abbreviations
+	// rather than full names, because the figures over them are the tag's
+	// figures: a block reading LEVEL over 024 says the same thing twice.
+	cardLevelLabel = "LEVEL"
+	cardSpeedLabel = "GS"
+	cardTrackLabel = "TRK"
+	cardRangeLabel = "DIST"
+	cardBearLabel  = "BRG"
+
+	// The plain-language line under the block, in the order it reads: the
+	// level and what it is doing, then where the aeroplane is, then how long
+	// ago it was last heard.
+	//
+	// It exists because everything above it is controller shorthand. 024 is
+	// two thousand four hundred feet to anyone who has worked a radar and a
+	// three-digit number to everyone else, and a panel that cannot be read
+	// cold is a panel with a manual.
+	plainFeet       = " FT "
+	plainLevelWord  = "LEVEL"
+	plainClimbing   = "CLIMBING "
+	plainDescending = "DESCENDING "
+	plainRate       = " FT/MIN"
+	plainSeparator  = " · "
+	plainSeen       = "SEEN "
+	plainSlash      = " / "
 )
 
-// legendEntry is one altitude band and the colour that means it.
-type legendEntry struct {
-	col   color.RGBA
-	label string
+// The figures on the block, in the order they are read.
+const (
+	cardLevel = iota
+	cardSpeed
+	cardTrack
+	cardRange
+	cardBearing
+
+	// cardFigures is how many there are, which is what every loop over them
+	// runs to. The first three are the top row and the last two the second,
+	// which is the row the column gives up first.
+	cardFigures
+)
+
+// cardRowStart is the first figure of each row, with the end of the last row
+// on the tail so a row's figures are always cardRowStart[row] to
+// cardRowStart[row+1].
+//
+//nolint:gochecknoglobals // a row split is data, and an array cannot be const.
+var cardRowStart = [cardRows + 1]int{0, cardRange, cardFigures}
+
+// cardLabels is the word under each figure.
+//
+//nolint:gochecknoglobals // a label row is data, and an array cannot be const.
+var cardLabels = [cardFigures]string{
+	cardLevel:   cardLevelLabel,
+	cardSpeed:   cardSpeedLabel,
+	cardTrack:   cardTrackLabel,
+	cardRange:   cardRangeLabel,
+	cardBearing: cardBearLabel,
 }
 
-// drawColumn fills the right-hand column.
+// The widest thing each figure can be asked to hold, and the widest each
+// clause of the plain line can be.
 //
-// Everything with a fixed height takes its room first: the legend off the
-// bottom, the selected-flight panel off the top. The compact rows get all of
-// what is left, which is what fills the column at any height.
-//
-// The order the blocks are called in is the order they claim space, not the
-// order they appear on screen. Reading down the frame it is panel, rows,
-// legend. The stats line under the legend is gone: it said how many aircraft
-// there were and where they came from, and the header already carries the
-// source, so the count moved onto the rows' own title line and the line went.
-//
-// An empty column is the answer on a canvas too narrow to hold one and on a
-// scope the w key has widened, and there is nothing to draw either way. The
-// count goes with the rows in the second case: it sits on their title line,
-// and a filter is still legible from the F cap in the bar.
-func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
-	if lay.column.Empty() {
-		return
-	}
+// Sizing from the worst case is what keeps the block still, the same rule the
+// flight strips are laid out by: a figure measured from its own contents would
+// move every time an aircraft climbed through ten thousand feet, and a panel
+// whose words walk sideways is harder to read than one wasting a few pixels.
+const (
+	widestCardLevel = "999" + tagClimb
+	widestCardSpeed = "999"
+	widestCardTrack = "359"
+	widestCardRange = "999.9"
+	widestCardBear  = "359"
 
-	col := layout{
-		dst:    lay.dst,
-		left:   lay.column.Min.X,
-		right:  lay.column.Max.X,
-		top:    lay.column.Min.Y,
-		bottom: lay.column.Max.Y,
-		labels: lay.labels,
-	}
+	widestPlainLevel = "999,999" + plainFeet + plainDescending + "99,999" + plainRate
+	widestPlainPlace = plainSeparator + widestPlace + plainSlash + widestPlace
+	widestPlainSeen  = plainSeparator + plainSeen + seenNowText
+)
 
-	s.drawLegend(&col)
-	s.drawCard(&col, frame)
-	s.drawRows(&col, frame)
-}
-
-// cardPlan is the panel measured for one column width: the height of each
-// band and the shape the value line takes.
-//
-// It is worked out before anything is drawn because the panel's own height
-// depends on whether the value line fits, and the border has to be drawn
-// before the contents go inside it.
+// cardPlan is the shape the block takes in the room the column has.
 type cardPlan struct {
-	label  int
-	middle int
-	figure int
+	// scale is the callsign's scale in the large face, rows how many rows of
+	// figures are drawn, and plain whether the sentence under the block is.
+	scale int
+	rows  int
+	plain bool
 
-	// values is the height of the value line, and columns how many pairs go
-	// side by side in it. Both are zero on a column too narrow for one whole
-	// pair, and the panel is that much shorter.
-	values  int
-	columns int
-
-	total int
+	// left is each figure's own left edge and width how much room it has. The
+	// figures are placed from the left rather than spread to the block's right
+	// edge, because each carries a word under it and a figure starting
+	// somewhere else from the word naming it would read as belonging to the
+	// one before.
+	left  [cardFigures]int
+	width [cardFigures]int
 }
 
-// planCard measures the panel against a column of this width, reporting false
-// when one of its three faces is missing.
-func (s *Scene) planCard(width int) (cardPlan, bool) {
-	plan := cardPlan{
-		label:  lineHeight(s.faces.Small),
-		figure: lineHeight(s.faces.Large),
-	}
-
-	body := lineHeight(s.faces.Body)
-	if plan.label == 0 || body == 0 || plan.figure == 0 {
-		return plan, false
-	}
-
-	plan.middle = max(plan.figure*cardTitleScale+body, 2*body)
-	plan.total = 2*cardPadY + plan.label + rowGap + plan.middle + rowGap + plan.figure
-
-	columns, lines := s.cardValueShape(width - accentWidth - 2*cardPadX)
-	if lines > 0 {
-		plan.columns = columns
-		plan.values = lines*body + (lines-1)*rowLead
-		plan.total += rowGap + plan.values
-	}
-
-	return plan, true
-}
-
-// drawCard is the selected-flight panel: the numbered label, the callsign set
-// large with its track under it, the ICAO hex and the squawk in the top right,
-// the three figures, and the line of values under them.
+// cardShapes is every shape the block can take, biggest first.
 //
-// It is one panel rather than a card plus a details block because both were
-// about the same aeroplane and both had a border. Two borders said there were
-// two things to read.
-func (s *Scene) drawCard(col *layout, frame source.Frame) {
-	plan, drawable := s.planCard(col.right - col.left)
-	if !drawable || !col.fits(plan.total+blockGap) {
+// The order is what the panel gives up as the column shortens. The plain line
+// goes first: it is the one part of the block that repeats what is already
+// above it, so losing it costs a reading nobody who can read the shorthand
+// needs. Then the callsign's second scale, because a callsign at thirty-two
+// pixels is still the largest thing in the column. The second row of figures
+// is last, and losing it is what finally costs the panel a fact: the range and
+// the bearing are then only on the aircraft's own strip.
+//
+//nolint:gochecknoglobals // a shrink order is data, and an array cannot be const.
+var cardShapes = [...]cardPlan{
+	{scale: cardScale, rows: cardRows, plain: true},
+	{scale: cardScale, rows: cardRows},
+	{scale: cardPlainScale, rows: cardRows},
+	{scale: cardPlainScale, rows: cardOneRow},
+}
+
+// cardWidths is the room each figure needs, which is the widest thing that can
+// land in it or the word under it, whichever is wider.
+//
+// The bearing carries the needle as well as the figure. TRK does not, although
+// the strips' own track field does: the block already has one needle on it, a
+// second beside a figure eight pixels away would read as a pair of directions
+// to reconcile rather than as one bearing to fly.
+func (s *Scene) cardWidths() [cardFigures]int {
+	large, small := s.faces.Large, s.faces.Small
+
+	widths := [cardFigures]int{
+		cardLevel:   measure(large, widestCardLevel),
+		cardSpeed:   measure(large, widestCardSpeed),
+		cardTrack:   measure(large, widestCardTrack),
+		cardRange:   measure(large, widestCardRange),
+		cardBearing: measure(large, widestCardBear) + s.arrowWidth(),
+	}
+
+	for index := range cardFigures {
+		widths[index] = max(widths[index], measureTracked(small, cardLabels[index]))
+	}
+
+	return widths
+}
+
+// cardIdentWidth is the room the callsign and the codes beside it need at this
+// scale.
+//
+// The codes are two lines rather than one because the callsign is two lines
+// tall, and a hex and a squawk stacked beside it fill the block's first row
+// instead of leaving a hole under them. The warning box takes the squawk's own
+// line, after the code: an aircraft squawking 7700 is squawking a code, and
+// the box is what that code means.
+func (s *Scene) cardIdentWidth(scale int) int {
+	body, small := s.faces.Body, s.faces.Small
+
+	warning := measure(small, emergencyText) + 2*emergencyPadX
+	codes := max(
+		measure(body, widestICAO),
+		measure(body, widestSquawk)+stripGap+warning,
+	)
+
+	return scale*measure(s.faces.Large, widestCallsign) + cardCellGap + codes
+}
+
+// cardRowWidth is how wide one row of figures is, the gaps between them
+// included.
+func cardRowWidth(row int, widths [cardFigures]int) int {
+	sum := 0
+
+	for index := cardRowStart[row]; index < cardRowStart[row+1]; index++ {
+		sum += widths[index]
+	}
+
+	return sum + (cardRowStart[row+1]-cardRowStart[row]-1)*cardCellGap
+}
+
+// place puts each figure of each drawn row at its own left edge.
+func (p *cardPlan) place(left int, widths [cardFigures]int) {
+	p.width = widths
+
+	for row := range p.rows {
+		pen := left
+
+		for index := cardRowStart[row]; index < cardRowStart[row+1]; index++ {
+			p.left[index] = pen
+			pen += widths[index] + cardCellGap
+		}
+	}
+}
+
+// width is the least room the block needs: the widest of its identity row and
+// the rows of figures under it, with the rule and its margin in front.
+func (s *Scene) cardWidth(plan cardPlan, widths [cardFigures]int) int {
+	need := s.cardIdentWidth(plan.scale)
+
+	for row := range plan.rows {
+		need = max(need, cardRowWidth(row, widths))
+	}
+
+	return cardRule + cardPadX + need
+}
+
+// figureRowHeight is one row of figures and the word under it, and
+// identHeight the callsign's own row at this scale.
+func (s *Scene) figureRowHeight() int {
+	return lineHeight(s.faces.Large) + lineHeight(s.faces.Small)
+}
+
+func (s *Scene) identHeight(scale int) int {
+	return scale * lineHeight(s.faces.Large)
+}
+
+// blockHeight is the accent rule's own length: the identity row and the rows
+// of figures under it.
+func (s *Scene) blockHeight(plan cardPlan) int {
+	return s.identHeight(plan.scale) + plan.rows*(cardLead+s.figureRowHeight())
+}
+
+// cardHeight is the whole panel: the word over the block, the block, the
+// sentence under it when there is one, and the lead that separates the lot
+// from the row of field names the board opens with.
+//
+// The lead is there because the sentence and the field names are both small
+// type in a quiet colour, and without it the last line of the panel read as the
+// first line of the list. Four pixels rather than the sixteen the legend is
+// held off by: sixteen is half a strip, and a board is worth more than the air
+// around it.
+func (s *Scene) cardHeight(plan cardPlan) int {
+	height := lineHeight(s.faces.Small) + rowLead + s.blockHeight(plan) + rowLead
+
+	if plan.plain {
+		height += rowLead + lineHeight(s.faces.Small)
+	}
+
+	return height
+}
+
+// planCard picks the largest shape of the block that fits the room the column
+// has, and reports whether any of them did.
+//
+// A column too narrow or too short even for the smallest draws no panel at all
+// rather than a squeezed one. The strips under it still draw, and every figure
+// the panel would have carried is on the selected aircraft's own strip: the
+// panel is the one block in the column that repeats what is already there.
+func (s *Scene) planCard(width, room int) (cardPlan, bool) {
+	if s.faces.Small == nil || s.faces.Body == nil || s.faces.Large == nil {
+		return cardPlan{}, false
+	}
+
+	widths := s.cardWidths()
+
+	for _, plan := range cardShapes {
+		if s.cardWidth(plan, widths) > width || s.cardHeight(plan) > room {
+			continue
+		}
+
+		plan.place(cardRule+cardPadX, widths)
+
+		return plan, true
+	}
+
+	return cardPlan{}, false
+}
+
+// drawCard draws the selected aircraft's panel and takes its room off the top
+// of the column.
+//
+// An empty sky keeps the block's shape and loses its accent rule and its
+// figures. There is no aeroplane for the rule to mark, and a column that
+// changed height every time the last contact left range would be worse to look
+// at than one with a gap in it.
+func (s *Scene) drawCard(col *layout, frame source.Frame, sel selection) {
+	plan, drawable := s.planCard(col.right-col.left, col.bottom-col.top)
+	if !drawable {
 		return
 	}
 
-	s.cardFrame(col, plan.total)
+	s.drawCardLabel(col.dst, col.left, col.top, sel)
 
-	left, right := col.left+accentWidth+cardPadX, col.right-cardPadX
-	top := col.top + cardPadY
+	top := col.top + lineHeight(s.faces.Small) + rowLead
+	left := col.left + cardRule + cardPadX
 
-	sel := s.selectedPlane(frame)
-	s.drawCardLabel(col.dst, left, top, sel)
-	top += plan.label + rowGap
-
-	col.top += plan.total + blockGap
-
-	// An empty sky puts NO TRAFFIC where the callsign goes. It used to live in
-	// the details block, which is where the eye went looking for a reason the
-	// panel was blank; now the panel says it itself.
-	if !sel.found {
+	if sel.found {
+		col.dst.FillRect(image.Rect(col.left, top, col.left+cardRule, top+s.blockHeight(plan)), s.pal.Accent)
+		s.drawCardIdent(col.dst, plan, left, top, sel.plane)
+	} else {
 		text.Draw(col.dst, s.faces.Large, left, top, noTraffic, s.pal.Muted)
-
-		return
 	}
 
-	plane := sel.plane
+	s.drawCardFigures(col, plan, frame, sel)
+	s.drawCardPlain(col, plan, frame, sel)
 
-	s.drawCardIdentity(col.dst, image.Rect(left, top, right, top+plan.middle), plane)
-	top += plan.middle + rowGap
-
-	s.drawCardFigures(col.dst, image.Rect(left, top, right, top+plan.figure), frame.Receiver, plane)
-	top += plan.figure + rowGap
-
-	s.drawCardValues(col.dst, image.Rect(left, top, right, top+plan.values), plan.columns, frame, plane)
+	col.top += s.cardHeight(plan)
 }
 
-// selection is the aircraft the card is about.
+// drawCardLabel names the block, and says when the filter is hiding the
+// aeroplane it is about.
 //
-// It is a struct rather than the pair of values it used to be because the
-// filter added a third state. An aircraft can be selected and on the field,
-// selected and hidden by the filter, or there can be nothing to select at all,
-// and a row number of -1 cannot say which of the last two it is.
-type selection struct {
-	plane airplane.Snapshot
+// The tag is amber rather than the data colour the label itself takes, because
+// it is a caution and not a heading: the panel is about an aeroplane that is
+// not on the field, which is a state the operator has to notice before
+// wondering where the strip went.
+func (s *Scene) drawCardLabel(dst *canvas.Canvas, left, top int, sel selection) {
+	face := s.faces.Small
 
-	// row is its place in the compact rows, or notSelected when the filter is
-	// hiding it and there is no row to point at.
-	row int
-
-	// found is whether anything is selected. False is an empty sky, which is
-	// what puts NO TRAFFIC where the callsign goes.
-	found bool
-
-	// hidden is whether the filter is keeping the selection off the field. The
-	// pin survives that, so the panel keeps drawing the aircraft and says
-	// FILTERED next to its heading until the filter widens again.
-	hidden bool
-}
-
-// selectedPlane is the aircraft the card is about.
-//
-// A pinned aircraft the filter is hiding is found by ICAO rather than by
-// index, because it has no index: the ICAO list holds the aircraft the filter
-// let through, and this one is not among them.
-func (s *Scene) selectedPlane(frame source.Frame) selection {
-	if s.selHidden {
-		plane, flying := findPlane(frame, s.selICAO)
-
-		return selection{plane: plane, row: notSelected, found: flying, hidden: flying}
-	}
-
-	if s.selIndex < 0 || s.selIndex >= len(s.icaos) {
-		return selection{row: notSelected}
-	}
-
-	plane, flying := findPlane(frame, s.icaos[s.selIndex])
-
-	return selection{plane: plane, row: s.selIndex, found: flying}
-}
-
-// cardFrame draws the hairline border and the accent bar down the left edge.
-func (s *Scene) cardFrame(col *layout, total int) {
-	box := image.Rect(col.left, col.top, col.right, col.top+total)
-
-	col.dst.Rect(box, s.pal.Rule)
-	col.dst.FillRect(image.Rect(box.Min.X, box.Min.Y, box.Min.X+accentWidth, box.Max.Y), s.pal.Accent)
-}
-
-// drawCardLabel writes the numbered heading, which ties the card to the row
-// of the same number further down the column.
-//
-// A negative number means there is no row to tie it to and the heading reads
-// "--", which is the same shape as a number and so does not move the text
-// beside it. That happens for an empty sky and for a pinned aircraft the
-// filter is hiding, and the second of those gets the FILTERED tag after the
-// suffix so the two cannot be confused: the card is full of readings in one
-// case and empty in the other, and the heading should say which before the eye
-// gets that far.
-//
-//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawCardLabel(dst *canvas.Canvas, x, y int, sel selection) {
-	pen := s.drawLabelNumber(dst, x, y, sel.row)
-	pen = text.Draw(dst, s.faces.Small, pen, y, cardLabelSuffix, s.pal.Muted)
+	pen := text.Draw(dst, face, left, top, cardLabel, s.pal.Data, text.WithSpacing(labelTracking))
 
 	if sel.hidden {
-		text.Draw(dst, s.faces.Small, pen, y, filteredTag, s.pal.Muted)
+		text.Draw(dst, face, pen, top, cardFiltered, s.pal.Caution, text.WithSpacing(labelTracking))
 	}
 }
 
-// drawLabelNumber writes the card's number, or the two dashes that stand in
-// for one, and returns the x just past it.
+// drawCardIdent sets the block's first row: who the aeroplane is, large, with
+// its codes stacked beside it.
 //
-//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawLabelNumber(dst *canvas.Canvas, x, y, position int) int {
-	if position < 0 {
-		return text.Draw(dst, s.faces.Small, x, y, cardNoSelection, s.pal.Muted)
-	}
+// The callsign takes the operator's colour in airline mode, the same as it does
+// on the strip and on the tag. A name in three places in three colours would be
+// three aeroplanes to reconcile.
+func (s *Scene) drawCardIdent(dst *canvas.Canvas, plan cardPlan, left, top int, plane airplane.Snapshot) {
+	body := s.faces.Body
 
-	return drawBytes(dst, s.faces.Small, x, y, s.index(position+1), s.pal.Muted)
-}
+	text.Draw(dst, s.faces.Large, left, top, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane),
+		text.WithScale(plan.scale))
 
-// drawCardIdentity sets the callsign large with the track under it, and the
-// codes right-aligned beside them.
-//
-// The ICAO hex in the corner is dropped when no callsign was decoded, because
-// callsignOf has then already put that same hex in the large face two inches
-// to the left. The squawk moves up into the space it leaves.
-func (s *Scene) drawCardIdentity(dst *canvas.Canvas, box image.Rectangle, plane airplane.Snapshot) {
-	large, body := s.faces.Large, s.faces.Body
+	codes := left + plan.scale*measure(s.faces.Large, widestCallsign) + cardCellGap
+	first := top + (s.identHeight(plan.scale)-2*lineHeight(body))/2
 
-	text.Draw(dst, large, box.Min.X, box.Min.Y, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane),
-		text.WithScale(cardTitleScale))
-
-	s.drawCardTrack(dst, box.Min.X, box.Min.Y+lineHeight(large)*cardTitleScale, plane.Heading)
-
-	top := box.Min.Y
-
-	if plane.Callsign != "" {
-		text.DrawRight(dst, body, box.Max.X, top, clip(plane.ICAO, maxICAO), s.pal.Ink)
-		top += lineHeight(body)
-	}
-
-	s.drawSquawk(dst, box.Max.X, top, plane)
-}
-
-// drawCardTrack writes the course as degrees with an arrow turned to it,
-// because a number alone takes a moment to place and a picture does not.
-//
-// The arrow takes the ink the degrees are set in rather than the muted tone
-// the label has. It is the reading, not a label on one.
-//
-//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawCardTrack(dst *canvas.Canvas, x, y int, heading float64) {
-	face := s.faces.Body
-
-	pen := text.Draw(dst, face, x, y, trackPrefix, s.pal.Muted)
-
-	if !knownHeading(heading) {
-		text.Draw(dst, face, pen, y, trackUnknown, s.pal.Muted)
-
-		return
-	}
-
-	pen = drawBytes(dst, face, pen, y, s.degrees(heading), s.pal.Ink)
-	s.drawArrow(dst, pen+arrowGap, y+lineHeight(face)/2, heading, s.pal.Ink)
-}
-
-// drawSquawk right-aligns the transponder code behind its label, with the
-// emergency tag after it when the aircraft is squawking one.
-//
-// The pieces are measured and then drawn left to right rather than drawn right
-// to left, so the label stays muted and the code stays ink without the group
-// drifting apart when the code is short.
-//
-// The tag is the one place the accent marks something other than the
-// selection. An emergency is the one thing on the scope worth taking the eye
-// off everything else, which is what the accent is for.
-//
-//nolint:varnamelen // y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawSquawk(dst *canvas.Canvas, rightX, y int, plane airplane.Snapshot) {
-	face := s.faces.Body
+	text.Draw(dst, body, codes, first, clip(plane.ICAO, maxICAO), s.pal.Muted)
 
 	code := clip(plane.Squawk, maxSquawk)
 	if code == "" {
 		code = noSquawk
 	}
 
-	tag := ""
-	if plane.Emergency {
-		tag = emergencyTag
-	}
+	// The prefix and the code are two draws rather than one concatenation: a
+	// string built on the draw path is an allocation per frame, which is the
+	// one thing this scene promises never to make.
+	second := first + lineHeight(body)
+	pen := text.Draw(dst, body, codes, second, squawkPrefix, s.pal.Muted)
+	pen = text.Draw(dst, body, pen, second, code, s.pal.Muted)
 
-	prefixWidth, _ := text.Measure(face, squawkPrefix)
-	codeWidth, _ := text.Measure(face, code)
-	tagWidth, _ := text.Measure(face, tag)
-
-	pen := text.Draw(dst, face, rightX-prefixWidth-codeWidth-tagWidth, y, squawkPrefix, s.pal.Muted)
-	pen = text.Draw(dst, face, pen, y, code, s.pal.Ink)
-	text.Draw(dst, face, pen, y, tag, s.pal.Accent)
+	s.drawEmergency(dst, pen+stripGap, second+(lineHeight(body)-lineHeight(s.faces.Small))/2, plane)
 }
 
-// The three figures along the bottom of the card, in the order they are
-// drawn and given up as the column narrows.
-const (
-	figureDistance = iota
-	figureAltitude
-	figureSpeed
-
-	// figureCount is how many figures there are, which is what every loop over
-	// them runs to.
-	figureCount
-)
-
-// cardFigureValues are the widest plausible value each figure can hold, used
-// to measure a layout rather than the value actually on screen. Sizing from
-// the widest plausible value is what keeps the figures still: a figure
-// measured from its own contents would shift sideways the moment a value
-// changed width, and an altitude climbing through a thousand feet would then
-// nudge the speed figure beside it on every such frame.
+// drawCardFigures sets the block's rows of big figures and the words under
+// them.
 //
-//nolint:gochecknoglobals // the widest plausible values are data, and an array cannot be const.
-var cardFigureValues = [figureCount]string{
-	figureDistance: "999.9",
-	figureAltitude: "999,999",
-	figureSpeed:    "999",
-}
+// The words are drawn whether or not there is an aeroplane to put figures over
+// them. They are what the block is, and a panel that lost its own structure
+// when the sky went quiet would read as a panel that had broken.
+func (s *Scene) drawCardFigures(col *layout, plan cardPlan, frame source.Frame, sel selection) {
+	top := col.top + lineHeight(s.faces.Small) + rowLead + s.identHeight(plan.scale)
 
-// cardFigureUnits are the unit suffixes that go with cardFigureValues.
-//
-//nolint:gochecknoglobals // ditto.
-var cardFigureUnits = [figureCount]string{
-	figureDistance: unitNm,
-	figureAltitude: unitFT,
-	figureSpeed:    unitKT,
-}
+	for row := range plan.rows {
+		top += cardLead
 
-// cardFigureStage is one attempt at fitting the three figures in the card's
-// width, in the order they are tried.
-type cardFigureStage struct {
-	// body draws the figures in Body at scale 1 instead of Large, which is
-	// tried once the unit suffixes are already gone and the card is still too
-	// narrow.
-	body bool
-	unit bool
-	show [figureCount]bool
-}
-
-// cardFigureStages is the shrink order a narrow card falls through: full
-// size with units, full size without them, Body instead of Large, the speed
-// figure dropped, then the distance figure dropped too. Altitude is never in
-// the drop list, because it is the one figure the card cannot do without.
-//
-//nolint:gochecknoglobals // a fallback order is data, and an array cannot be const.
-var cardFigureStages = [...]cardFigureStage{
-	{unit: true, show: [figureCount]bool{figureDistance: true, figureAltitude: true, figureSpeed: true}},
-	{show: [figureCount]bool{figureDistance: true, figureAltitude: true, figureSpeed: true}},
-	{body: true, show: [figureCount]bool{figureDistance: true, figureAltitude: true, figureSpeed: true}},
-	{body: true, show: [figureCount]bool{figureDistance: true, figureAltitude: true}},
-	{body: true, show: [figureCount]bool{figureAltitude: true}},
-}
-
-// cardFigureLayout is where each shown figure goes, and what it is drawn
-// with. It is worked out once per card rather than carried as loose
-// arguments, because the font and the unit suffix are the same for every
-// figure in a given stage.
-type cardFigureLayout struct {
-	rects [figureCount]image.Rectangle
-	show  [figureCount]bool
-	font  *psf.Font
-	unit  bool
-}
-
-// planCardFigures measures the three figures against the box they have to
-// share and returns the first stage that fits. If nothing fits even with
-// only the altitude figure left, that figure is still placed: there is
-// nothing further to give up, so a card too narrow for it draws it anyway
-// rather than showing nothing at all.
-func (s *Scene) planCardFigures(box image.Rectangle) cardFigureLayout {
-	for _, stage := range cardFigureStages[:len(cardFigureStages)-1] {
-		if layout, fits := s.fitFigures(box, s.stageFont(stage), stage.unit, stage.show); fits {
-			return layout
-		}
-	}
-
-	last := cardFigureStages[len(cardFigureStages)-1]
-
-	return s.forceFigures(box, s.stageFont(last), last.unit, last.show)
-}
-
-// stageFont is the font a stage draws its figures in: Body instead of Large
-// once the card has given up on full size.
-func (s *Scene) stageFont(stage cardFigureStage) *psf.Font {
-	if stage.body {
-		return s.faces.Body
-	}
-
-	return s.faces.Large
-}
-
-// measureFigures reports each shown figure's width at font and unit, plus
-// their total and how many are shown, so fitFigures and forceFigures build a
-// layout from the same numbers instead of two ways of measuring the same
-// thing.
-func (s *Scene) measureFigures(font *psf.Font, unit bool, show [figureCount]bool) ([figureCount]int, int, int) {
-	var widths [figureCount]int
-
-	total, count := 0, 0
-
-	for index := range figureCount {
-		if !show[index] {
-			continue
+		if sel.found {
+			s.drawCardValues(col, plan, row, top, frame, sel.plane)
 		}
 
-		widths[index] = figureWidth(font, s.faces.Small, cardFigureValues[index], cardFigureUnits[index], unit)
-		total += widths[index]
-		count++
+		s.drawCardLabels(col, plan, row, top+lineHeight(s.faces.Large))
+		top += s.figureRowHeight()
 	}
-
-	return widths, total, count
 }
 
-// fitFigures lays out the shown figures if they fit side by side in box with
-// at least columnGap between them, and reports false without placing them
-// otherwise, so the caller can move on to the next stage without paying for a
-// placement it would only throw away.
-func (s *Scene) fitFigures(
-	box image.Rectangle, font *psf.Font, unit bool, show [figureCount]bool,
-) (cardFigureLayout, bool) {
-	layout := cardFigureLayout{show: show, font: font, unit: unit}
-
-	if font == nil {
-		return layout, false
-	}
-
-	widths, total, count := s.measureFigures(font, unit, show)
-	if count == 0 || total+max(count-1, 0)*columnGap > box.Dx() {
-		return layout, false
-	}
-
-	layout.rects = placeFigures(box, widths, show, total, count)
-
-	return layout, true
-}
-
-// forceFigures places the shown figures the way fitFigures does, without
-// checking that they fit. It exists for the last stage only, where altitude
-// is the one figure left and there is nowhere further to shrink.
-func (s *Scene) forceFigures(box image.Rectangle, font *psf.Font, unit bool, show [figureCount]bool) cardFigureLayout {
-	layout := cardFigureLayout{show: show, font: font, unit: unit}
-
-	if font == nil {
-		return layout
-	}
-
-	widths, total, count := s.measureFigures(font, unit, show)
-	if count == 0 {
-		return layout
-	}
-
-	layout.rects = placeFigures(box, widths, show, total, count)
-
-	return layout
-}
-
-// figureWidth is one figure's width at font: the widest plausible value,
-// plus, when the unit suffix is still being drawn, the gap before it and its
-// own width in small.
+// drawCardValues sets one row's figures.
 //
-//nolint:revive // flag-parameter: withUnit picks which of two widths to measure, not a mode to branch deeper on.
-func figureWidth(font, small *psf.Font, value, unit string, withUnit bool) int {
-	width, _ := text.Measure(font, value)
-	if !withUnit {
-		return width
-	}
-
-	unitWidth, _ := text.Measure(small, unit)
-
-	return width + unitGap + unitWidth
-}
-
-// placeFigures spreads the shown figures across box left to right, so the
-// first starts on its left edge and the last one's own width finishes on its
-// right edge. The slack between them is shared the way rowPlan.place shares
-// it: interpolated on the figure's position rather than added as one fixed
-// gap, so the last figure does not stop short of the edge it is meant to
-// reach.
-func placeFigures(
-	box image.Rectangle, widths [figureCount]int, show [figureCount]bool, total, count int,
-) [figureCount]image.Rectangle {
-	var rects [figureCount]image.Rectangle
-
-	slack := max(box.Dx()-total-max(count-1, 0)*columnGap, 0)
-	gaps := max(count-1, 1)
-	used, seen := 0, 0
-
-	for index := range figureCount {
-		if !show[index] {
-			continue
-		}
-
-		left := box.Min.X + used + seen*columnGap + slack*seen/gaps
-		rects[index] = image.Rect(left, box.Min.Y, left+widths[index], box.Max.Y)
-		used += widths[index]
-		seen++
-	}
-
-	return rects
-}
-
-// drawCardFigures sets the three numbers along the bottom of the card, each
-// with its unit small and muted beside it when there is room for one.
-//
-// The layout is measured rather than divided into three equal columns: an
-// equal division has no idea how wide "999,999 FT" actually is, and on a
-// right column narrower than about 760 pixels that let the three figures run
-// into each other. planCardFigures works out how much of the three the card
-// has room for before anything is drawn, and each figure is formatted and
-// drawn immediately afterwards, one at a time in the order it is laid out,
-// because they all share the scene's scratch buffers and formatting them all
-// up front would leave three slices pointing at the same bytes.
-func (s *Scene) drawCardFigures(
-	dst *canvas.Canvas, box image.Rectangle, receiver source.Receiver, plane airplane.Snapshot,
+// The two rows are written out rather than dispatched through a table indexed
+// by the figure. Each of the five is its own reading with its own colour and
+// its own way of being unknown, and none of them is interchangeable with the
+// one beside it, so a table would be five one-line entries plus the machinery
+// to walk them.
+func (s *Scene) drawCardValues(
+	col *layout, plan cardPlan, row, top int, frame source.Frame, plane airplane.Snapshot,
 ) {
-	plan := s.planCardFigures(box)
-	if plan.font == nil {
+	if row == cardTopRow {
+		s.drawCardLevel(col.dst, col.left+plan.left[cardLevel], top, plane)
+		drawBytes(col.dst, s.faces.Large, col.left+plan.left[cardSpeed], top, s.speed(plane.Velocity), s.pal.Ink)
+		s.drawCardTrack(col.dst, col.left+plan.left[cardTrack], top, plane)
+
 		return
 	}
 
+	s.drawCardRange(col.dst, col.left+plan.left[cardRange], top, frame.Receiver, plane)
+	s.drawCardBearing(col.dst, col.left+plan.left[cardBearing], top, frame.Receiver, plane)
+}
+
+// drawCardLabels writes the small word under each figure of one row.
+func (s *Scene) drawCardLabels(col *layout, plan cardPlan, row, top int) {
+	for index := cardRowStart[row]; index < cardRowStart[row+1]; index++ {
+		text.Draw(col.dst, s.faces.Small, col.left+plan.left[index], top, cardLabels[index], s.pal.Data,
+			text.WithSpacing(labelTracking))
+	}
+}
+
+// drawCardLevel writes the level in hundreds of feet with the trend mark after
+// it, both in the colour of the altitude band the aircraft is in.
+//
+// The band colour rather than the reading ink, because it is the one figure on
+// the block the scope beside it also says: the aeroplane out there is that
+// colour, and the level is why.
+func (s *Scene) drawCardLevel(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+	band := s.bandColour(plane.Altitude)
+
+	pen := drawBytes(dst, s.faces.Large, left, top, s.flightLevel(plane.Altitude), band)
+	s.drawTrend(dst, s.faces.Large, pen, top, plane.VertRate, band)
+}
+
+// drawCardTrack writes the course the aircraft is flying, or dashes when
+// nobody has decoded one.
+func (s *Scene) drawCardTrack(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+	if !knownHeading(plane.Heading) {
+		text.Draw(dst, s.faces.Large, left, top, trackUnknown, s.pal.Muted)
+
+		return
+	}
+
+	drawBytes(dst, s.faces.Large, left, top, s.degrees(plane.Heading), s.pal.Ink)
+}
+
+// drawCardRange writes how far the aircraft is from the receiver.
+func (s *Scene) drawCardRange(
+	dst *canvas.Canvas, left, top int, receiver source.Receiver, plane airplane.Snapshot,
+) {
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 
-	if plan.show[figureDistance] {
-		s.drawPlannedFigure(dst, plan, figureDistance, figure{value: s.distance(away), unit: unitNm, ink: s.pal.Ink})
-	}
-
-	if plan.show[figureAltitude] {
-		s.drawPlannedFigure(dst, plan, figureAltitude,
-			figure{value: s.thousands(plane.Altitude), unit: unitFT, ink: s.bandColour(plane.Altitude)})
-	}
-
-	if plan.show[figureSpeed] {
-		s.drawPlannedFigure(dst, plan, figureSpeed,
-			figure{value: s.speed(plane.Velocity), unit: unitKT, ink: s.pal.Ink})
-	}
+	drawBytes(dst, s.faces.Large, left, top, s.distance(away), s.pal.Ink)
 }
 
-// figure is one of the three numbers along the bottom of the card.
-//
-// The three parts travel together because they belong to one cell, and because
-// the altitude figure takes its own ink: passing a sixth loose argument to
-// drawPlannedFigure would have made its signature the longest in the package
-// for no gain in clarity.
-type figure struct {
-	value []byte
-	unit  string
-	ink   color.RGBA
-}
+// drawCardBearing writes the bearing from the receiver with the needle turned
+// to it, which is the one figure on the block that is a direction to look in
+// rather than a reading to note.
+func (s *Scene) drawCardBearing(
+	dst *canvas.Canvas, left, top int, receiver source.Receiver, plane airplane.Snapshot,
+) {
+	face := s.faces.Large
 
-// drawPlannedFigure draws one figure at the box the plan measured for it, in
-// the font the plan settled on, with its unit suffix only when the plan kept
-// room for one. The unit stays muted whatever the number is set in: the
-// number is the reading and the unit is the label.
-func (s *Scene) drawPlannedFigure(dst *canvas.Canvas, plan cardFigureLayout, index int, fig figure) {
-	rect := plan.rects[index]
+	bearing, known := bearingTo(receiver, plane)
+	if !known {
+		text.Draw(dst, face, left, top, detailUnknown, s.pal.Muted)
 
-	pen := drawBytes(dst, plan.font, rect.Min.X, rect.Min.Y, fig.value, fig.ink)
-	if !plan.unit {
 		return
 	}
 
-	unitTop := rect.Min.Y + lineHeight(plan.font) - lineHeight(s.faces.Small)
-	text.Draw(dst, s.faces.Small, pen+unitGap, unitTop, fig.unit, s.pal.Muted)
+	pen := drawBytes(dst, face, left, top, s.degrees(bearing), s.pal.Ink)
+	s.drawArrow(dst, pen+arrowGap, top+lineHeight(face)/2, bearing, s.pal.Ink)
 }
 
-// distance writes a range in nautical miles, or a dash when the aircraft has
-// no position.
+// drawCardPlain writes the sentence under the block, in three clauses.
 //
-// uAirwaves reports MaxFloat64 rather than an error for an unknown position,
-// so that sentinel has to be caught here or the card would claim the aircraft
-// is 179769313486231570000... nautical miles away.
-func (s *Scene) distance(valueNm float64) []byte {
-	if valueNm == math.MaxFloat64 || math.IsNaN(valueNm) {
-		return append(s.digits[:0], '-')
+// Each clause is measured against the widest it can ever be rather than
+// against what is in it, and a clause that will not fit whole is dropped along
+// with everything after it. A sentence cut mid-word says less than a shorter
+// one that finishes, and measuring the worst case is what stops the line
+// growing and shrinking under the block as an aircraft climbs.
+func (s *Scene) drawCardPlain(col *layout, plan cardPlan, frame source.Frame, sel selection) {
+	if !plan.plain || !sel.found {
+		return
 	}
 
-	return s.fixed(valueNm, distanceDecimals)
+	face := s.faces.Small
+	left := col.left + cardRule + cardPadX
+	top := col.top + lineHeight(face) + rowLead + s.blockHeight(plan) + rowLead
+
+	if left+measure(face, widestPlainLevel) > col.right {
+		return
+	}
+
+	pen := s.drawPlainLevel(col.dst, left, top, sel.plane)
+
+	pen, drawn := s.drawPlainPlace(col.dst, pen, top, col.right, sel.plane)
+	if !drawn {
+		return
+	}
+
+	s.drawPlainSeen(col.dst, pen, top, col.right, frame.Now, sel.plane)
 }
 
-// drawLegend explains what the colours on the scope mean, which is the one
-// thing there that cannot be worked out by looking at it.
-//
-// What it explains depends on the colour mode, so the two versions are two
-// functions rather than one with a branch in the middle of it: the altitude
-// legend is a fixed list of three and the airline legend is counted off the
-// frame.
-func (s *Scene) drawLegend(col *layout) {
+// drawPlainLevel writes the first clause: the altitude in feet and what the
+// aircraft is doing with it.
+func (s *Scene) drawPlainLevel(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) int {
 	face := s.faces.Small
 
-	height := lineHeight(face)
-	if height == 0 || !col.fits(height) {
-		return
+	pen := s.drawPlainFeet(dst, left, top, plane.Altitude)
+	pen = text.Draw(dst, face, pen, top, plainFeet, s.pal.Muted)
+
+	if level(plane.VertRate) {
+		return text.Draw(dst, face, pen, top, plainLevelWord, s.pal.Muted)
 	}
 
-	top := col.bottom - height
-
-	if s.colour == ColourAirline {
-		s.drawAirlineLegend(col, face, top)
-	} else {
-		s.drawBandLegend(col, face, top)
+	word := plainClimbing
+	if plane.VertRate < 0 {
+		word = plainDescending
 	}
 
-	col.bottom -= height + blockGap
+	pen = text.Draw(dst, face, pen, top, word, s.pal.Muted)
+	pen = drawBytes(dst, face, pen, top, s.thousands(math.Abs(plane.VertRate)), s.pal.Muted)
+
+	return text.Draw(dst, face, pen, top, plainRate, s.pal.Muted)
 }
 
-// drawBandLegend names the three altitude bands.
+// drawPlainFeet writes the altitude itself, or dashes for one nobody has
+// decoded.
 //
-// An entry that will not fit whole is dropped rather than half drawn. The test
-// measures the label as well as the swatch, because a swatch that fits with a
-// label that does not is the case a narrow column actually produces, and the
-// label is the part that would have run into the margin.
-func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
-	pen := col.left
+// An altitude of zero is undecoded rather than sea level, which is the reading
+// flightLevel gives it and the one bandColour and the 3D view's height both
+// work from.
+func (s *Scene) drawPlainFeet(dst *canvas.Canvas, left, top int, altitudeFt float64) int {
+	face := s.faces.Small
 
-	for band, entry := range s.legendEntries() {
-		width, _ := text.Measure(face, entry.label, text.WithSpacing(labelTracking))
-		if pen+swatchSide+swatchGap+width > col.right {
-			break
-		}
-
-		box := image.Rect(pen, top, pen+swatchSide, top+swatchSide)
-		col.dst.FillRect(box, entry.col)
-		s.markLegendEntry(col.dst, box, s.filter.marksBand(band))
-
-		pen = text.Draw(col.dst, face, box.Max.X+swatchGap, top, entry.label, s.pal.Muted,
-			text.WithSpacing(labelTracking))
-		pen += legendGap
+	if math.IsNaN(altitudeFt) || math.IsInf(altitudeFt, 0) || altitudeFt <= 0 {
+		return text.Draw(dst, face, left, top, detailUnknown, s.pal.Muted)
 	}
+
+	return drawBytes(dst, face, left, top, s.thousands(altitudeFt), s.pal.Muted)
 }
 
-// markLegendEntry rings a legend swatch when the filter is on that entry, and
-// does nothing when it is not.
+// drawPlainPlace writes the second clause, where the aeroplane is, and reports
+// whether the sentence can carry on.
 //
-// The ring sits outside the swatch rather than inside it, so the colour the
-// legend is explaining keeps every one of its own pixels. It is drawn in the
-// reading ink because it is a statement about the scene rather than another
-// colour to look up.
-//
-//nolint:revive // flag-parameter: marked picks whether to draw, not a mode to branch deeper on.
-func (s *Scene) markLegendEntry(dst *canvas.Canvas, box image.Rectangle, marked bool) {
-	if !marked {
-		return
+// An aircraft with no position drops the clause and keeps the sentence going,
+// because the clause after it is about the receiver hearing the aeroplane
+// rather than about seeing it. A clause dropped for want of room stops the
+// line there instead.
+func (s *Scene) drawPlainPlace(
+	dst *canvas.Canvas, left, top, right int, plane airplane.Snapshot,
+) (int, bool) {
+	if !hasPosition(plane) {
+		return left, true
 	}
 
-	dst.Rect(box.Inset(-swatchMark), s.pal.Ink)
+	face := s.faces.Small
+	if left+measure(face, widestPlainPlace) > right {
+		return left, false
+	}
+
+	pen := text.Draw(dst, face, left, top, plainSeparator, s.pal.Muted)
+	pen = drawBytes(dst, face, pen, top, s.place(plane.Latitude, 'N', 'S'), s.pal.Muted)
+	pen = text.Draw(dst, face, pen, top, plainSlash, s.pal.Muted)
+
+	return drawBytes(dst, face, pen, top, s.place(plane.Longitude, 'E', 'W'), s.pal.Muted), true
 }
 
-// drawAirlineLegend names the operators with the most aircraft on the scope,
-// then OTHER when anything on the field has no colour of its own.
-//
-// Every entry gets an equal slice of the column and its name is cut to what is
-// left of that slice. A legend measured from the names instead would put the
-// swatches in a different place on every frame, since the names change as
-// aircraft come and go.
-//
-// The tally is counted at the top of Draw rather than here, because the f key's
-// cycle walks these same entries in this same order and the minimal and 3D
-// views have no legend to count one. See countOperators.
-func (s *Scene) drawAirlineLegend(col *layout, face *psf.Font, top int) {
-	slots := s.counts.shown
-	if s.counts.other {
-		slots++
-	}
-
-	if slots == 0 {
-		return
-	}
-
-	width := (col.right - col.left) / slots
-
-	for index := range s.counts.shown {
-		s.drawOperatorEntry(col.dst, face, image.Pt(col.left+index*width, top), width, s.counts.seen[index])
-	}
-
-	if s.counts.other {
-		s.drawOtherEntry(col.dst, face, image.Pt(col.left+s.counts.shown*width, top))
-	}
-}
-
-// drawOperatorEntry sets one airline's swatch, designator and name.
-func (s *Scene) drawOperatorEntry(
-	dst *canvas.Canvas, face *psf.Font, origin image.Point, width int, entry operatorCount,
+// drawPlainSeen closes the sentence with how long ago the contact was heard.
+func (s *Scene) drawPlainSeen(
+	dst *canvas.Canvas, left, top, right int, now time.Time, plane airplane.Snapshot,
 ) {
-	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
-	dst.FillRect(box, s.operatorColour(entry.airline))
-	s.markLegendEntry(dst, box, s.filter.marksOperator(entry.airline.ICAO))
-
-	pen := text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, entry.airline.ICAO, s.pal.Ink,
-		text.WithSpacing(labelTracking))
-	pen += swatchGap
-
-	room := origin.X + width - legendGap - pen
-	text.Draw(dst, face, pen, origin.Y, clip(entry.airline.Name, fitRunes(face, room, labelTracking)), s.pal.Muted,
-		text.WithSpacing(labelTracking))
-}
-
-// drawOtherEntry closes the airline legend, standing for every aircraft the
-// database has no colour for.
-func (s *Scene) drawOtherEntry(dst *canvas.Canvas, face *psf.Font, origin image.Point) {
-	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
-	dst.FillRect(box, s.pal.Muted)
-	s.markLegendEntry(dst, box, s.filter.marksOther())
-
-	text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, legendOther, s.pal.Muted, text.WithSpacing(labelTracking))
-}
-
-// fitRunes is how many glyphs of face fit in width pixels at this tracking.
-// The last glyph carries no gap after it, which is why the tracking is added
-// back before the divide.
-func fitRunes(face *psf.Font, width, tracking int) int {
-	step := glyphWidth(face) + tracking
-	if step <= 0 {
-		return 0
+	face := s.faces.Small
+	if left+measure(face, widestPlainSeen) > right {
+		return
 	}
 
-	return max((width+tracking)/step, 0)
-}
-
-// legendEntries pairs each band with its colour, in the order the bands go up.
-//
-// It is indexed by the band constants rather than written out in order,
-// because the f key selects a band by index and the legend has to ring the one
-// it selected. Two lists in the same order by coincidence would be one
-// reordering away from ringing the wrong row.
-func (s *Scene) legendEntries() [bandCount]legendEntry {
-	return [bandCount]legendEntry{
-		bandLow:  {col: s.pal.AltLow, label: legendLow},
-		bandMid:  {col: s.pal.AltMid, label: legendMid},
-		bandHigh: {col: s.pal.AltHigh, label: legendHigh},
-	}
+	pen := text.Draw(dst, face, left, top, plainSeparator+plainSeen, s.pal.Muted)
+	text.Draw(dst, face, pen, top, seenBucket(now.Sub(plane.LastUpdate)), s.pal.Muted)
 }

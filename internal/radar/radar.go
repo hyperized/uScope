@@ -1,9 +1,14 @@
 // Package radar draws the scope.
 //
-// It is the scene DESIGN.md is the contract for: a header band, a square
-// scope on the left with range rings and one thin trail per aircraft, a right
-// column holding the selected-flight panel, the compact rows and the legend,
-// and a key bar along the bottom.
+// It is the scene DESIGN.md is the contract for: a header band, a square scope
+// on the left with range rings and one thin trail per aircraft, a right column
+// holding a board of flight strips and the legend under them, and a row of
+// softkeys along the bottom.
+//
+// The scene follows the glass cockpit's colour grammar, which internal/theme
+// carries: magenta marks the selected aircraft and nothing else, cyan is a
+// reading about the machine, green is valid or engaged, amber is a caution and
+// red is a warning. Nothing here names a colour of its own.
 //
 // There are four views, which are two pictures times two amounts of
 // furniture: flat or in perspective, with the chrome or with none of it. v
@@ -37,11 +42,12 @@
 //
 // Every size comes from the canvas bounds and the metrics of the face it is
 // set in. A block that does not fit is dropped rather than drawn over its
-// neighbour, so the same scene renders at 1280x720 on the panel and on a
-// canvas of a few dozen pixels. Below 640 pixels wide the right column goes;
-// below 320 pixels tall the labels go. The w key takes the column away at any
-// width, which gives the scope and the 3D view the whole frame between the
-// header and the key bar.
+// neighbour, so the same scene renders at 1280x720 on the panel and on a canvas
+// of a few dozen pixels. A strip gives its fields up one at a time as the column
+// narrows, in the order strips.go sets out. Below 640 pixels wide the right
+// column goes altogether; below 320 pixels tall the labels go. The w key takes
+// the column away at any width, which gives the scope and the 3D view the whole
+// frame between the header and the softkeys.
 //
 // A Scene carries the selection, the range mode and the trail toggle, so it
 // is not safe for concurrent use. The run loop calls Draw and Handle from one
@@ -77,12 +83,23 @@ const (
 	headerPadY = 6
 	ruleHeight = 1
 
-	// The key caps along the bottom: padding inside the filled box, the gap
-	// from a cap to its own label, and the gap on to the next cap.
-	capPadX  = 5
-	capPadY  = 3
-	capGap   = 6
-	entryGap = 18
+	// The softkeys along the bottom. Every key is one box holding its cap
+	// letter and the word for what it does, the way the bottom row of a glass
+	// panel works, so the bar reads as a strip of switches under the picture
+	// rather than as a caption on it.
+	//
+	// keyPadX is the air inside the box at either end, keyPadY the air above
+	// and below the type, keyCapGap the gap from the cap letter to its label,
+	// and keyGap the gap on to the next box. keyEngagedHeight and
+	// keyEngagedInset are the green bar that marks a setting that is on: two
+	// pixels tall, held off the box's own sides so it reads as a light inside
+	// the switch rather than as its bottom edge.
+	keyPadX          = 4
+	keyPadY          = 3
+	keyCapGap        = 5
+	keyGap           = 5
+	keyEngagedHeight = 2
+	keyEngagedInset  = 2
 
 	// Letter spacing for the small all-caps labels. Terminus is tight at 6
 	// pixels wide, and a tracked-out label reads as a heading rather than as
@@ -356,10 +373,6 @@ type Scene struct {
 	selICAO  string
 	selIndex int
 	icaos    []string
-
-	// rowStart is the first compact row on screen. The window follows the
-	// selection so the selected aircraft is always one of the rows.
-	rowStart int
 
 	// pinned says the operator chose this aircraft. Until they do, the
 	// selection follows the nearest contact rather than sticking to whichever
@@ -696,7 +709,7 @@ func lineHeight(face *psf.Font) int {
 }
 
 // glyphWidth is how wide one glyph of a face is, or zero when the face is
-// missing. The compact rows size their columns from it.
+// missing. The flight strips size their fields from it.
 func glyphWidth(face *psf.Font) int {
 	if face == nil {
 		return 0

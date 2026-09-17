@@ -15,6 +15,7 @@ import (
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // view3DBox is the part of the panel-sized canvas the perspective scene is
@@ -258,6 +259,29 @@ func TestView3DEnvelopeToggle(t *testing.T) {
 	}
 }
 
+// shoreLineOffTheMeridian is a synthetic coastline running north-south, offset
+// far enough from the receiver's own longitude that it never lands on one of
+// the envelope's eight meridians in the 3D view.
+//
+// shoreLineThroughReceiver runs exactly through the receiver, which the flat
+// scope reads fine but which the envelope's own due-north meridian happens to
+// project onto exactly the same pixels in perspective: with the envelope on
+// by default, toggling the coastline off then leaves the total painted count
+// unchanged, because the meridian is still sitting on every pixel the coast
+// used to own.
+func shoreLineOffTheMeridian() shore.Polyline {
+	const (
+		shoreHalfSpanDeg = 1.0
+		shoreLonOffset   = 0.3
+	)
+
+	return shore.Polyline{
+		{Lat: receiverLat - shoreHalfSpanDeg, Lon: receiverLon + shoreLonOffset},
+		{Lat: receiverLat, Lon: receiverLon + shoreLonOffset},
+		{Lat: receiverLat + shoreHalfSpanDeg, Lon: receiverLon + shoreLonOffset},
+	}
+}
+
 // TestView3DShoreToggle checks that the coastline is drawn on the ground of
 // the perspective view, off the scope's own toggle rather than minimal's.
 //
@@ -268,7 +292,7 @@ func TestView3DShoreToggle(t *testing.T) {
 	t.Parallel()
 
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
-	set := syntheticShoreSet(t, shoreLineThroughReceiver())
+	set := syntheticShoreSet(t, shoreLineOffTheMeridian())
 
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithShore(set))
 	scene.Apply(view3DSettings())
@@ -384,8 +408,14 @@ func TestView3DSelection(t *testing.T) {
 func TestView3DWithoutAPosition(t *testing.T) {
 	t.Parallel()
 
+	// A high-band altitude, not a low one: Night's AltLow is exactly Night's
+	// OK, and the bar under an engaged softkey is drawn in OK whether or not
+	// anything else is on screen, so counting AltLow here would be counting
+	// the key bar as well as any aeroplane. AltHigh has no such double.
+	const highAltitude = 36000.0
+
 	frame := covered(source.Frame{
-		Planes:   []airplane.Snapshot{scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)},
+		Planes:   []airplane.Snapshot{scenePlane("484AC1", "KLM123", 45, 12, highAltitude, 41)},
 		Receiver: source.Receiver{Label: source.LabelNone, Mode: source.FixNone},
 		Now:      sceneClock,
 	})
@@ -402,7 +432,7 @@ func TestView3DWithoutAPosition(t *testing.T) {
 		t.Error("the 3D view drew no envelope without a position, want it drawn anyway")
 	}
 
-	if got := countColour(canv, view3DBox, theme.Night.AltLow); got != 0 {
+	if got := countColour(canv, view3DBox, theme.Night.AltHigh); got != 0 {
 		t.Errorf("the 3D view drew %d aircraft pixels without a position, want none", got)
 	}
 }
@@ -529,8 +559,8 @@ func TestView3DOrbitMovesThePicture(t *testing.T) {
 }
 
 // The two colours the 3D view draws its wireframes in: the measured envelope
-// faded 35 percent of the way from the field towards the accent, and the
-// theoretical bowl 60 percent of the way towards the muted colour.
+// faded 35 percent of the way from the field towards the data colour, and the
+// theoretical bowl the same 35 percent of the way towards the muted colour.
 //
 // They are worked out here rather than read off the scene because the mix is
 // unexported, and they are worked out rather than written down so a change to
@@ -541,8 +571,8 @@ func TestView3DOrbitMovesThePicture(t *testing.T) {
 //
 //nolint:gochecknoglobals // a colour is data, read-only after init.
 var (
-	measuredWireInk = fadeInto(theme.Night.Field, theme.Night.Accent, 0.35)
-	bowlWireInk     = fadeInto(theme.Night.Field, theme.Night.Muted, 0.60)
+	measuredWireInk = fadeInto(theme.Night.Field, theme.Night.Data, 0.35)
+	bowlWireInk     = fadeInto(theme.Night.Field, theme.Night.Muted, 0.35)
 )
 
 // fadeInto mixes ink towards field by alpha, where 1 is all ink and 0 all
@@ -568,22 +598,26 @@ func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
 // They are written down rather than derived because the arithmetic that places
 // them is the thing under test: a box worked out by re-running drawCaps' own
 // sums would move whenever the bar did and never fail. These came off a
-// rendered frame by scanning the bar row for runs of filled ink.
+// rendered frame by scanning the bar row for runs of softkey grey.
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	orbitCapBox    = image.Rect(844, 686, 860, 704)
-	envelopeCapBox = image.Rect(914, 686, 930, 704)
-	turnCapBox     = image.Rect(1002, 686, 1024, 704)
-	tiltCapBox     = image.Rect(1072, 686, 1100, 704)
+	orbitCapBox    = image.Rect(725, 682, 780, 704)
+	envelopeCapBox = image.Rect(785, 682, 861, 704)
+	turnCapBox     = image.Rect(866, 682, 922, 704)
+	tiltCapBox     = image.Rect(927, 682, 991, 704)
 
 	// scopeBarTail is the part of the bar row the twelve shared caps never
 	// reach, which is where all four of the boxes above sit.
-	//
-	// All five moved 64 pixels right when W WIDE joined keyCaps: the bar is
-	// laid out left to right, so a cap added before these takes everything
-	// after it along.
-	scopeBarTail = image.Rect(846, 686, 1280, 704)
+	scopeBarTail = image.Rect(725, 682, 1280, 704)
+
+	// orbitEngagedBar is the strip along the inside of orbitCapBox's bottom
+	// edge the engaged bar is drawn in, worked out the way autoEngagedBar in
+	// scene_external_test.go is.
+	orbitEngagedBar = image.Rect(
+		orbitCapBox.Min.X+keyEngagedInsetTest, orbitCapBox.Max.Y-keyPadYTest,
+		orbitCapBox.Max.X-keyEngagedInsetTest, orbitCapBox.Max.Y-keyPadYTest+keyEngagedHeightTest,
+	)
 )
 
 // TestView3DKeyBarListsTheCameraKeys checks that all four of the view's keys
@@ -655,7 +689,7 @@ func TestView3DKeyBarFitsAtPanelWidth(t *testing.T) {
 	scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourAirline})
 	scene.Draw(canv, 0)
 
-	_, last := paintedExtent(canv, keyBarBox)
+	last := paintedEnd(canv, keyBarBox)
 	if last < 0 {
 		t.Fatal("the key bar drew nothing at all, so this proves nothing")
 	}
@@ -678,8 +712,8 @@ func TestView3DKeyBarFitsAtPanelWidth(t *testing.T) {
 //
 // The orbit is on from the first frame, so before o toggled, the commonest
 // press was one that rebased an azimuth already where it was: nothing on
-// screen changed and the key read as dead. A filled cap that goes hollow is
-// the bar saying which of the two states the camera is in.
+// screen changed and the key read as dead. The engaged bar going out is the
+// bar saying which of the two states the camera is in.
 func TestView3DOrbitCapFollowsTheKey(t *testing.T) {
 	t.Parallel()
 
@@ -689,11 +723,8 @@ func TestView3DOrbitCapFollowsTheKey(t *testing.T) {
 	scene.Apply(view3DSettings())
 	scene.Draw(canv, 0)
 
-	orbitingInk := countColour(canv, orbitCapBox, theme.Night.Ink)
-	orbitingField := countColour(canv, orbitCapBox, theme.Night.Field)
-
-	if orbitingInk <= orbitingField {
-		t.Errorf("orbit on: %d ink and %d field pixels, want a filled cap", orbitingInk, orbitingField)
+	if got := countColour(canv, orbitEngagedBar, theme.Night.OK); got == 0 {
+		t.Error("orbit on: no OK pixels in the engaged bar, want it drawn")
 	}
 
 	if !press(scene, 'o') {
@@ -702,21 +733,14 @@ func TestView3DOrbitCapFollowsTheKey(t *testing.T) {
 
 	scene.Draw(canv, 0)
 
-	stoppedInk := countColour(canv, orbitCapBox, theme.Night.Ink)
-	stoppedField := countColour(canv, orbitCapBox, theme.Night.Field)
-
-	if stoppedField <= stoppedInk {
-		t.Errorf("orbit off: %d ink and %d field pixels, want a hollow cap", stoppedInk, stoppedField)
-	}
-
-	if stoppedInk == 0 {
-		t.Error("the hollow orbit cap drew no ink at all, want an outline and a letter")
+	if got := countColour(canv, orbitEngagedBar, theme.Night.OK); got != 0 {
+		t.Errorf("orbit off: %d OK pixels in the engaged bar, want none", got)
 	}
 
 	press(scene, 'o')
 	scene.Draw(canv, 0)
 
-	if got := countColour(canv, orbitCapBox, theme.Night.Ink); got != orbitingInk {
-		t.Errorf("a second o left %d ink pixels in the cap, want the original %d", got, orbitingInk)
+	if got := countColour(canv, orbitEngagedBar, theme.Night.OK); got == 0 {
+		t.Error("a second o left no OK pixels in the engaged bar, want the orbit running again")
 	}
 }

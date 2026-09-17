@@ -1,8 +1,8 @@
 package radar
 
 import (
+	"encoding/binary"
 	"errors"
-	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -30,6 +30,12 @@ import (
 const (
 	icaoFirst  = "AAA111"
 	icaoSecond = "BBB222"
+
+	// icaoSampleReal is a real KLM 737's hex, reused wherever a test in this
+	// package needs an aircraft that looks like a live contact rather than a
+	// fixture with an obviously synthetic ICAO. Named once so goconst does
+	// not flag the repetition.
+	icaoSampleReal = "484AC1"
 )
 
 // The four cardinal headings. They are named rather than written out at each
@@ -166,35 +172,6 @@ func TestSceneCounter(t *testing.T) {
 	}
 }
 
-// TestSceneIndex checks the leading-zero padding under ten. A negative
-// position never arrives in production (the card clamps to notSelected
-// before calling index), but the buffer arithmetic still has to not panic on
-// one.
-func TestSceneIndex(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct {
-		name  string
-		value int
-		want  string
-	}{
-		{name: "zero gets a leading zero", value: 0, want: "00"},
-		{name: "single digit gets a leading zero", value: 5, want: "05"},
-		{name: "ten needs no padding", value: 10, want: "10"},
-		{name: "three digits", value: 100, want: "100"},
-		{name: "a negative value is not padded", value: -3, want: "-3"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			scene := &Scene{}
-			if got := string(scene.index(testCase.value)); got != testCase.want {
-				t.Errorf("index(%v) = %q, want %q", testCase.value, got, testCase.want)
-			}
-		})
-	}
-}
-
 // Headings that exercise degrees' own leading-zero and wraparound logic,
 // distinct from the compass boundary values above.
 const (
@@ -226,6 +203,42 @@ func TestSceneDegrees(t *testing.T) {
 			scene := &Scene{}
 			if got := string(scene.degrees(testCase.value)); got != testCase.want {
 				t.Errorf("degrees(%v) = %q, want %q", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestSceneFlightLevel checks the four shapes a data block's level figure
+// takes: two leading zeros under a thousand feet, one under ten thousand,
+// none from ten thousand up, and dashes for an altitude nobody has decoded,
+// which flightLevel's own comment draws a line under: zero is undecoded
+// rather than sea level.
+func TestSceneFlightLevel(t *testing.T) {
+	t.Parallel()
+
+	const (
+		belowThousandFt  = 500.0
+		belowTenThousand = 4000.0
+		tenThousandAndUp = 24000.0
+	)
+
+	for _, testCase := range []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{name: "zero reads as undecoded, not sea level", value: 0, want: "---"},
+		{name: caseNaNReadsAsDash, value: math.NaN(), want: "---"},
+		{name: "under a thousand feet gets two leading zeros", value: belowThousandFt, want: "005"},
+		{name: "under ten thousand feet gets one leading zero", value: belowTenThousand, want: "040"},
+		{name: "ten thousand feet and up has no leading zero", value: tenThousandAndUp, want: "240"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			if got := string(scene.flightLevel(testCase.value)); got != testCase.want {
+				t.Errorf("flightLevel(%v) = %q, want %q", testCase.value, got, testCase.want)
 			}
 		})
 	}
@@ -528,65 +541,6 @@ func TestIndexOf(t *testing.T) {
 
 			if got := indexOf(testCase.list, testCase.search); got != testCase.wantIndex {
 				t.Errorf("indexOf(%v, %q) = %d, want %d", testCase.list, testCase.search, got, testCase.wantIndex)
-			}
-		})
-	}
-}
-
-// trackWindowFit is the number of rows on screen every trackWindow case in
-// this file uses, and trackWindowCount the size of the aircraft list, unless
-// a case overrides one to make a particular branch fire.
-const (
-	trackWindowFit   = 5
-	trackWindowCount = 20
-)
-
-func TestTrackWindow(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct {
-		name         string
-		selIndex     int
-		initialStart int
-		fit          int
-		count        int
-		wantRowStart int
-	}{
-		{
-			name: "no selection resets the window to the top", selIndex: -1,
-			initialStart: 7, fit: trackWindowFit, count: trackWindowCount, wantRowStart: 0,
-		},
-		{
-			name: "a selection above the window pulls it up", selIndex: 2,
-			initialStart: 5, fit: trackWindowFit, count: trackWindowCount, wantRowStart: 2,
-		},
-		{
-			name: "a selection below the window pushes it down", selIndex: 12,
-			initialStart: 0, fit: trackWindowFit, count: trackWindowCount, wantRowStart: 8,
-		},
-		{
-			// A stale window from a previous, longer list is not itself moved
-			// by either branch (the selection is already inside it), so only
-			// the final clamp keeps it from going negative.
-			name: "a stale negative window clamps to zero", selIndex: 2,
-			initialStart: -5, fit: trackWindowCount, count: trackWindowCount, wantRowStart: 0,
-		},
-		{
-			// A stale window left over from a much longer list is not moved by
-			// either branch either, so only the final clamp pulls it back
-			// under the shrunk list's own count.
-			name: "a stale window past a shrunk list clamps to the end", selIndex: 52,
-			initialStart: 50, fit: trackWindowFit, count: 10, wantRowStart: 5,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			scene := &Scene{selIndex: testCase.selIndex, rowStart: testCase.initialStart}
-			scene.trackWindow(testCase.fit, testCase.count)
-
-			if scene.rowStart != testCase.wantRowStart {
-				t.Errorf("rowStart = %d, want %d", scene.rowStart, testCase.wantRowStart)
 			}
 		})
 	}
@@ -1526,9 +1480,9 @@ func TestScenePlace(t *testing.T) {
 	}
 }
 
-// rowPlanFaces loads the one face planRows and rowPlan measure their columns
-// against. A synthetic font would not exercise the real character widths the
-// column arithmetic is built on.
+// rowPlanFaces loads the body face several of the layout tests in this file
+// measure against. A synthetic font would not exercise the real character
+// widths the arithmetic is built on.
 func rowPlanFaces(tb testing.TB) *psf.Font {
 	tb.Helper()
 
@@ -1553,162 +1507,182 @@ func rowPlanSmall(tb testing.TB) *psf.Font {
 	return small
 }
 
-// TestRowPlanGeometry drives rowPlan's own arithmetic directly: which columns
-// count, how much room they need including the gap between them, and where
-// place() puts each edge.
-func TestRowPlanGeometry(t *testing.T) {
+// TestStripPlanGeometry drives stripPlan's own arithmetic directly: which
+// fields count, how much room they need including the gap between them, and
+// where place() puts each one.
+func TestStripPlanGeometry(t *testing.T) {
 	t.Parallel()
 
-	glyph := rowPlanFaces(t).Width()
-
-	t.Run("count tallies only the enabled columns", func(t *testing.T) {
+	t.Run("count tallies only the enabled fields", func(t *testing.T) {
 		t.Parallel()
 
-		var plan rowPlan
+		var plan stripPlan
 
-		plan.on[colIndex] = true
-		plan.on[colCallsign] = true
+		plan.on[fieldIdent] = true
+		plan.on[fieldLevel] = true
 
 		if got := plan.count(); got != 2 {
 			t.Errorf("count() = %d, want 2", got)
 		}
 	})
 
-	t.Run("width sums the enabled columns plus the gap between them", func(t *testing.T) {
+	t.Run("total sums the enabled fields plus the gap between them", func(t *testing.T) {
 		t.Parallel()
 
-		var plan rowPlan
+		const identWidth, levelWidth = 40, 30
 
-		plan.on[colIndex] = true
-		plan.on[colAltitude] = true
+		var plan stripPlan
 
-		want := rowColumns[colIndex].chars*glyph +
-			rowColumns[colAltitude].chars*glyph + rowColumns[colAltitude].extra + columnGap
+		plan.on[fieldIdent] = true
+		plan.width[fieldIdent] = identWidth
+		plan.on[fieldLevel] = true
+		plan.width[fieldLevel] = levelWidth
 
-		if got := plan.width(glyph); got != want {
-			t.Errorf("width(%d) = %d, want %d", glyph, got, want)
+		if got, want := plan.total(), identWidth+levelWidth+stripGap; got != want {
+			t.Errorf("total() = %d, want %d", got, want)
 		}
 	})
 
-	t.Run("place with no slack puts the first edge at its own width and the last at the far edge", func(t *testing.T) {
+	t.Run("place with no slack puts fields end to end, the gap included", func(t *testing.T) {
 		t.Parallel()
 
-		var plan rowPlan
+		const identWidth, levelWidth, left = 40, 30, 50
 
-		plan.on[colIndex] = true
-		plan.on[colCallsign] = true
+		var plan stripPlan
 
-		const left = 50
+		plan.on[fieldIdent] = true
+		plan.width[fieldIdent] = identWidth
+		plan.on[fieldLevel] = true
+		plan.width[fieldLevel] = levelWidth
 
-		available := plan.width(glyph)
-		plan.place(left, available, glyph)
+		available := plan.total()
+		plan.place(left, available)
 
-		if got, want := plan.edge[colIndex], left+rowColumns[colIndex].chars*glyph; got != want {
-			t.Errorf("first edge = %d, want %d", got, want)
+		if got, want := plan.left[fieldIdent], left; got != want {
+			t.Errorf("first field's left edge = %d, want %d", got, want)
 		}
 
-		if got, want := plan.edge[colCallsign], left+available; got != want {
-			t.Errorf("last edge = %d, want %d", got, want)
+		if got, want := plan.left[fieldLevel], left+identWidth+stripGap; got != want {
+			t.Errorf("second field's left edge = %d, want %d", got, want)
+		}
+
+		if got, want := plan.left[fieldLevel]+levelWidth, left+available; got != want {
+			t.Errorf("last field's right edge = %d, want %d", got, want)
 		}
 	})
 
-	t.Run("a single-column plan does not divide by zero", func(t *testing.T) {
+	t.Run("a single-field plan does not divide by zero", func(t *testing.T) {
 		t.Parallel()
 
-		var plan rowPlan
+		const speedWidth, left = 20, 10
 
-		plan.on[colSpeed] = true
+		var plan stripPlan
 
-		const left = 10
+		plan.on[fieldSpeed] = true
+		plan.width[fieldSpeed] = speedWidth
 
-		available := plan.width(glyph)
-		plan.place(left, available, glyph)
+		available := plan.total()
+		plan.place(left, available)
 
-		if got, want := plan.edge[colSpeed], left+available; got != want {
-			t.Errorf("edge = %d, want %d", got, want)
+		if got, want := plan.left[fieldSpeed], left; got != want {
+			t.Errorf("left edge = %d, want %d", got, want)
 		}
 	})
 }
 
-// rowPlanWithout builds a fully-enabled plan with the named columns switched
-// off, mirroring how planRows drops columns one at a time.
-func rowPlanWithout(exclude ...int) rowPlan {
-	var plan rowPlan
+// stripPlanWithout builds a fully-enabled plan and applies the first drops
+// entries of stripDropOrder to it, mirroring how planStrips narrows the board
+// one entry at a time.
+func stripPlanWithout(widths [fieldCount]int, drops int) stripPlan {
+	var plan stripPlan
 
-	for index := range colCount {
+	for index := range fieldCount {
 		plan.on[index] = true
 	}
 
-	for _, drop := range exclude {
-		plan.on[drop] = false
+	plan.att = true
+	plan.size(widths)
+
+	for _, entry := range stripDropOrder[:drops] {
+		plan.give(entry, widths)
 	}
 
 	return plan
 }
 
-// TestPlanRows checks the column drop order as the available width narrows,
-// and the two ways it refuses to draw at all: a width too narrow for even the
-// identity, and a Scene with no body face to measure glyphs from.
-func TestPlanRows(t *testing.T) {
+// TestPlanStrips checks the field drop order as the available width narrows,
+// and the two ways it refuses to draw a board at all: a width too narrow even
+// for the identity, the level and the range, and a Scene missing one of the
+// four faces it measures with (see TestPlanStripsWithoutFaces for the latter).
+func TestPlanStrips(t *testing.T) {
 	t.Parallel()
 
-	body := rowPlanFaces(t)
-	glyph := body.Width()
-	scene := &Scene{faces: Faces{Body: body}}
+	scene := &Scene{faces: layerTestFaces(t)}
+	widths := scene.stripWidths()
 
-	full := rowPlanWithout()
-	noAttitude := rowPlanWithout(colAttitude)
-	noBearing := rowPlanWithout(colAttitude, colBearing)
-	noSpeed := rowPlanWithout(colAttitude, colBearing, colSpeed)
-	noICAO := rowPlanWithout(colAttitude, colBearing, colSpeed, colICAO)
-	noAltitude := rowPlanWithout(colAttitude, colBearing, colSpeed, colICAO, colAltitude)
-	identityOnly := rowPlanWithout(colAttitude, colBearing, colSpeed, colICAO, colAltitude, colDistance)
+	full := stripPlanWithout(widths, 0)
+	noPos := stripPlanWithout(widths, 1)
+	noSeen := stripPlanWithout(widths, 2)
+	noTrack := stripPlanWithout(widths, 3)
+	noAtt := stripPlanWithout(widths, 4)
+	noSpeed := stripPlanWithout(widths, len(stripDropOrder))
 
 	const left = 0
 
 	for _, testCase := range []struct {
-		name   string
-		right  int
-		wantOn [colCount]bool
-		wantOK bool
+		name    string
+		right   int
+		wantOn  [fieldCount]bool
+		wantAtt bool
+		wantOK  bool
 	}{
-		{name: "a generous width keeps all eight columns", right: full.width(glyph), wantOn: full.on, wantOK: true},
+		{name: "a generous width keeps every field", right: full.total(), wantOn: full.on, wantAtt: true, wantOK: true},
 		{
-			name:  "narrower drops the attitude cell first",
-			right: noAttitude.width(glyph), wantOn: noAttitude.on, wantOK: true,
+			name:  "narrower drops position first",
+			right: noPos.total(), wantOn: noPos.on, wantAtt: true, wantOK: true,
 		},
-		{name: "narrower still drops bearing", right: noBearing.width(glyph), wantOn: noBearing.on, wantOK: true},
-		{name: "narrower still drops speed next", right: noSpeed.width(glyph), wantOn: noSpeed.on, wantOK: true},
-		{name: "narrower still drops the ICAO hex", right: noICAO.width(glyph), wantOn: noICAO.on, wantOK: true},
-		{name: "narrower still drops altitude", right: noAltitude.width(glyph), wantOn: noAltitude.on, wantOK: true},
 		{
-			name:  "narrower still drops distance, leaving the identity",
-			right: identityOnly.width(glyph), wantOn: identityOnly.on, wantOK: true,
+			name:  "narrower still drops seen",
+			right: noSeen.total(), wantOn: noSeen.on, wantAtt: true, wantOK: true,
 		},
-		{name: "narrower than the identity draws nothing", right: identityOnly.width(glyph) - 1, wantOK: false},
+		{
+			name:  "narrower still drops track",
+			right: noTrack.total(), wantOn: noTrack.on, wantAtt: true, wantOK: true,
+		},
+		{
+			name:  "narrower still drops the little aeroplane",
+			right: noAtt.total(), wantOn: noAtt.on, wantAtt: false, wantOK: true,
+		},
+		{
+			name:  "narrower still drops speed, leaving identity, level and range",
+			right: noSpeed.total(), wantOn: noSpeed.on, wantAtt: false, wantOK: true,
+		},
+		{
+			name:  "narrower than identity, level and range draws nothing",
+			right: noSpeed.total() - 1, wantOK: false,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			plan, ok := scene.planRows(left, testCase.right)
+			plan, ok := scene.planStrips(left, testCase.right)
 			if ok != testCase.wantOK {
-				t.Fatalf("planRows(...) ok = %v, want %v", ok, testCase.wantOK)
+				t.Fatalf("planStrips(...) ok = %v, want %v", ok, testCase.wantOK)
 			}
 
-			if ok && plan.on != testCase.wantOn {
-				t.Errorf("planRows(...) on = %v, want %v", plan.on, testCase.wantOn)
+			if !ok {
+				return
+			}
+
+			if plan.on != testCase.wantOn {
+				t.Errorf("planStrips(...) on = %v, want %v", plan.on, testCase.wantOn)
+			}
+
+			if plan.att != testCase.wantAtt {
+				t.Errorf("planStrips(...) att = %v, want %v", plan.att, testCase.wantAtt)
 			}
 		})
 	}
-
-	t.Run("a Scene with no body face reports false", func(t *testing.T) {
-		t.Parallel()
-
-		bare := &Scene{}
-		if _, ok := bare.planRows(0, 1000); ok {
-			t.Error("planRows(...) ok = true, want false without a body face")
-		}
-	})
 }
 
 // TestFitRunes checks the glyph count the airline legend clips an operator's
@@ -1747,15 +1721,15 @@ func TestFitRunes(t *testing.T) {
 	}
 }
 
-// TestBatteryInk checks the fill colour the battery glyph reuses from the
-// altitude ramp: critical, low and healthy.
+// TestBatteryInk checks the fill colour the battery glyph takes: critical,
+// low and healthy.
 func TestBatteryInk(t *testing.T) {
 	t.Parallel()
 
 	pal := theme.Palette{
-		AltHigh: color.RGBA{R: 1, A: opaque},
-		AltMid:  color.RGBA{R: 2, A: opaque},
-		BandInk: color.RGBA{R: 3, A: opaque},
+		Warn:    color.RGBA{R: 1, A: opaque},
+		Caution: color.RGBA{R: 2, A: opaque},
+		Data:    color.RGBA{R: 3, A: opaque},
 	}
 
 	for _, testCase := range []struct {
@@ -1763,12 +1737,12 @@ func TestBatteryInk(t *testing.T) {
 		percent int
 		want    color.RGBA
 	}{
-		{name: caseZero, percent: 0, want: pal.AltHigh},
-		{name: "ten percent is still critical", percent: 10, want: pal.AltHigh},
-		{name: "eleven percent moves to low", percent: 11, want: pal.AltMid},
-		{name: "twenty percent is still low", percent: 20, want: pal.AltMid},
-		{name: "twenty-one percent is a healthy charge", percent: 21, want: pal.BandInk},
-		{name: "a hundred percent is a healthy charge", percent: 100, want: pal.BandInk},
+		{name: caseZero, percent: 0, want: pal.Warn},
+		{name: "ten percent is still critical", percent: 10, want: pal.Warn},
+		{name: "eleven percent moves to low", percent: 11, want: pal.Caution},
+		{name: "twenty percent is still low", percent: 20, want: pal.Caution},
+		{name: "twenty-one percent is a healthy charge", percent: 21, want: pal.Data},
+		{name: "a hundred percent is a healthy charge", percent: 100, want: pal.Data},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1806,7 +1780,7 @@ func TestBandMuted(t *testing.T) {
 		pal  theme.Palette
 	}{
 		{name: caseNight, pal: theme.Night},
-		{name: casePaper, pal: theme.Paper},
+		{name: caseDay, pal: theme.Day},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1826,177 +1800,55 @@ func TestBandMuted(t *testing.T) {
 	}
 }
 
-// TestCardValueShape checks how the panel's three value pairs are arranged as
-// the column narrows: three across when there is room for three, wrapped to
-// two lines and then three, and dropped entirely below one whole pair. It also
-// checks where detailAt places a pair in a two-column shape.
-func TestCardValueShape(t *testing.T) {
+// TestPlanStripsWithoutFaces checks that planStrips refuses to draw a board
+// unless all four faces it measures with are present: the selected strip sets
+// its callsign in Large and its codes in Small, and a half strip sets its
+// figures in Body or BodyBold depending on whether it is the selected one.
+func TestPlanStripsWithoutFaces(t *testing.T) {
 	t.Parallel()
 
-	small, err := fonts.Small()
-	if err != nil {
-		t.Fatalf("fonts.Small: %v", err)
-	}
-
-	scene := &Scene{faces: Faces{Small: small, Body: rowPlanFaces(t)}}
-	widest := scene.cardPairWidest()
+	const stripProbeWidth = 1000
 
 	for _, testCase := range []struct {
-		name        string
-		width       int
-		wantColumns int
-		wantLines   int
+		name  string
+		blank func(*Faces)
 	}{
-		{
-			name:  "under one pair draws no value line at all",
-			width: widest - 1, wantColumns: 0, wantLines: 0,
-		},
-		{
-			name:  "exactly one pair takes one column of three lines",
-			width: widest, wantColumns: 1, wantLines: cardPairs,
-		},
-		{
-			name:  "just short of two pairs still takes one column",
-			width: 2*widest - 1, wantColumns: 1, wantLines: cardPairs,
-		},
-		{
-			name:  "two pairs take two columns of two lines",
-			width: 2 * widest, wantColumns: 2, wantLines: 2,
-		},
-		{
-			name:  "three pairs take one line",
-			width: 3 * widest, wantColumns: cardPairs, wantLines: 1,
-		},
-		{
-			name:  "room for four is still three, because there are three",
-			width: 4 * widest, wantColumns: cardPairs, wantLines: 1,
-		},
+		{name: "planStrips refuses without a small face", blank: func(f *Faces) { f.Small = nil }},
+		{name: "planStrips refuses without a body face", blank: func(f *Faces) { f.Body = nil }},
+		{name: "planStrips refuses without a bold face", blank: func(f *Faces) { f.BodyBold = nil }},
+		{name: "planStrips refuses without a large face", blank: func(f *Faces) { f.Large = nil }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			columns, lines := scene.cardValueShape(testCase.width)
-			if columns != testCase.wantColumns || lines != testCase.wantLines {
-				t.Errorf("cardValueShape(%d) = (%d, %d), want (%d, %d)",
-					testCase.width, columns, lines, testCase.wantColumns, testCase.wantLines)
+			faces := layerTestFaces(t)
+			testCase.blank(&faces)
+
+			scene := &Scene{faces: faces}
+			if _, ok := scene.planStrips(0, stripProbeWidth); ok {
+				t.Error("planStrips reported a plan without every face")
 			}
 		})
 	}
-
-	t.Run("cardValueShape is zero without a body face", func(t *testing.T) {
-		t.Parallel()
-
-		bare := &Scene{}
-		if columns, lines := bare.cardValueShape(1000); columns != 0 || lines != 0 {
-			t.Errorf("cardValueShape on a faceless scene = (%d, %d), want (0, 0)", columns, lines)
-		}
-	})
-
-	t.Run("detailAt places pairs left to right then down", func(t *testing.T) {
-		t.Parallel()
-
-		box := image.Rect(0, 0, 200, 100)
-
-		const step = 20
-
-		vertX, vertY := detailAt(box, 2, step, pairVert)
-		posX, posY := detailAt(box, 2, step, pairPos)
-		seenX, seenY := detailAt(box, 2, step, pairSeen)
-
-		if vertX != box.Min.X || vertY != box.Min.Y {
-			t.Errorf("detailAt(pairVert) = (%d, %d), want the box origin", vertX, vertY)
-		}
-
-		if posX == vertX || posY != vertY {
-			t.Errorf("detailAt(pairPos) = (%d, %d), want the same row, a different column", posX, posY)
-		}
-
-		if seenX != vertX || seenY != vertY+step {
-			t.Errorf("detailAt(pairSeen) = (%d, %d), want the first column, one row down", seenX, seenY)
-		}
-	})
-}
-
-// TestPlanCardWithoutFaces checks the guard planCard has for each face it
-// cannot do without, and the two row helpers' guard for the body face.
-func TestPlanCardWithoutFaces(t *testing.T) {
-	t.Parallel()
-
-	const cardProbeWidth = 1000
-
-	loadSmall := func(t *testing.T) *psf.Font {
-		t.Helper()
-
-		small, err := fonts.Small()
-		if err != nil {
-			t.Fatalf("fonts.Small: %v", err)
-		}
-
-		return small
-	}
-
-	t.Run("planCard refuses without a small face", func(t *testing.T) {
-		t.Parallel()
-
-		scene := &Scene{faces: Faces{Body: rowPlanFaces(t), Large: rowPlanFaces(t)}}
-		if _, ok := scene.planCard(cardProbeWidth); ok {
-			t.Error("planCard reported a plan without a small face")
-		}
-	})
-
-	t.Run("planCard refuses without a body face", func(t *testing.T) {
-		t.Parallel()
-
-		scene := &Scene{faces: Faces{Small: loadSmall(t), Large: rowPlanFaces(t)}}
-		if _, ok := scene.planCard(cardProbeWidth); ok {
-			t.Error("planCard reported a plan without a body face")
-		}
-	})
-
-	t.Run("planCard refuses without a large face", func(t *testing.T) {
-		t.Parallel()
-
-		scene := &Scene{faces: Faces{Small: loadSmall(t), Body: rowPlanFaces(t)}}
-		if _, ok := scene.planCard(cardProbeWidth); ok {
-			t.Error("planCard reported a plan without a large face")
-		}
-	})
-
-	t.Run("rowStep is zero without a body face", func(t *testing.T) {
-		t.Parallel()
-
-		scene := &Scene{}
-		if got := scene.rowStep(); got != 0 {
-			t.Errorf("rowStep() = %d, want 0", got)
-		}
-	})
-
-	t.Run("rowsHeight is zero without a body face", func(t *testing.T) {
-		t.Parallel()
-
-		const probeRowCount = 5
-
-		scene := &Scene{}
-		if got := scene.rowsHeight(probeRowCount); got != 0 {
-			t.Errorf("rowsHeight(%d) = %d, want 0", probeRowCount, got)
-		}
-	})
 }
 
 // TestFixColour checks how much the receiver's position is worth, in colour:
 // every named mode plus a value outside the six the type defines, which a
 // Receiver built by hand rather than by a Source could still hand the scene.
+//
+// GPS 2D and GPS 3D come out the same colour, and so do an estimate and a
+// GPS fix that has gone: fixColour only says whether a position was sensed,
+// derived or absent, not how confident the sensor was. A test that wanted to
+// tell 2D from 3D would have to read the mode word instead of the colour.
 func TestFixColour(t *testing.T) {
 	t.Parallel()
 
 	pal := theme.Palette{
 		Muted:   color.RGBA{R: 1, A: opaque},
-		Accent:  color.RGBA{R: 2, A: opaque},
-		AltHigh: color.RGBA{R: 3, A: opaque},
-		AltMid:  color.RGBA{R: 4, A: opaque},
-		AltLow:  color.RGBA{R: 5, A: opaque},
+		Caution: color.RGBA{R: 2, A: opaque},
+		OK:      color.RGBA{R: 3, A: opaque},
 	}
-	ink := color.RGBA{R: 6, A: opaque}
+	ink := color.RGBA{R: 4, A: opaque}
 
 	for _, testCase := range []struct {
 		name string
@@ -2005,10 +1857,10 @@ func TestFixColour(t *testing.T) {
 	}{
 		{name: "no fix reads as muted", mode: source.FixNone, want: pal.Muted},
 		{name: "a manual position takes the ink handed in", mode: source.FixManual, want: ink},
-		{name: "an estimate takes the accent", mode: source.FixEstimated, want: pal.Accent},
-		{name: "a GPS fix that has gone is critical", mode: source.FixGPSNoFix, want: pal.AltHigh},
-		{name: "a 2D GPS fix is the mid band", mode: source.FixGPS2D, want: pal.AltMid},
-		{name: "a full 3D GPS fix is the low band", mode: source.FixGPS3D, want: pal.AltLow},
+		{name: "an estimate is a caution", mode: source.FixEstimated, want: pal.Caution},
+		{name: "a GPS fix that has gone is a caution too", mode: source.FixGPSNoFix, want: pal.Caution},
+		{name: "a 2D GPS fix is OK", mode: source.FixGPS2D, want: pal.OK},
+		{name: "a full 3D GPS fix is OK too", mode: source.FixGPS3D, want: pal.OK},
 		{name: "an out-of-range mode reads as muted", mode: source.FixMode(99), want: pal.Muted},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -2068,18 +1920,18 @@ func colourCount(canv *canvas.Canvas, box image.Rectangle, col color.RGBA) int {
 	return count
 }
 
-// TestDrawRowAltitudeUsesTheBand checks that the compact row's ALT figure is
-// set in the aircraft's altitude band in both colour modes: it is the one
-// column where the number and a colour say the same thing, and that has to
-// survive airline mode rather than being the price of turning it on.
-func TestDrawRowAltitudeUsesTheBand(t *testing.T) {
+// TestDrawStripLevelUsesTheBand checks that a strip's LEVEL figure is set in
+// the aircraft's altitude band in both colour modes: it is the one field
+// where the number and a colour say the same thing, and that has to survive
+// airline mode rather than being the price of turning it on.
+func TestDrawStripLevelUsesTheBand(t *testing.T) {
 	t.Parallel()
 
 	const (
-		rowCanvasWidth  = 200
-		rowCanvasHeight = 30
-		rowEdgeX        = 150
-		rowTop          = 4
+		levelCanvasWidth  = 200
+		levelCanvasHeight = 30
+		levelFieldX       = 150
+		levelValueY       = 4
 
 		lowAltitude  = 4000.0
 		midAltitude  = 18000.0
@@ -2115,271 +1967,381 @@ func TestDrawRowAltitudeUsesTheBand(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			canv, err := canvas.New(rowCanvasWidth, rowCanvasHeight)
+			canv, err := canvas.New(levelCanvasWidth, levelCanvasHeight)
 			if err != nil {
 				t.Fatalf("canvas.New: %v", err)
 			}
 
 			scene := &Scene{faces: Faces{Body: body}, pal: pal, colour: testCase.mode}
 
-			var plan rowPlan
+			var plan stripPlan
 
-			plan.on[colAltitude] = true
-			plan.edge[colAltitude] = rowEdgeX
+			plan.on[fieldLevel] = true
+			plan.left[fieldLevel] = levelFieldX
 
-			pen := rowPen{dst: canv, face: body, plan: plan, glyph: body.Width(), top: rowTop}
+			pen := stripPen{dst: canv, plan: plan, value: levelValueY}
 			plane := airplane.Snapshot{Altitude: testCase.altitude, Callsign: sampleCallsign}
 
-			scene.drawRowAltitude(pen, plane)
+			scene.drawStripLevel(pen, plane)
 
 			if colourCount(canv, canv.Bounds(), testCase.want) == 0 {
-				t.Errorf("no pixel painted in %v, want the ALT figure set in it", testCase.want)
+				t.Errorf("no pixel painted in %v, want the level figure set in it", testCase.want)
 			}
 		})
 	}
 }
 
-// TestDrawCardFiguresInk checks the one figure that changed colour: altitude
-// takes the aircraft's band, distance and speed stay in the reading ink.
-func TestDrawCardFiguresInk(t *testing.T) {
+// TestDrawStripsRefusesAColumnTooShortForOneFullStrip checks the second of
+// drawStrips's two early returns (TestPlanStrips already covers the other, a
+// column too narrow for even the identity, the level and the range): a column
+// with all the width it needs but not enough height for the row of field names
+// plus one strip draws nothing, rather than clipping a strip half-drawn.
+//
+// The width is set deliberately generous so only the height guard is under
+// test; a column that width would draw every field on the board given the
+// room.
+func TestDrawStripsRefusesAColumnTooShortForTheBoard(t *testing.T) {
 	t.Parallel()
 
 	const (
-		figuresWidth   = 300
-		figuresHeight  = 40
-		figuresMargin  = 10
-		figureAltitude = 4000.0
-		figureVelocity = 250.0
-		figureLatStep  = 1.0
-
-		cardTestLat = 52.0
-		cardTestLon = 4.0
+		stripsColumnWidth = 2000
+		stripsMargin      = 20
+		stripsAltitudeFt  = 4000
+		stripsLon         = 4.5
 	)
 
-	pal := theme.Palette{
-		Ink:    color.RGBA{R: 1, A: opaque},
-		Muted:  color.RGBA{R: 2, A: opaque},
-		AltLow: color.RGBA{R: 3, A: opaque},
+	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
+	frame := source.Frame{
+		Planes:   []airplane.Snapshot{{ICAO: icaoFirst, Callsign: sampleCallsign, Altitude: stripsAltitudeFt}},
+		Receiver: source.Receiver{Latitude: coordinateSampleLat, Longitude: stripsLon},
 	}
 
-	large, err := fonts.Large()
-	if err != nil {
-		t.Fatalf("fonts.Large: %v", err)
+	need := scene.boardHeadHeight() + scene.halfStripHeight()
+
+	draw := func(bottom int) int {
+		canv, err := canvas.New(stripsColumnWidth, bottom+stripsMargin)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+		col := &layout{dst: canv, left: 0, right: stripsColumnWidth, top: 0, bottom: bottom}
+		scene.drawStrips(col, frame)
+
+		return filterPainted(canv)
 	}
 
-	small, err := fonts.Small()
-	if err != nil {
-		t.Fatalf("fonts.Small: %v", err)
+	if got := draw(need - 1); got != 0 {
+		t.Errorf("a column one pixel short of the field names plus one strip painted %d pixels, want none", got)
 	}
 
-	scene := &Scene{faces: Faces{Large: large, Small: small}, pal: pal}
-
-	canv, err := canvas.New(figuresWidth, figuresHeight)
-	if err != nil {
-		t.Fatalf("canvas.New: %v", err)
-	}
-
-	box := image.Rect(0, 0, figuresWidth-figuresMargin, figuresHeight)
-	receiver := source.Receiver{Latitude: cardTestLat, Longitude: cardTestLon}
-	plane := airplane.Snapshot{
-		Altitude: figureAltitude, Velocity: figureVelocity,
-		Latitude: cardTestLat + figureLatStep, Longitude: cardTestLon,
-	}
-
-	scene.drawCardFigures(canv, box, receiver, plane)
-
-	column := box.Dx() / figureCount
-	distanceCell := image.Rect(box.Min.X, box.Min.Y, box.Min.X+column, box.Max.Y)
-	altitudeCell := image.Rect(box.Min.X+column, box.Min.Y, box.Min.X+2*column, box.Max.Y)
-	speedCell := image.Rect(box.Min.X+2*column, box.Min.Y, box.Max.X, box.Max.Y)
-
-	if colourCount(canv, distanceCell, pal.Ink) == 0 {
-		t.Error("the distance figure did not use the reading ink")
-	}
-
-	if colourCount(canv, altitudeCell, pal.AltLow) == 0 {
-		t.Error("the altitude figure did not use its altitude band")
-	}
-
-	if colourCount(canv, speedCell, pal.Ink) == 0 {
-		t.Error("the speed figure did not use the reading ink")
+	if got := draw(need); got == 0 {
+		t.Error("a column exactly tall enough for the field names plus one strip painted nothing")
 	}
 }
 
-// cardFigureTestFaces loads the three real faces the card figures are set
-// in, so the layout is measured against the metrics it actually runs on
-// rather than a synthetic stand-in.
-func cardFigureTestFaces(t *testing.T) Faces {
-	t.Helper()
-
-	large, err := fonts.Large()
-	if err != nil {
-		t.Fatalf("fonts.Large: %v", err)
-	}
-
-	body, err := fonts.Body()
-	if err != nil {
-		t.Fatalf("fonts.Body: %v", err)
-	}
-
-	small, err := fonts.Small()
-	if err != nil {
-		t.Fatalf("fonts.Small: %v", err)
-	}
-
-	return Faces{Large: large, Body: body, Small: small}
-}
-
-// TestPlanCardFiguresNeverOverlaps table-tests the layout across a spread of
-// widths, from far more room than the three figures need down to less than
-// the altitude figure alone needs at Body size. Two figures resolving to
-// overlapping boxes is the bug this layout exists to fix, seen on a narrow
-// right column as "1,2000 KT".
-func TestPlanCardFiguresNeverOverlaps(t *testing.T) {
+// TestDrawStripStatusRefusesWhenTooNarrow checks the status line's own early
+// return: a column narrower than the words it has to carry draws nothing
+// rather than running the count past the column's own right edge.
+func TestDrawStripStatusRefusesWhenTooNarrow(t *testing.T) {
 	t.Parallel()
 
-	const cardFigureTestHeight = 32
+	const (
+		countShown        = 1
+		countTotal        = 2
+		countCanvasHeight = 20
+	)
 
-	scene := &Scene{faces: cardFigureTestFaces(t)}
+	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
+	widest := measureTracked(scene.faces.Small, widestStatus)
 
-	for _, width := range []int{200, 400, 640, 1000} {
-		t.Run(fmt.Sprintf("width %d", width), func(t *testing.T) {
+	draw := func(right int) int {
+		canv, err := canvas.New(right+1, countCanvasHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+		col := &layout{dst: canv, left: 0, right: right, top: 0, bottom: countCanvasHeight}
+		scene.drawStripStatus(col, selection{}, countShown, countTotal)
+
+		return filterPainted(canv)
+	}
+
+	if got := draw(widest - 1); got != 0 {
+		t.Errorf("a column one pixel narrower than the status line painted %d pixels, want none", got)
+	}
+
+	if got := draw(widest); got == 0 {
+		t.Error("a column exactly as wide as the status line painted nothing")
+	}
+}
+
+// TestStripFieldDrawersSkipWhenDroppedFromThePlan checks the guard every
+// per-field drawer opens with. strips.go drops POS, SEEN, TRK, the little
+// aeroplane and GS whole as the column narrows rather than squeezing them (see
+// stripDropOrder); LEVEL and the little aeroplane's own drawer carry the same
+// on/off gate for symmetry with the rest of the row. If any one of these
+// guards were lost, a field the plan had dropped would still land whatever the
+// aircraft's own reading is on top of whatever the plan put in its place.
+//
+// Every plan and pen field here is left at its zero value, which is exactly
+// the state a dropped field is in: off, with no room reserved. Nothing else
+// about the aircraft or the scene should matter to any of these guards, which
+// is why the same empty plane and empty scene stand in for all seven.
+func TestStripFieldDrawersSkipWhenDroppedFromThePlan(t *testing.T) {
+	t.Parallel()
+
+	const stripGuardSide = 20
+
+	scene := &Scene{}
+	plane := airplane.Snapshot{}
+	receiver := source.Receiver{}
+
+	for _, testCase := range []struct {
+		name string
+		draw func(pen stripPen)
+	}{
+		{name: "LEVEL", draw: func(pen stripPen) { scene.drawStripLevel(pen, plane) }},
+		{name: "GS", draw: func(pen stripPen) { scene.drawStripSpeed(pen, plane) }},
+		{name: "TRK", draw: func(pen stripPen) { scene.drawStripTrack(pen, plane) }},
+		{name: "DIST / BRG", draw: func(pen stripPen) { scene.drawStripRange(pen, receiver, plane) }},
+		{name: "POS", draw: func(pen stripPen) { scene.drawStripPos(pen, plane) }},
+		{name: "SEEN", draw: func(pen stripPen) { scene.drawStripSeen(pen, time.Time{}, plane) }},
+		{name: "the little aeroplane", draw: func(pen stripPen) { scene.drawStripAttitude(pen, plane) }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			box := image.Rect(0, 0, width, cardFigureTestHeight)
-			plan := scene.planCardFigures(box)
-
-			if first, second, found := overlappingFigures(plan); found {
-				t.Errorf("figure %d overlaps figure %d at width %d: %v vs %v",
-					first, second, width, plan.rects[first], plan.rects[second])
+			canv, err := canvas.New(stripGuardSide, stripGuardSide)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
 			}
 
-			if figuresShown(plan) == 0 {
-				t.Errorf("width %d: no figure was shown at all, want at least altitude", width)
+			canv.Clear(theme.Night.Field)
+			testCase.draw(stripPen{dst: canv})
+
+			if got := filterPainted(canv); got != 0 {
+				t.Errorf("%s drawer painted %d pixels with its field off the plan, want none", testCase.name, got)
 			}
 		})
 	}
 }
 
-// overlappingFigures reports the first pair of shown figures in plan whose
-// rectangles overlap, if there is one.
-func overlappingFigures(plan cardFigureLayout) (int, int, bool) {
-	for index := range figureCount {
-		if !plan.show[index] {
-			continue
-		}
-
-		for other := index + 1; other < figureCount; other++ {
-			if plan.show[other] && plan.rects[index].Overlaps(plan.rects[other]) {
-				return index, other, true
-			}
-		}
-	}
-
-	return 0, 0, false
-}
-
-// figuresShown counts how many figures a plan actually draws.
-func figuresShown(plan cardFigureLayout) int {
-	count := 0
-
-	for index := range figureCount {
-		if plan.show[index] {
-			count++
-		}
-	}
-
-	return count
-}
-
-// TestDrawCardFiguresNarrowKeepsAltitude checks the last stage of the
-// shrink order: a card too narrow for even one figure at Body size still
-// draws the altitude figure, in its band colour, because altitude is the one
-// figure planCardFigures never gives up.
-func TestDrawCardFiguresNarrowKeepsAltitude(t *testing.T) {
+// TestDrawHalfCodesShowsTheWarningBoxOnAnEmergency checks the one thing a half
+// strip's ident line does differently from a full one: the warning box takes
+// the hex's own place rather than following it, because a half strip has no
+// room for both. The existing drawStripCodes tests only ever put the
+// emergency on the selected aircraft, which takes the full-strip path
+// instead of this one, so the half strip's own version of the same rule had
+// nothing exercising it.
+func TestDrawHalfCodesShowsTheWarningBoxOnAnEmergency(t *testing.T) {
 	t.Parallel()
 
 	const (
-		narrowWidth    = 24
-		narrowHeight   = 32
-		narrowAltitude = 4000.0
-		narrowLat      = 52.0
-		narrowLon      = 4.0
-		narrowLatStep  = 1.0
+		halfCodesCanvasWidth  = 200
+		halfCodesCanvasHeight = 20
+		halfCodesRowY         = 8
 	)
 
-	pal := theme.Palette{
-		Ink:    color.RGBA{R: 1, A: opaque},
-		Muted:  color.RGBA{R: 2, A: opaque},
-		AltLow: color.RGBA{R: 3, A: opaque},
+	scene := &Scene{faces: Faces{Small: rowPlanSmall(t)}, pal: theme.Night}
+
+	draw := func(emergency bool) *canvas.Canvas {
+		canv, err := canvas.New(halfCodesCanvasWidth, halfCodesCanvasHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+
+		plane := airplane.Snapshot{ICAO: icaoFirst, Emergency: emergency}
+		scene.drawHalfCodes(stripPen{dst: canv, small: halfCodesRowY}, 0, plane)
+
+		return canv
 	}
 
-	scene := &Scene{faces: cardFigureTestFaces(t), pal: pal}
+	quiet := draw(false)
+	if got := colourCount(quiet, quiet.Bounds(), theme.Night.Warn); got != 0 {
+		t.Errorf("a half strip with nothing wrong painted %d pixels of the warning colour, want none", got)
+	}
 
-	canv, err := canvas.New(narrowWidth, narrowHeight)
+	squawking := draw(true)
+	if colourCount(squawking, squawking.Bounds(), theme.Night.Warn) == 0 {
+		t.Error("a half strip squawking an emergency painted no warning colour, want the box drawn in the hex's place")
+	}
+}
+
+// buildBareFace parses a minimal, valid PSF2 font with two blank glyphs and no
+// unicode table, so indexOf falls back to treating a code point as a glyph
+// index directly: any rune at or past the glyph count, the trend arrows
+// included, reports no glyph. It exists for TestDrawTagTrend's fallback case,
+// which needs a face that genuinely does not carry U+2191/U+2193. Both faces
+// this package's other tests load do carry them (fonts.Body among them), so
+// none of those can stand in for one.
+func buildBareFace(tb testing.TB) *psf.Font {
+	tb.Helper()
+
+	const (
+		bareGlyphs     = 2
+		bareGlyphSide  = 8
+		bareHeaderSize = 32
+	)
+
+	data := make([]byte, bareHeaderSize+bareGlyphs*bareGlyphSide)
+	copy(data, []byte{0x72, 0xb5, 0x4a, 0x86})
+	binary.LittleEndian.PutUint32(data[8:], bareHeaderSize)
+	binary.LittleEndian.PutUint32(data[16:], bareGlyphs)
+	binary.LittleEndian.PutUint32(data[20:], bareGlyphSide)
+	binary.LittleEndian.PutUint32(data[24:], bareGlyphSide)
+	binary.LittleEndian.PutUint32(data[28:], bareGlyphSide)
+
+	font, err := psf.Parse(data)
 	if err != nil {
-		t.Fatalf("canvas.New: %v", err)
+		tb.Fatalf("psf.Parse of the bare test font: %v", err)
 	}
 
-	box := image.Rect(0, 0, narrowWidth, narrowHeight)
-	receiver := source.Receiver{Latitude: narrowLat, Longitude: narrowLon}
-	plane := airplane.Snapshot{Altitude: narrowAltitude, Latitude: narrowLat + narrowLatStep, Longitude: narrowLon}
-
-	scene.drawCardFigures(canv, box, receiver, plane)
-
-	if colourCount(canv, canv.Bounds(), pal.AltLow) == 0 {
-		t.Error("the altitude figure was not drawn in its band colour at a narrow width")
-	}
+	return font
 }
 
-// TestPlanCardFiguresNoFaces checks that a Scene with no faces at all plans
-// nothing to draw rather than measuring against a nil font, the same way
-// lineHeight and glyphWidth treat a missing face as nothing to draw with.
-func TestPlanCardFiguresNoFaces(t *testing.T) {
+// TestDrawTagTrend checks the tag's climb/descend marker: no arrow when
+// level, the glyph when the face carries U+2191/U+2193, and the flight
+// strips' own drawn triangle as a fallback when it does not. uAirwaves gives
+// no guarantee a console font carries those two code points, and a shape
+// drawn on the canvas always renders where a missing glyph would not.
+func TestDrawTagTrend(t *testing.T) {
 	t.Parallel()
 
-	var scene Scene
+	const (
+		trendCanvasWidth  = 60
+		trendCanvasHeight = 40
+		trendPenX         = 10
+		trendTopY         = 4
+		trendClimbRate    = 2000.0
+		trendDescendRate  = -2000.0
+	)
 
-	plan := scene.planCardFigures(image.Rect(0, 0, 1000, 40))
-	if plan.font != nil {
-		t.Errorf("plan.font = %v, want nil with no faces set", plan.font)
+	newCanvas := func(tb testing.TB) *canvas.Canvas {
+		tb.Helper()
+
+		canv, err := canvas.New(trendCanvasWidth, trendCanvasHeight)
+		if err != nil {
+			tb.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+
+		return canv
 	}
+
+	// trend is one call to the shared mark drawer at the pen and top every case
+	// here uses, in the scene's own body face and in the accent, so a case says
+	// which rate it is about and nothing else.
+	trend := func(scene *Scene, canv *canvas.Canvas, rate float64) int {
+		return scene.drawTrend(canv, scene.faces.Body, trendPenX, trendTopY, rate, theme.Night.Accent)
+	}
+
+	t.Run("level draws no arrow and returns the pen unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
+
+		if got := trend(scene, newCanvas(t), 0); got != trendPenX {
+			t.Errorf("drawTrend(level) pen = %d, want %d unchanged", got, trendPenX)
+		}
+	})
+
+	t.Run("climbing draws the glyph when the face carries it", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
+		canv := newCanvas(t)
+
+		if got := trend(scene, canv, trendClimbRate); got <= trendPenX {
+			t.Errorf("drawTrend(climbing) pen = %d, want more than %d", got, trendPenX)
+		}
+
+		if colourCount(canv, canv.Bounds(), theme.Night.Accent) == 0 {
+			t.Error("drawTrend(climbing) painted nothing in the accent colour")
+		}
+	})
+
+	t.Run("descending draws the glyph when the face carries it", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
+		canv := newCanvas(t)
+
+		if got := trend(scene, canv, trendDescendRate); got <= trendPenX {
+			t.Errorf("drawTrend(descending) pen = %d, want more than %d", got, trendPenX)
+		}
+
+		if colourCount(canv, canv.Bounds(), theme.Night.Accent) == 0 {
+			t.Error("drawTrend(descending) painted nothing in the accent colour")
+		}
+	})
+
+	t.Run("a face with no arrow glyph falls back to the drawn triangle", func(t *testing.T) {
+		t.Parallel()
+
+		scene := &Scene{faces: Faces{Body: buildBareFace(t)}, pal: theme.Night}
+		canv := newCanvas(t)
+
+		want := trendPenX + vertMarker + vertGap
+		if got := trend(scene, canv, trendClimbRate); got != want {
+			t.Errorf("drawTrend(no glyph) pen = %d, want %d", got, want)
+		}
+
+		if colourCount(canv, canv.Bounds(), theme.Night.Accent) == 0 {
+			t.Error("drawTrend(no glyph) painted nothing where the fallback triangle should be")
+		}
+	})
 }
 
-// TestDrawCardFiguresNoFaces checks that drawCardFigures leaves the canvas
-// untouched when planCardFigures could not settle on a font, rather than
-// drawing against one that is nil.
-func TestDrawCardFiguresNoFaces(t *testing.T) {
+// TestDrawTagWhere checks the tag's bottom line: DIST/BRG when the bearing is
+// known, and the dash placeholder when bearingTo cannot work one out. The
+// receiver sitting at exactly (0, 0) is one of the two ways that happens (the
+// other, an aircraft with no position, is bearingTo's own TestBearingTo case),
+// and it is the one nothing already drawing a tag exercises: every fixture
+// elsewhere in this package gives the receiver a real position.
+func TestDrawTagWhere(t *testing.T) {
 	t.Parallel()
 
-	const noFacesWidth, noFacesHeight = 100, 40
+	const (
+		whereCanvasWidth  = 120
+		whereCanvasHeight = 20
+		wherePenX         = 4
+		whereTopY         = 4
+		whereLon          = 4.5
+	)
 
-	var scene Scene
+	scene := &Scene{faces: Faces{Body: rowPlanFaces(t)}, pal: theme.Night}
+	plane := airplane.Snapshot{Latitude: coordinateSampleLat + 1, Longitude: whereLon}
 
-	canv, err := canvas.New(noFacesWidth, noFacesHeight)
-	if err != nil {
-		t.Fatalf("canvas.New: %v", err)
+	draw := func(receiver source.Receiver) int {
+		canv, err := canvas.New(whereCanvasWidth, whereCanvasHeight)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+
+		canv.Clear(theme.Night.Field)
+		scene.drawTagWhere(canv, wherePenX, whereTopY, plane, receiver)
+
+		return filterPainted(canv)
 	}
 
-	scene.drawCardFigures(canv, canv.Bounds(), source.Receiver{}, airplane.Snapshot{})
+	known := draw(source.Receiver{Latitude: coordinateSampleLat, Longitude: whereLon})
+	unknown := draw(source.Receiver{})
 
-	if got, want := colourCount(canv, canv.Bounds(), color.RGBA{}), noFacesWidth*noFacesHeight; got != want {
-		t.Errorf("untouched pixels = %d, want all %d", got, want)
+	if known == 0 {
+		t.Fatal("a known bearing painted nothing")
 	}
-}
 
-// TestForceFiguresNoFiguresShown checks the guard for a stage with nothing
-// left to draw. planCardFigures never builds one, because altitude stays on
-// in the last stage it ever reaches, but forceFigures does not know that on
-// its own and has to handle it rather than assume it.
-func TestForceFiguresNoFiguresShown(t *testing.T) {
-	t.Parallel()
+	if unknown == 0 {
+		t.Fatal("an unknown bearing painted nothing, want the dash placeholder drawn")
+	}
 
-	scene := &Scene{faces: cardFigureTestFaces(t)}
-
-	got := scene.forceFigures(image.Rect(0, 0, 100, 32), scene.faces.Body, false, [figureCount]bool{})
-	if got.rects != ([figureCount]image.Rectangle{}) {
-		t.Errorf("rects = %v, want the zero value with nothing shown", got.rects)
+	if known == unknown {
+		t.Error("a known bearing and the unknown-bearing dashes painted the same number of pixels")
 	}
 }
 
@@ -2684,7 +2646,7 @@ func TestBackgroundLayerRedrawsOnKeyChanges(t *testing.T) {
 		scene, canv, _ := layerScene(t)
 		scene.Draw(canv, 0)
 
-		scene.SetPalette(theme.Paper)
+		scene.SetPalette(theme.Day)
 		scene.Draw(canv, 0)
 
 		if scene.layerRuns != 2 {
@@ -3064,7 +3026,7 @@ func TestApplyRangePinsTheScope(t *testing.T) {
 	farFrame := func() source.Frame {
 		frame := layerFrame(layerBaseLat)
 		frame.Planes = []airplane.Snapshot{
-			{ICAO: "484AC1", Latitude: layerBaseLat + farAircraftNm/nmPerDegree, Longitude: layerBaseLon},
+			{ICAO: icaoSampleReal, Latitude: layerBaseLat + farAircraftNm/nmPerDegree, Longitude: layerBaseLon},
 		}
 
 		return frame
@@ -3404,47 +3366,11 @@ func TestSyncSelectionUnpinsALostAircraft(t *testing.T) {
 	}
 }
 
-// TestPlanCardDropsTheValueLineWhenNarrow checks that the panel gives up its
-// line of values, and the height that went with it, on a column too narrow for
-// one whole pair.
-func TestPlanCardDropsTheValueLineWhenNarrow(t *testing.T) {
-	t.Parallel()
-
-	small, err := fonts.Small()
-	if err != nil {
-		t.Fatalf("fonts.Small: %v", err)
-	}
-
-	scene := &Scene{faces: Faces{Small: small, Body: rowPlanFaces(t), Large: rowPlanFaces(t)}}
-	chrome := accentWidth + 2*cardPadX
-
-	narrow, drawable := scene.planCard(chrome + scene.cardPairWidest() - 1)
-	if !drawable {
-		t.Fatal("planCard refused a panel with every face present")
-	}
-
-	if narrow.values != 0 || narrow.columns != 0 {
-		t.Errorf("narrow plan = %+v, want no value line", narrow)
-	}
-
-	wide, drawable := scene.planCard(chrome + cardPairs*scene.cardPairWidest())
-	if !drawable {
-		t.Fatal("planCard refused a wide panel")
-	}
-
-	if wide.columns != cardPairs {
-		t.Errorf("wide plan drew %d value columns, want %d", wide.columns, cardPairs)
-	}
-
-	if wide.total <= narrow.total {
-		t.Errorf("wide total %d, narrow total %d, want the value line to add height", wide.total, narrow.total)
-	}
-}
-
-// TestCapOn checks which key caps are drawn filled: every toggle follows its
-// own setting, and everything else is always on, because a key with no off
-// state has nothing to say by being hollow.
-func TestCapOn(t *testing.T) {
+// TestCapEngaged checks which softkeys show the engaged bar: the genuine
+// on-or-off settings follow their own state, and everything else answers
+// false, because a value cap (colour, theme, trails, filter) and a key with
+// no setting behind it at all have no off position for the bar to mark.
+func TestCapEngaged(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
@@ -3455,34 +3381,34 @@ func TestCapOn(t *testing.T) {
 	}{
 		{name: "auto on", scene: Scene{autoRange: true}, toggle: capAuto, want: true},
 		{name: "auto off", scene: Scene{}, toggle: capAuto, want: false},
-		{name: "trails long", scene: Scene{trail: trailLong}, toggle: capTrails, want: true},
-		{name: "trails short", scene: Scene{trail: trailShort}, toggle: capTrails, want: true},
-		{name: "trails all", scene: Scene{trail: trailAll}, toggle: capTrails, want: true},
-		{name: "trails off", scene: Scene{trail: trailOff}, toggle: capTrails, want: false},
-		{name: "the zero value reads as long", scene: Scene{}, toggle: capTrails, want: true},
 		{name: "airports on", scene: Scene{airports: true}, toggle: capAirports, want: true},
 		{name: "airports off", scene: Scene{}, toggle: capAirports, want: false},
 		{name: "shore on", scene: Scene{shoreOn: true}, toggle: capShore, want: true},
 		{name: "shore off", scene: Scene{}, toggle: capShore, want: false},
+		{name: "orbit on", scene: Scene{orbiting: true}, toggle: capOrbit, want: true},
+		{name: "orbit off", scene: Scene{}, toggle: capOrbit, want: false},
+		{name: "envelope on", scene: Scene{envelope: true}, toggle: capEnvelope, want: true},
+		{name: "envelope off", scene: Scene{}, toggle: capEnvelope, want: false},
 		{name: "bias-tee on", scene: Scene{biasEnabled: true}, toggle: capBiasTee, want: true},
 		{name: "bias-tee off", scene: Scene{}, toggle: capBiasTee, want: false},
-		{name: "filter hollow at ALL", scene: Scene{}, toggle: capFilter, want: false},
-		{
-			name: "filter filled on a band", scene: Scene{filter: filterState{kind: filterBand, band: bandLow}},
-			toggle: capFilter, want: true,
-		},
-		{name: "quit is always on", scene: Scene{}, toggle: capAlways, want: true},
-		{name: "the colour cap is always on", scene: Scene{}, toggle: capColour, want: true},
-		{name: "the theme cap is always on", scene: Scene{}, toggle: capTheme, want: true},
 		{name: "wide on", scene: Scene{wide: true}, toggle: capWide, want: true},
 		{name: "wide off", scene: Scene{}, toggle: capWide, want: false},
+		{name: "quit has no setting behind it", scene: Scene{}, toggle: capAlways, want: false},
+		{name: "the colour cap carries a value, not a state", scene: Scene{colour: ColourAirline}, toggle: capColour},
+		{name: "the theme cap carries a value, not a state", scene: Scene{light: true}, toggle: capTheme},
+		{name: "the trail cap carries a value, not a state", scene: Scene{trail: trailAll}, toggle: capTrails},
+		{
+			name:   "the filter cap carries a value, not a state",
+			scene:  Scene{filter: filterState{kind: filterBand, band: bandLow}},
+			toggle: capFilter,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
 			scene := testCase.scene
-			if got := scene.capOn(testCase.toggle); got != testCase.want {
-				t.Errorf("capOn(%d) = %v, want %v", testCase.toggle, got, testCase.want)
+			if got := scene.capEngaged(testCase.toggle); got != testCase.want {
+				t.Errorf("capEngaged(%d) = %v, want %v", testCase.toggle, got, testCase.want)
 			}
 		})
 	}
@@ -3621,8 +3547,8 @@ func TestCapLabel(t *testing.T) {
 			entry: themeCap, want: labelNight,
 		},
 		{
-			name: casePaper, scene: Scene{light: true},
-			entry: themeCap, want: labelPaper,
+			name: caseDay, scene: Scene{light: true},
+			entry: themeCap, want: labelDay,
 		},
 		{
 			name: "the long trail mode", scene: Scene{trail: trailLong},
@@ -3704,7 +3630,7 @@ var (
 // followPlane is one aircraft at a position, with nothing else filled in. The
 // centroid only reads the two coordinates.
 func followPlane(latitude, longitude float64) airplane.Snapshot {
-	return airplane.Snapshot{ICAO: "484AC1", Latitude: latitude, Longitude: longitude}
+	return airplane.Snapshot{ICAO: icaoSampleReal, Latitude: latitude, Longitude: longitude}
 }
 
 func TestCentroidOf(t *testing.T) {
@@ -4486,7 +4412,7 @@ func TestReceiverLineGPSStates(t *testing.T) {
 
 // TestReceiverLineDoubtMarker checks that an estimate the self-locator does
 // not fully believe grows a doubt marker after its radius, set in the same
-// accent the rest of the estimate line already carries.
+// caution colour the rest of the estimate line already carries.
 //
 // Violated counts the self-locator's own observations whose radio horizon
 // does not reach the estimate it produced, so the marker is what says the
@@ -4551,7 +4477,7 @@ func TestReceiverLineDoubtMarker(t *testing.T) {
 	markerWidth, markerHeight := text.Measure(faces.Small, doubtMarker)
 	markerBox := image.Rect(pen, top, pen+markerWidth, top+markerHeight)
 
-	text.Draw(reference, faces.Small, pen, top, doubtMarker, theme.Night.Accent)
+	text.Draw(reference, faces.Small, pen, top, doubtMarker, theme.Night.Caution)
 
 	if !samePixels(canvDoubts, reference, reference.Bounds()) {
 		t.Error("the doubted estimate does not match the reference line with its marker")
@@ -4561,14 +4487,14 @@ func TestReceiverLineDoubtMarker(t *testing.T) {
 		t.Error("an estimate nothing disagrees with carries something past its radius, want only field")
 	}
 
-	if colourCount(canvDoubts, markerBox, theme.Night.Accent) == 0 {
-		t.Error("a doubted estimate carries no accent pixels past its radius")
+	if colourCount(canvDoubts, markerBox, theme.Night.Caution) == 0 {
+		t.Error("a doubted estimate carries no caution pixels past its radius")
 	}
 }
 
 // TestDrawDoubt checks both of drawDoubt's branches directly: nothing drawn
 // when nothing disagrees with the estimate, and the marker drawn in the
-// accent when something does.
+// caution colour when something does.
 func TestDrawDoubt(t *testing.T) {
 	t.Parallel()
 
@@ -4605,7 +4531,7 @@ func TestDrawDoubt(t *testing.T) {
 		}
 	})
 
-	t.Run("a violation draws the marker in the accent", func(t *testing.T) {
+	t.Run("a violation draws the marker in the caution colour", func(t *testing.T) {
 		t.Parallel()
 
 		const violated = 1
@@ -4624,10 +4550,10 @@ func TestDrawDoubt(t *testing.T) {
 		}
 
 		reference.Clear(theme.Night.Field)
-		text.Draw(reference, face, pen, top, doubtMarker, theme.Night.Accent)
+		text.Draw(reference, face, pen, top, doubtMarker, theme.Night.Caution)
 
 		if !samePixels(canv, reference, canv.Bounds()) {
-			t.Error("drawDoubt did not draw the marker in the accent")
+			t.Error("drawDoubt did not draw the marker in the caution colour")
 		}
 	})
 }

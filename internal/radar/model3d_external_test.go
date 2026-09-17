@@ -49,14 +49,21 @@ func shapeExtent(canv *canvas.Canvas, box image.Rectangle, field color.RGBA) (im
 	return found, drawn
 }
 
-// TestRowAttitudeDrawsTheHeading checks the ATT column puts a different
-// picture in the cell for every heading it is given.
+// TestRowAttitudeDrawsTheHeading checks the little aeroplane at the end of a
+// strip's ident field puts a different picture in the cell for every heading
+// it is given.
 //
 // Which way round each of those pictures is, is TestCellModelFacesTheHeading's
 // subject: it reads the projected nose and tail straight out of the model,
 // which is a sharper question than a cell of pixels can answer. What this one
-// adds is that the column is wired to the heading at all, through the row
+// adds is that the cell is wired to the heading at all, through the strip
 // plan, the cell camera and the shared shape routine.
+//
+// The fixture flies a filler aircraft ahead of the one under test, so the one
+// being read lands on a half strip rather than the selected one: the selected
+// strip's own lifted fill sits behind everything in it, which would make a
+// bare "was anything painted" comparison true whatever the heading, and a
+// half strip carries no such fill.
 func TestRowAttitudeDrawsTheHeading(t *testing.T) {
 	t.Parallel()
 
@@ -65,11 +72,11 @@ func TestRowAttitudeDrawsTheHeading(t *testing.T) {
 
 		plane := scenePlane(icaoSample, callsignSample, 45, 12, 2400, heading)
 
-		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, sceneFrame(plane))
+		scene, canv, _ := sceneOn(tb, panelWidth, panelHeight, sceneFrame(stripFillerPlane(), plane))
 		scene.Apply(bareScope())
 		scene.Draw(canv, 0)
 
-		if painted(canv, rowAttitudeCell) == 0 {
+		if painted(canv, stripAttitudeCell) == 0 {
 			tb.Fatalf("the attitude cell drew nothing at heading %g, want an aircraft in it", heading)
 		}
 
@@ -85,7 +92,7 @@ func TestRowAttitudeDrawsTheHeading(t *testing.T) {
 
 	for left := range drawn {
 		for right := left + 1; right < len(drawn); right++ {
-			if identicalIn(drawn[left], drawn[right], rowAttitudeCell) {
+			if identicalIn(drawn[left], drawn[right], stripAttitudeCell) {
 				t.Errorf("headings %g and %g drew the same cell, want one turned to each",
 					headings[left], headings[right])
 			}
@@ -96,10 +103,13 @@ func TestRowAttitudeDrawsTheHeading(t *testing.T) {
 // TestRowAttitudeTakesTheAircraftColour checks the cell is painted the way the
 // aeroplane on the field beside it is.
 //
-// It is the aircraft's own colour in both colour modes, and the selected row
-// is no exception. The point of the column is that reading the table and
-// reading the scope are the same act of recognition, which a row that changed
-// colour when it was selected would break for the one row it matters most on.
+// It is the aircraft's own colour in both colour modes, and the selected
+// strip is no exception: both the filler ahead of it and the aircraft under
+// test fly the same altitude, so the check holds on the full strip's own
+// attitude cell as well as on the half strip below it. The point of the cell
+// is that reading the board and reading the scope are the same act of
+// recognition, which a strip that changed colour when it was selected would
+// break for the one strip it matters most on.
 func TestRowAttitudeTakesTheAircraftColour(t *testing.T) {
 	t.Parallel()
 
@@ -107,19 +117,27 @@ func TestRowAttitudeTakesTheAircraftColour(t *testing.T) {
 	// low one the rest of these fixtures use.
 	const high = 36000.0
 
+	filler := scenePlane("AAA111", "FILLER1", 0, 5, high, 10)
 	plane := scenePlane(icaoSample, callsignSample, 45, 12, high, 41)
 
-	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(plane))
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(filler, plane))
 	scene.Apply(bareScope())
 	scene.Draw(canv, 0)
 
-	if got := countColour(canv, rowAttitudeCell, theme.Night.AltHigh); got == 0 {
-		t.Errorf("the attitude cell drew no %v pixels, want the aircraft's own band colour",
-			theme.Night.AltHigh)
-	}
+	for _, testCase := range []struct {
+		name string
+		box  image.Rectangle
+	}{
+		{name: "the selected strip", box: firstStripAttitudeCell},
+		{name: "an unselected strip", box: stripAttitudeCell},
+	} {
+		if got := countColour(canv, testCase.box, theme.Night.AltHigh); got == 0 {
+			t.Errorf("%s drew no %v pixels, want the aircraft's own band colour", testCase.name, theme.Night.AltHigh)
+		}
 
-	if got := countColour(canv, rowAttitudeCell, theme.Night.Ink); got != 0 {
-		t.Errorf("the attitude cell drew %d ink pixels, want the band colour even on the selected row", got)
+		if got := countColour(canv, testCase.box, theme.Night.Ink); got != 0 {
+			t.Errorf("%s drew %d ink pixels, want the band colour instead", testCase.name, got)
+		}
 	}
 }
 
@@ -133,17 +151,20 @@ func TestRowAttitudeTakesTheAircraftColour(t *testing.T) {
 // filled disc instead.
 //
 // The disc is round, so the test reads its extent: a model at any heading is
-// longer in one direction than the other, and a disc is not.
+// longer in one direction than the other, and a disc is not. Measuring the
+// extent against the field only works away from the selected strip's own
+// lifted fill, which is why the aircraft under test flies behind a filler and
+// lands on a half strip; see TestRowAttitudeDrawsTheHeading.
 func TestUnknownHeadingDrawsTheDisc(t *testing.T) {
 	t.Parallel()
 
 	plane := scenePlane(icaoSample, callsignSample, 45, 12, 2400, noHeading)
 
-	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(plane))
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(stripFillerPlane(), plane))
 	scene.Apply(bareScope())
 	scene.Draw(canv, 0)
 
-	box, drawn := shapeExtent(canv, rowAttitudeCell, theme.Night.Field)
+	box, drawn := shapeExtent(canv, stripAttitudeCell, theme.Night.Field)
 	if !drawn {
 		t.Fatal("the attitude cell drew nothing for an aircraft with no heading, want the disc")
 	}

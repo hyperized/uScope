@@ -9,6 +9,12 @@ import (
 	"github.com/hyperized/uScope/internal/source"
 )
 
+// notSelected is the index a selection has while the filter is hiding it. The
+// aircraft is still flying and the board still draws its strip, but the ICAO
+// index holds only what the filter let through, so there is no place in it to
+// point at.
+const notSelected = -1
+
 // Handle runs the scene's own key bindings and reports whether it took the
 // key.
 //
@@ -339,7 +345,7 @@ func (s *Scene) step(delta int) {
 // has to forget the choice.
 func (s *Scene) unpin() {
 	s.pinned, s.selHidden = false, false
-	s.selICAO, s.selIndex, s.rowStart = "", 0, 0
+	s.selICAO, s.selIndex = "", 0
 }
 
 // stepRange changes the range by one increment and turns auto off, because
@@ -353,25 +359,24 @@ func (s *Scene) stepRange(delta int) {
 }
 
 // syncSelection rebuilds the ICAO index from the frame and works out which
-// aircraft the panel is about.
+// aircraft gets the board's full strip.
 //
 // Two rules, and which one applies is the pin. Unpinned, the selection is the
 // nearest contact, which is index zero because the list arrives sorted by
-// distance; the rows go back to the top with it. That is the useful default on
-// a live feed, where the first aircraft to arrive with a position used to keep
-// the panel for as long as it stayed in range, however far away it drifted.
+// distance. That is the useful default on a live feed, where the first aircraft
+// to arrive with a position used to keep the full strip for as long as it
+// stayed in range, however far away it drifted.
 //
 // Pinned, the selection is kept by ICAO rather than by position, because one
-// aircraft overtaking another would otherwise hand the panel to a different
-// aeroplane without anyone pressing a key. A pinned aircraft that leaves the
-// list takes its pin with it: there is nothing left to hold, so the selection
-// goes back to following the nearest.
+// aircraft overtaking another would otherwise hand the full strip to a
+// different aeroplane without anyone pressing a key. A pinned aircraft that
+// leaves the list takes its pin with it: there is nothing left to hold, so the
+// selection goes back to following the nearest.
 //
 // The index holds only the aircraft the filter is showing, which is what makes
 // "the nearest" mean the nearest one on screen. An unpinned selection standing
-// on an aeroplane the filter then hid would be a panel about something nobody
-// can see, and the row list would carry an accent bar on a line that is not
-// there.
+// on an aeroplane the filter then hid would be a full strip about something
+// nobody can see.
 func (s *Scene) syncSelection(frame source.Frame) {
 	s.icaos = s.icaos[:0]
 
@@ -388,12 +393,12 @@ func (s *Scene) syncSelection(frame source.Frame) {
 	}
 
 	if len(s.icaos) == 0 {
-		s.selICAO, s.selIndex, s.rowStart, s.selHidden = "", -1, 0, false
+		s.selICAO, s.selIndex, s.selHidden = "", notSelected, false
 
 		return
 	}
 
-	s.selIndex, s.rowStart, s.selHidden = 0, 0, false
+	s.selIndex, s.selHidden = 0, false
 	s.selICAO = s.icaos[0]
 }
 
@@ -401,11 +406,11 @@ func (s *Scene) syncSelection(frame source.Frame) {
 // reports whether it managed to.
 //
 // Three states, and the filter is what adds the middle one. The aircraft is in
-// the index, so it has a row and the panel points at it. It is filtered out
-// but still in the frame, so the pin holds, the panel still draws it and says
-// FILTERED, and it has no row for the index to point at. Or it has gone off
-// the list altogether, and there is nothing left to hold: the pin goes and the
-// selection falls back to the nearest contact.
+// the index, so the board gives it the full strip. It is filtered out but still
+// in the frame, so the pin holds, the strip still draws it and says FILTERED,
+// and there is no index for it to sit at. Or it has gone off the list
+// altogether, and there is nothing left to hold: the pin goes and the selection
+// falls back to the nearest contact.
 //
 // The middle case is why this takes the frame rather than working off the ICAO
 // index alone. The index is what the filter left, and the whole question here

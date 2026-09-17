@@ -4,11 +4,19 @@
 // reaching for named colours, and so the two themes DESIGN.md calls for can
 // be swapped at run time without touching a scene.
 //
+// Both themes follow the glass cockpit's colour grammar, where a hue is a
+// meaning rather than a decoration: magenta is the active thing, cyan is a
+// data field, green is engaged or valid, amber is a caution, red is a warning,
+// and controls sit in grey softkeys. A Garmin panel teaches that vocabulary to
+// everyone who has flown behind one, and uScope maps onto it without inventing
+// anything of its own. See the semantic fields on Palette for what each hue is
+// allowed to mark.
+//
 // Night is the default because the uConsole is a backlit handheld: a light
-// field is a torch in the face at night and eats battery all day. Paper is
-// modelled on the Flightscanner cards: light field, dark ink, a navy header
-// band. `l` cycles between them at run time and `--theme` picks the one to
-// start on.
+// field is a torch in the face at night and eats battery all day. Day is the
+// same grammar on a cool light grey, which is what a panel app does for its
+// daytime page. `l` cycles between them at run time and `--theme` picks the
+// one to start on.
 package theme
 
 import (
@@ -24,44 +32,80 @@ type Palette struct {
 	// Field is the background the whole frame is cleared to.
 	Field color.RGBA
 
-	// Ink is the reading colour: callsigns, figures, anything that is data.
+	// Ink is the reading colour: callsigns, figures, anything that is data
+	// about an aeroplane.
 	Ink color.RGBA
 
 	// Muted is for chrome that has to be present but not read: labels, units,
-	// the wordmark, column headings.
+	// empty states, the coastline's neighbours in the furniture.
 	Muted color.RGBA
 
-	// Accent is the one colour that draws the eye. It marks the selected
-	// aircraft, and in the 3D view the measured half of the receiving
-	// envelope. Those are the only two, and they never look alike: one is a
-	// ring on a contact with a callsign hanging off it, the other a wireframe
-	// around the outside of the whole picture.
+	// Accent is the active thing, and on a glass panel that means magenta. It
+	// marks the selected aircraft and nothing else: the ring on the scope, the
+	// three-line tag hanging off it, and the edge down the selected flight
+	// strip. Three marks, one aeroplane, one colour.
+	//
+	// The 3D view's measured envelope used to share it. It does not any more:
+	// the mesh is drawn in Data, because it is a record of what the antenna
+	// heard rather than the thing the operator has picked out.
 	Accent color.RGBA
+
+	// Data is the cyan a glass panel sets a data field in. Here that is the
+	// header's source label, the receiver's coordinates, both clocks, the
+	// battery percentage and the column headers over the flight strips. Every
+	// one of them is a reading about the machine rather than about an
+	// aeroplane, which is what separates them from Ink.
+	Data color.RGBA
+
+	// OK is green for valid or engaged: a GPS fix word, the bar under an
+	// engaged softkey, the source dot while the feed is connected.
+	OK color.RGBA
+
+	// Caution is amber for a reading that is a guess rather than a fact: the
+	// self-locate estimate and its radius, the question mark it carries when
+	// its own observations disagree, the SWEEP marker, and GPS LOST.
+	Caution color.RGBA
+
+	// Warn is red, and one thing wears it: EMERGENCY, as a filled box with
+	// white text. A warning that looks like every other label is not a warning.
+	Warn color.RGBA
+
+	// Key is the softkey box the whole bottom bar is built from. It is a step
+	// off the field rather than a step towards the ink, so a row of them reads
+	// as hardware under the picture instead of as more type on it.
+	Key color.RGBA
 
 	// Rule is for hairlines and borders, a step above the field rather than
 	// a step below the ink.
 	Rule color.RGBA
 
 	// Shore is the coastline under the scope, and the quietest colour either
-	// theme has. Against the field it carries a little over 40% of the
-	// contrast Muted does, which is the level it was picked for: the rings
-	// carry a number and have to be read, the coast only has to be
-	// recognised, and a coastline as loud as the furniture turns the scope
-	// into a map that happens to have aircraft on it.
+	// theme has. Against the field it carries just under 40% of the contrast
+	// Muted does, 38% on night and 40% on day, which is the level it was
+	// picked for: the rings carry a number and have to be read, the coast only
+	// has to be recognised, and a coastline as loud as the furniture turns the
+	// scope into a map that happens to have aircraft on it.
 	Shore color.RGBA
 
 	// The altitude bands. Aircraft are coloured by how high they are, which
 	// is the one piece of information a top-down scope cannot show by
-	// position. Unused until the radar slice; they live here so the palette
-	// is complete rather than growing a field per slice.
+	// position. The ramp is the cockpit's own: green low, white in the middle,
+	// orange high, so it reads as height rather than as a traffic light.
+	//
+	// AltLow deliberately repeats OK and AltMid deliberately repeats Ink. Both
+	// pairs mean the same thing in the same picture, and a second green or a
+	// second white would be one more colour to keep in step across two themes
+	// for no gain anybody could see.
 	AltLow  color.RGBA
 	AltMid  color.RGBA
 	AltHigh color.RGBA
 
 	// Band is the header band's own background, and BandInk the text set on
-	// it. They are separate from Field and Ink because the paper theme's
-	// band is a solid navy strip rather than the page colour, and text on it
-	// needs its own contrast rather than the page's.
+	// it. They are separate from Field and Ink because both themes set the
+	// band as a dark strip, and text on it needs its own contrast rather than
+	// the page's. Night's band sits a shade above its black field rather than
+	// flush with it, so the masthead reads as a strip on both themes and not
+	// only on one.
 	Band    color.RGBA
 	BandInk color.RGBA
 }
@@ -70,31 +114,40 @@ type Palette struct {
 // rather than literals in the palette below because a bare hex number in an
 // argument list tells a reader nothing about which colour it is.
 const (
-	nightField   = 0x0A0E14
-	nightInk     = 0xD8DEE9
-	nightMuted   = 0x5C7080
-	nightAccent  = 0xF0A030
-	nightRule    = 0x2A3B4A
-	nightShore   = 0x1E3440
-	nightAltLow  = 0x4CAF6E
-	nightAltMid  = 0xE0A93B
-	nightAltHigh = 0xD05A4A
+	nightField   = 0x000000
+	nightInk     = 0xFFFFFF
+	nightMuted   = 0x8C949C
+	nightRule    = 0x3A4148
+	nightBand    = 0x0E1114
+	nightAccent  = 0xF050F0
+	nightData    = 0x3FE3FF
+	nightOK      = 0x28E05A
+	nightCaution = 0xFFB300
+	nightWarn    = 0xFF2A2A
+	nightKey     = 0x2A3036
+	nightAltHigh = 0xFF8A3D
+	nightShore   = 0x2C3A44
 )
 
-// The Paper palette, packed the same way. Modelled on an e-paper flight
-// display: dark ink on warm paper, a couple of accents, and a navy band
-// across the header rather than the page colour showing through.
+// The Day palette, packed the same way: the same grammar on a cool light grey,
+// with every hue pulled down far enough to hold its meaning against a light
+// field. The magenta deepens, the cyan becomes a teal, and the greens and reds
+// darken rather than changing what they say.
 const (
-	paperField   = 0xF3F1EA
-	paperInk     = 0x1C2230
-	paperMuted   = 0x6E7681
-	paperAccent  = 0xC8700A
-	paperRule    = 0xC9C5BA
-	paperShore   = 0xBFB9AA
-	paperAltLow  = 0x2E8B4F
-	paperAltMid  = 0xB8770B
-	paperAltHigh = 0xB83A2E
-	paperBand    = 0x24304F
+	dayField   = 0xEEF1F4
+	dayInk     = 0x101418
+	dayMuted   = 0x6B7580
+	dayRule    = 0xC4CBD2
+	dayBand    = 0x1A1F26
+	dayBandInk = 0xFFFFFF
+	dayAccent  = 0xB0189F
+	dayData    = 0x0B7FA8
+	dayOK      = 0x1E8E4A
+	dayCaution = 0xB8770B
+	dayWarn    = 0xC21F1F
+	dayKey     = 0xD5DBE1
+	dayAltHigh = 0xC2571C
+	dayShore   = 0xB6C0C9
 )
 
 // Taking one channel out of a packed colour.
@@ -108,50 +161,59 @@ const (
 	opaque = 0xFF
 )
 
-// Night is the dark theme: a near-black field with a trace of blue in it, so
-// it reads as night sky rather than as a dead panel, and light grey ink that
-// stops short of white because pure white on near-black blooms on an LCD at
-// this size.
+// Night is the dark theme: a true black field with white ink on it, which is
+// the contrast an instrument panel is read at in the dark.
 //
 //nolint:gochecknoglobals // a palette is data, and color.RGBA cannot be const.
 var Night = Palette{
 	Field:   rgb(nightField),
 	Ink:     rgb(nightInk),
 	Muted:   rgb(nightMuted),
-	Accent:  rgb(nightAccent),
 	Rule:    rgb(nightRule),
+	Accent:  rgb(nightAccent),
+	Data:    rgb(nightData),
+	OK:      rgb(nightOK),
+	Caution: rgb(nightCaution),
+	Warn:    rgb(nightWarn),
+	Key:     rgb(nightKey),
 	Shore:   rgb(nightShore),
-	AltLow:  rgb(nightAltLow),
-	AltMid:  rgb(nightAltMid),
+
+	// AltLow repeats OK and AltMid repeats Ink; see the note on the bands.
+	AltLow:  rgb(nightOK),
+	AltMid:  rgb(nightInk),
 	AltHigh: rgb(nightAltHigh),
 
-	// Band and BandInk repeat Field and Ink: at night the header band sits
-	// flush with the field and its text reads exactly as it did before the
-	// band existed.
-	Band:    rgb(nightField),
+	Band:    rgb(nightBand),
 	BandInk: rgb(nightInk),
 }
 
-// Paper is the light theme DESIGN.md calls for: dark ink on warm paper with
-// a navy header band, modelled on an e-paper flight display.
+// Day is the light theme: the same grammar on a cool light grey, keeping the
+// near-black header band so the masthead reads the same on either theme.
 //
 //nolint:gochecknoglobals // a palette is data, and color.RGBA cannot be const.
-var Paper = Palette{
-	Field:   rgb(paperField),
-	Ink:     rgb(paperInk),
-	Muted:   rgb(paperMuted),
-	Accent:  rgb(paperAccent),
-	Rule:    rgb(paperRule),
-	Shore:   rgb(paperShore),
-	AltLow:  rgb(paperAltLow),
-	AltMid:  rgb(paperAltMid),
-	AltHigh: rgb(paperAltHigh),
-	Band:    rgb(paperBand),
+var Day = Palette{
+	Field:   rgb(dayField),
+	Ink:     rgb(dayInk),
+	Muted:   rgb(dayMuted),
+	Rule:    rgb(dayRule),
+	Accent:  rgb(dayAccent),
+	Data:    rgb(dayData),
+	OK:      rgb(dayOK),
+	Caution: rgb(dayCaution),
+	Warn:    rgb(dayWarn),
+	Key:     rgb(dayKey),
+	Shore:   rgb(dayShore),
 
-	// BandInk matches Field rather than getting a colour of its own: the
-	// band is a solid navy strip, and setting its text in the paper's own
-	// colour reads as a cut-out rather than as a second ink to keep track of.
-	BandInk: rgb(paperField),
+	AltLow:  rgb(dayOK),
+	AltMid:  rgb(dayInk),
+	AltHigh: rgb(dayAltHigh),
+
+	Band: rgb(dayBand),
+
+	// BandInk is white rather than the page colour. The band is a near-black
+	// strip on both themes, so its text is the same white on both, and the day
+	// page is far too light to read as ink on it.
+	BandInk: rgb(dayBandInk),
 }
 
 // rgb turns a packed 0xRRGGBB value into an opaque colour. Writing the
@@ -169,23 +231,23 @@ func rgb(value uint32) color.RGBA {
 //
 // A scene needs it when it has to adapt a colour that did not come out of the
 // palette. An airline's brand colour is the case that forced it: the same navy
-// has to be lifted off night's near-black field and pushed down onto paper's,
+// has to be lifted off night's black field and pushed down onto the day page,
 // and the palette is the only thing the scene is handed that says which of the
-// two it is drawing on. Anything that is not Paper reads as dark, which is the
+// two it is drawing on. Anything that is not Day reads as dark, which is the
 // rule Kind.Palette and Kind.Next already follow, so a palette assembled by
 // hand in a test behaves like night rather than like neither.
-func (p Palette) Light() bool { return p == Paper }
+func (p Palette) Light() bool { return p == Day }
 
 // Kind names one of the two themes. It is what --theme parses into and what
 // Config carries as the theme to start on.
 type Kind string
 
-// The two spellings --theme accepts. Named KindNight and KindPaper rather
-// than Night and Paper so they do not collide with the Palette variables
-// above, which are what a Kind resolves to.
+// The two spellings --theme accepts. Named KindNight and KindDay rather than
+// Night and Day so they do not collide with the Palette variables above, which
+// are what a Kind resolves to.
 const (
 	KindNight Kind = "night"
-	KindPaper Kind = "paper"
+	KindDay   Kind = "day"
 )
 
 // ErrUnknown is returned for a --theme value that is neither spelling.
@@ -200,32 +262,32 @@ func Parse(text string) (Kind, error) {
 	switch Kind(text) {
 	case KindNight:
 		return KindNight, nil
-	case KindPaper:
-		return KindPaper, nil
+	case KindDay:
+		return KindDay, nil
 	default:
 		return KindNight, fmt.Errorf("%w: %q", ErrUnknown, text)
 	}
 }
 
-// Palette resolves a Kind to its colours. Anything that is not KindPaper
-// reads as night, which is what makes the zero value of Kind, the empty
-// string, a usable default rather than a value that has to be special-cased
-// wherever a Kind is read.
+// Palette resolves a Kind to its colours. Anything that is not KindDay reads
+// as night, which is what makes the zero value of Kind, the empty string, a
+// usable default rather than a value that has to be special-cased wherever a
+// Kind is read.
 func (k Kind) Palette() Palette {
-	if k == KindPaper {
-		return Paper
+	if k == KindDay {
+		return Day
 	}
 
 	return Night
 }
 
 // Next cycles to the other theme. As with Palette, anything that is not
-// KindPaper is treated as night and moves to paper, so the zero value cycles
-// the same way KindNight does.
+// KindDay is treated as night and moves to day, so the zero value cycles the
+// same way KindNight does.
 func (k Kind) Next() Kind {
-	if k == KindPaper {
+	if k == KindDay {
 		return KindNight
 	}
 
-	return KindPaper
+	return KindDay
 }

@@ -219,7 +219,7 @@ func identicalIn(first, second *canvas.Canvas, box image.Rectangle) bool {
 // frame less its margin, less the header band and the key bar.
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
-var scopeBox = image.Rect(16, 77, 609, 670)
+var scopeBox = image.Rect(16, 77, 605, 666)
 
 // press sends a rune through Handle.
 func press(scene *radar.Scene, value rune) bool {
@@ -357,9 +357,12 @@ func TestDrawDropsTheColumnAndTheLabels(t *testing.T) {
 		narrow, narrowCanvas, _ := sceneOn(t, 639, 480, frame)
 		narrow.Draw(narrowCanvas, 0)
 
-		// The column lives in the right half. One pixel of width should not
-		// change what is on the left, but it empties the right.
-		right := image.Rect(400, 80, 639, 440)
+		// The column lives to the right of the square scope, which the
+		// narrower canvas re-centres into the space the column left: at 639
+		// pixels the circle itself reaches past x=494, so the probe starts
+		// well clear of it and sits inside the column's own bounds at 640,
+		// where nothing else on screen reaches.
+		right := image.Rect(500, 90, 620, 420)
 		if painted(narrowCanvas, right) >= painted(wideCanvas, right) {
 			t.Error("the right half is no emptier at 639 pixels than at 640, so the column did not go")
 		}
@@ -1154,11 +1157,11 @@ func TestSetPaletteChangesColours(t *testing.T) {
 		t.Fatalf("field pixel before SetPalette = %v, want %v", got, theme.Night.Field)
 	}
 
-	scene.SetPalette(theme.Paper)
+	scene.SetPalette(theme.Day)
 	scene.Draw(canv, 0)
 
-	if got := canv.Image().RGBAAt(fieldProbeX, fieldProbeY); got != theme.Paper.Field {
-		t.Errorf("field pixel after SetPalette(Paper) = %v, want %v", got, theme.Paper.Field)
+	if got := canv.Image().RGBAAt(fieldProbeX, fieldProbeY); got != theme.Day.Field {
+		t.Errorf("field pixel after SetPalette(Day) = %v, want %v", got, theme.Day.Field)
 	}
 }
 
@@ -1299,7 +1302,7 @@ func TestAirportsToggle(t *testing.T) {
 // ring radius, landing just past the centre dot rather than on it.
 //
 //nolint:gochecknoglobals // a point is data, and image.Point cannot be const.
-var homeRingPixel = image.Pt(316, 373)
+var homeRingPixel = image.Pt(314, 371)
 
 // TestHomeMarkerRingColour checks that the ring around the receiver's own
 // position takes the colour that says how much that position is worth, for
@@ -1314,10 +1317,10 @@ func TestHomeMarkerRingColour(t *testing.T) {
 	}{
 		{name: "no fix reads as muted", mode: source.FixNone, want: theme.Night.Muted},
 		{name: "a manual position takes the ink", mode: source.FixManual, want: theme.Night.Ink},
-		{name: "an estimate takes the accent", mode: source.FixEstimated, want: theme.Night.Accent},
-		{name: "a GPS still searching is critical", mode: source.FixGPSNoFix, want: theme.Night.AltHigh},
-		{name: "a 2D GPS fix is the mid band", mode: source.FixGPS2D, want: theme.Night.AltMid},
-		{name: "a full 3D GPS fix is the low band", mode: source.FixGPS3D, want: theme.Night.AltLow},
+		{name: "an estimate is a caution", mode: source.FixEstimated, want: theme.Night.Caution},
+		{name: "a GPS still searching is a caution too", mode: source.FixGPSNoFix, want: theme.Night.Caution},
+		{name: "a 2D GPS fix is OK", mode: source.FixGPS2D, want: theme.Night.OK},
+		{name: "a full 3D GPS fix is OK too", mode: source.FixGPS3D, want: theme.Night.OK},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1463,7 +1466,7 @@ func TestAirlineLegendShowsOther(t *testing.T) {
 	// otherSwatchBox is where the fifth legend slot's swatch lands once OTHER
 	// is showing, worked out the same way the legend itself divides its width
 	// among however many slots are on screen.
-	otherSwatchBox := image.Rect(1133, 658, 1143, 668)
+	otherSwatchBox := image.Rect(1133, 654, 1143, 664)
 
 	withOther, withOtherCanvas, _ := sceneOn(t, panelWidth, panelHeight,
 		sceneFrame(append(append([]airplane.Snapshot{}, top4...), unknown)...), radar.WithColour(radar.ColourAirline))
@@ -1556,22 +1559,22 @@ func TestPanelVerticalRateTriangle(t *testing.T) {
 	}
 }
 
-// rowWindow is how many compact rows fit at the panel's resolution now the
-// details block has gone and the list has the height it used to take: the
-// column runs from y=297 to y=642, a title line takes 16 of that and each row
-// 20, which is sixteen rows.
-const rowWindow = 16
+// stripWindowCapacity is how many aircraft the board draws without needing
+// the "+N MORE" line at the panel's resolution: ten strips fit between the row
+// of field names and the legend, and an eleventh costs the board a strip to
+// pay for the tail line that says so.
+const stripWindowCapacity = 10
 
-// rowListRightBand sits inside the last compact row's line, in the columns
-// only a real aircraft row fills (altitude, speed, distance, bearing). The
+// stripListRightBand sits inside the tenth strip's line, in the fields only a
+// real aircraft strip fills (POS, SEEN and the rules between them). The
 // "+N MORE" line is short and left-aligned, so it never reaches this far
-// right: painted pixels here mean a real row, not the tail.
-var rowListRightBand = image.Rect(1100, 613, 1264, 629) //nolint:gochecknoglobals // a rectangle is data.
+// right: painted pixels here mean a real strip, not the tail.
+var stripListRightBand = image.Rect(1100, 585, 1264, 611) //nolint:gochecknoglobals // a rectangle is data.
 
 // TestRowListMoreLine checks the window boundary the "+N MORE" line closes: a
-// fleet exactly the size of the window leaves a real row on the last line,
-// one aircraft more replaces it with the tail, and both a light and a busy
-// fleet still draw.
+// fleet exactly the size of the board's capacity leaves a real strip on the
+// last line, one aircraft more replaces it with the tail, and both a light
+// and a busy fleet still draw.
 func TestRowListMoreLine(t *testing.T) {
 	t.Parallel()
 
@@ -1580,9 +1583,12 @@ func TestRowListMoreLine(t *testing.T) {
 		count       int
 		wantRealRow bool
 	}{
-		{name: "fewer than the window: no last line at all", count: rowWindow - 1, wantRealRow: false},
-		{name: "exactly the window: the last line is a real row", count: rowWindow, wantRealRow: true},
-		{name: "one more than the window: the last line is the more line", count: rowWindow + 1, wantRealRow: false},
+		{name: "fewer than capacity: no last line at all", count: stripWindowCapacity - 1, wantRealRow: false},
+		{name: "exactly capacity: the last line is a real strip", count: stripWindowCapacity, wantRealRow: true},
+		{
+			name:  "one more than capacity: the last line is the more line",
+			count: stripWindowCapacity + 1, wantRealRow: false,
+		},
 		{name: "a light fleet of twelve still draws", count: 12, wantRealRow: false},
 		{name: "a busy fleet of forty still draws", count: benchPlanes, wantRealRow: false},
 	} {
@@ -1597,7 +1603,7 @@ func TestRowListMoreLine(t *testing.T) {
 				t.Fatal("nothing was drawn at all")
 			}
 
-			if got := painted(canv, rowListRightBand) > 0; got != testCase.wantRealRow {
+			if got := painted(canv, stripListRightBand) > 0; got != testCase.wantRealRow {
 				t.Errorf("last line is a real row = %v, want %v", got, testCase.wantRealRow)
 			}
 		})
@@ -1805,7 +1811,7 @@ func TestAirlineColourAdaptsToThePalette(t *testing.T) {
 		night.Draw(nightCanvas, 0)
 
 		paper, paperCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame,
-			radar.WithColour(radar.ColourAirline), radar.WithPalette(theme.Paper))
+			radar.WithColour(radar.ColourAirline), radar.WithPalette(theme.Day))
 		paper.Draw(paperCanvas, 0)
 
 		if painted(paperCanvas, scopeBox) == 0 {
@@ -1818,9 +1824,9 @@ func TestAirlineColourAdaptsToThePalette(t *testing.T) {
 	})
 }
 
-// TestDetailsSquawkEmergency checks that an emergency squawk carries the
-// accent into the details block, the one place besides the selection that
-// colour marks.
+// TestPanelSquawkEmergency checks that an emergency squawk draws the filled
+// warning box on the selected strip: red with white text, the one place a
+// colour is fixed rather than themed.
 func TestPanelSquawkEmergency(t *testing.T) {
 	t.Parallel()
 
@@ -1831,8 +1837,8 @@ func TestPanelSquawkEmergency(t *testing.T) {
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(plane))
 	scene.Draw(canv, 0)
 
-	if countColour(canv, panelBox, theme.Night.Accent) == 0 {
-		t.Error("an emergency squawk did not paint the accent colour in the panel")
+	if countColour(canv, panelBox, theme.Night.Warn) == 0 {
+		t.Error("an emergency squawk did not paint the warning box in the panel")
 	}
 }
 
@@ -1976,30 +1982,30 @@ func TestMinimalModeStripsChrome(t *testing.T) {
 
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
 
-	full, fullCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
+	full, fullCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Day))
 	full.Draw(fullCanvas, 0)
 
-	if countColour(fullCanvas, fullCanvas.Bounds(), theme.Paper.Band) == 0 {
+	if countColour(fullCanvas, fullCanvas.Bounds(), theme.Day.Band) == 0 {
 		t.Fatal("the full scope drew no header-band pixels, so this comparison proves nothing")
 	}
 
-	minimal, minimalCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
+	minimal, minimalCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Day))
 	minimal.Apply(radar.Settings{View: radar.ViewMinimal})
 	minimal.Draw(minimalCanvas, 0)
 
-	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Band); got != 0 {
+	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Day.Band); got != 0 {
 		t.Errorf("minimal mode drew %d header-band pixels, want 0", got)
 	}
 
-	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Ink); got != 0 {
+	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Day.Ink); got != 0 {
 		t.Errorf("minimal mode drew %d key-cap pixels, want 0", got)
 	}
 
-	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.Rule); got != 0 {
+	if got := countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Day.Rule); got != 0 {
 		t.Errorf("minimal mode drew %d range-ring pixels, want 0", got)
 	}
 
-	if countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Paper.AltLow) == 0 {
+	if countColour(minimalCanvas, minimalCanvas.Bounds(), theme.Day.AltLow) == 0 {
 		t.Error("minimal mode drew no low-band pixels, want the aircraft's own sprite to survive")
 	}
 }
@@ -2327,26 +2333,26 @@ func headerBand(width int) image.Rectangle {
 	return image.Rect(pastDot, bandTop, width-16, bandUnder)
 }
 
-// paintedExtent reports the leftmost and rightmost columns of box that have
-// anything drawn in them, or -1 for an empty box.
+// paintedEnd reports the rightmost column of box that has anything drawn in
+// it, or -1 for an empty box.
+//
+// Every caller below only ever wants where a run of painted columns ends, to
+// compare it against another run's end, so that is the only edge this reports:
+// a leftmost edge nothing here reads is a result nobody can claim is tested.
 //
 //nolint:varnamelen // x is the pixel-addressing idiom used throughout uScope.
-func paintedExtent(canv *canvas.Canvas, box image.Rectangle) (int, int) {
-	first, last := -1, -1
+func paintedEnd(canv *canvas.Canvas, box image.Rectangle) int {
+	last := -1
 
 	for x := box.Min.X; x < box.Max.X; x++ {
 		if painted(canv, image.Rect(x, box.Min.Y, x+1, box.Max.Y)) == 0 {
 			continue
 		}
 
-		if first < 0 {
-			first = x
-		}
-
 		last = x
 	}
 
-	return first, last
+	return last
 }
 
 // sourceLabelScene draws one frame with a given source label at a given width.
@@ -2371,13 +2377,18 @@ func TestSourceLabelFitsTheBand(t *testing.T) {
 	t.Run("a label with room to spare is drawn whole", func(t *testing.T) {
 		t.Parallel()
 
+		// The header band's own fill no longer sits flush with the field, so
+		// paintedEnd would find the band painted to its far edge whatever the
+		// label says. The source label and the clocks are both Data, so an
+		// empty label leaves only the clocks to find with colourExtent.
 		band := headerBand(panelWidth)
-		blockLeft, _ := paintedExtent(sourceLabelScene(t, panelWidth, ""), band)
+		blockLeft, _ := colourExtent(sourceLabelScene(t, panelWidth, ""), band, theme.Night.Data)
 		labelBand := image.Rect(band.Min.X, band.Min.Y, blockLeft, band.Max.Y)
 
-		_, full := paintedExtent(sourceLabelScene(t, panelWidth, beastLabel), labelBand)
-		_, twin := paintedExtent(sourceLabelScene(t, panelWidth, beastLabelTwin), labelBand)
-		_, shorter := paintedExtent(sourceLabelScene(t, panelWidth, beastLabel[:len(beastLabel)-1]), labelBand)
+		_, full := colourExtent(sourceLabelScene(t, panelWidth, beastLabel), labelBand, theme.Night.Data)
+		_, twin := colourExtent(sourceLabelScene(t, panelWidth, beastLabelTwin), labelBand, theme.Night.Data)
+		_, shorter := colourExtent(
+			sourceLabelScene(t, panelWidth, beastLabel[:len(beastLabel)-1]), labelBand, theme.Night.Data)
 
 		// Two labels that differ only in their last character reach the same
 		// column, and both reach one glyph further than the same label with
@@ -2402,11 +2413,11 @@ func TestSourceLabelFitsTheBand(t *testing.T) {
 		const gap = 24 // radar's own sourceLabelGap.
 
 		band := headerBand(narrowPanelWide)
-		blockLeft, _ := paintedExtent(sourceLabelScene(t, narrowPanelWide, ""), band)
+		blockLeft, _ := colourExtent(sourceLabelScene(t, narrowPanelWide, ""), band, theme.Night.Data)
 		labelBand := image.Rect(band.Min.X, band.Min.Y, blockLeft, band.Max.Y)
 
 		cut := sourceLabelScene(t, narrowPanelWide, beastLabel)
-		_, end := paintedExtent(cut, labelBand)
+		_, end := colourExtent(cut, labelBand, theme.Night.Data)
 
 		if end < 0 {
 			t.Fatal("nothing at all was drawn for the source label")
@@ -2438,34 +2449,47 @@ func TestSourceLabelFitsTheBand(t *testing.T) {
 // resolution. The three caps before AUTO are all fixed-width, so AUTO's own
 // box does not move when a label further along changes.
 //
+// Every cap is the same grey box regardless of its state now: what changes is
+// a 2px bar in the OK colour along the inside of the bottom edge when the
+// setting is engaged, inset keyEngagedInset from each side. autoEngagedBar
+// below is that strip, worked out from autoCapBox the way drawEngaged works
+// it out from a cap's own box.
+//
 //nolint:gochecknoglobals // a rectangle is data.
 var (
-	quitCapBox = image.Rect(16, 686, 32, 704)
-	autoCapBox = image.Rect(244, 686, 260, 704)
-	keyBarBox  = image.Rect(0, 686, 1280, 704)
+	quitCapBox = image.Rect(16, 682, 64, 704)
+	autoCapBox = image.Rect(220, 682, 268, 704)
+	keyBarBox  = image.Rect(0, 682, 1280, 704)
+
+	autoEngagedBar = image.Rect(
+		autoCapBox.Min.X+keyEngagedInsetTest, autoCapBox.Max.Y-keyPadYTest,
+		autoCapBox.Max.X-keyEngagedInsetTest, autoCapBox.Max.Y-keyPadYTest+keyEngagedHeightTest,
+	)
 
 	// biasCapBox is the B cap the bar draws once a frame says the source has
 	// a bias-tee, at the panel's resolution. It sits right after the twelve
 	// fixed caps in keyCaps, so its left edge is where the bar's painted
-	// extent ends when the cap is not there at all, and its width is one
-	// small glyph plus the cap's own padding on both sides. Verified against
-	// a rendered PNG: at (722, 686) to (738, 704) the cap is solid ink when
-	// the bias-tee is on and a hollow outline when it is off, the same
-	// pattern autoCapBox checks for AUTO.
-	//
-	// It moved twelve pixels left when the T cap stopped saying TRAILS and
-	// started naming the trail mode: LONG is two characters shorter, and the
-	// bar is laid out left to right, so everything after T came with it. It
-	// moved fifty-eight pixels right again when the F cap arrived between C
-	// and L, which is what an F cap reading ALL takes, and another sixty-four
-	// when W WIDE went on the end of keyCaps.
-	biasCapBox = image.Rect(844, 686, 860, 704)
+	// extent ends when the cap is not there at all.
+	biasCapBox     = image.Rect(725, 682, 787, 704)
+	biasEngagedBar = image.Rect(
+		biasCapBox.Min.X+keyEngagedInsetTest, biasCapBox.Max.Y-keyPadYTest,
+		biasCapBox.Max.X-keyEngagedInsetTest, biasCapBox.Max.Y-keyPadYTest+keyEngagedHeightTest,
+	)
+)
+
+// The three measurements a softkey's engaged bar is built from, spelled out
+// here rather than imported because the package under test keeps its own
+// copies unexported.
+const (
+	keyPadYTest          = 3
+	keyEngagedInsetTest  = 2
+	keyEngagedHeightTest = 2
 )
 
 // TestKeyCapsShowToggleState checks the one thing the bar could not say
-// before: whether a toggle is on. A cap that is on is a filled box with the
-// letter knocked out of it, and one that is off is an outline with the letter
-// in ink, so the two read as a switch thrown and a switch not thrown.
+// before: whether a toggle is on. Every cap is the same grey box whatever its
+// state, and an engaged one grows a green bar along its bottom edge that an
+// idle one does not.
 func TestKeyCapsShowToggleState(t *testing.T) {
 	t.Parallel()
 
@@ -2478,26 +2502,17 @@ func TestKeyCapsShowToggleState(t *testing.T) {
 	press(off, 'r')
 	off.Draw(offCanvas, 0)
 
-	filledInk := countColour(onCanvas, autoCapBox, theme.Night.Ink)
-	filledField := countColour(onCanvas, autoCapBox, theme.Night.Field)
-	hollowInk := countColour(offCanvas, autoCapBox, theme.Night.Ink)
-	hollowField := countColour(offCanvas, autoCapBox, theme.Night.Field)
-
-	if filledInk <= filledField {
-		t.Errorf("auto on: %d ink and %d field pixels, want a filled cap", filledInk, filledField)
+	if got := countColour(onCanvas, autoEngagedBar, theme.Night.OK); got == 0 {
+		t.Error("auto on: no OK pixels in the engaged bar, want it drawn")
 	}
 
-	if hollowField <= hollowInk {
-		t.Errorf("auto off: %d ink and %d field pixels, want a hollow cap", hollowInk, hollowField)
+	if got := countColour(offCanvas, autoEngagedBar, theme.Night.OK); got != 0 {
+		t.Errorf("auto off: %d OK pixels in the engaged bar, want none", got)
 	}
 
-	if hollowInk == 0 {
-		t.Error("the hollow cap drew no ink at all, want an outline and a letter")
-	}
-
-	// q is not a toggle, so its cap is filled in both, which is what keeps a
-	// hollow cap meaning something.
-	if countColour(onCanvas, quitCapBox, theme.Night.Ink) != countColour(offCanvas, quitCapBox, theme.Night.Ink) {
+	// q has no setting behind it, so its cap never grows a bar and is drawn
+	// identically whatever the toggle under test is doing.
+	if !identicalIn(onCanvas, offCanvas, quitCapBox) {
 		t.Error("the quit cap changed with a toggle it has nothing to do with")
 	}
 }
@@ -2511,6 +2526,11 @@ func TestKeyCapsShowTheColourMode(t *testing.T) {
 	const (
 		labelDelta = 4 // AIRLINE is four characters longer than ALT.
 		smallGlyph = 6
+
+		// labelTrackingTest is the letter spacing every softkey label is set
+		// at, spelled out here for the same reason smallGlyph is: four more
+		// glyphs also means four more gaps between them.
+		labelTrackingTest = 1
 	)
 
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
@@ -2521,11 +2541,11 @@ func TestKeyCapsShowTheColourMode(t *testing.T) {
 	airline, airlineCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
 	airline.Draw(airlineCanvas, 0)
 
-	_, altitudeEnd := paintedExtent(altitudeCanvas, keyBarBox)
-	_, airlineEnd := paintedExtent(airlineCanvas, keyBarBox)
+	altitudeEnd := paintedEnd(altitudeCanvas, keyBarBox)
+	airlineEnd := paintedEnd(airlineCanvas, keyBarBox)
 
-	if got := airlineEnd - altitudeEnd; got != labelDelta*smallGlyph {
-		t.Errorf("the key bar grew by %d pixels in airline mode, want %d", got, labelDelta*smallGlyph)
+	if want := labelDelta * (smallGlyph + labelTrackingTest); airlineEnd-altitudeEnd != want {
+		t.Errorf("the key bar grew by %d pixels in airline mode, want %d", airlineEnd-altitudeEnd, want)
 	}
 }
 
@@ -2549,8 +2569,8 @@ func TestBiasCapAppearsOnlyWhenSupported(t *testing.T) {
 	with, withCanvas, _ := sceneOn(t, panelWidth, panelHeight, supported)
 	with.Draw(withCanvas, 0)
 
-	_, withoutEnd := paintedExtent(withoutCanvas, keyBarBox)
-	_, withEnd := paintedExtent(withCanvas, keyBarBox)
+	withoutEnd := paintedEnd(withoutCanvas, keyBarBox)
+	withEnd := paintedEnd(withCanvas, keyBarBox)
 
 	if withEnd <= withoutEnd {
 		t.Errorf("key bar end with a bias-tee supported = %d, without = %d, want it further right", withEnd, withoutEnd)
@@ -2558,9 +2578,8 @@ func TestBiasCapAppearsOnlyWhenSupported(t *testing.T) {
 }
 
 // TestBiasCapShowsToggleState checks that the B cap follows the same on/off
-// convention every other toggle cap does: a filled box with the letter
-// knocked out when the bias-tee is on, and a hollow outline with the letter
-// in ink when it is off.
+// convention every other toggle cap does: the engaged bar along its bottom
+// edge when the bias-tee is on, and nothing there when it is off.
 func TestBiasCapShowsToggleState(t *testing.T) {
 	t.Parallel()
 
@@ -2578,21 +2597,12 @@ func TestBiasCapShowsToggleState(t *testing.T) {
 	offScene, offCanvas, _ := sceneOn(t, panelWidth, panelHeight, disabledFrame)
 	offScene.Draw(offCanvas, 0)
 
-	filledInk := countColour(onCanvas, biasCapBox, theme.Night.Ink)
-	filledField := countColour(onCanvas, biasCapBox, theme.Night.Field)
-	hollowInk := countColour(offCanvas, biasCapBox, theme.Night.Ink)
-	hollowField := countColour(offCanvas, biasCapBox, theme.Night.Field)
-
-	if filledInk <= filledField {
-		t.Errorf("bias-tee on: %d ink and %d field pixels, want a filled cap", filledInk, filledField)
+	if got := countColour(onCanvas, biasEngagedBar, theme.Night.OK); got == 0 {
+		t.Error("bias-tee on: no OK pixels in the engaged bar, want it drawn")
 	}
 
-	if hollowField <= hollowInk {
-		t.Errorf("bias-tee off: %d ink and %d field pixels, want a hollow cap", hollowInk, hollowField)
-	}
-
-	if hollowInk == 0 {
-		t.Error("the hollow cap drew no ink at all, want an outline and a letter")
+	if got := countColour(offCanvas, biasEngagedBar, theme.Night.OK); got != 0 {
+		t.Errorf("bias-tee off: %d OK pixels in the engaged bar, want none", got)
 	}
 }
 
@@ -2613,7 +2623,7 @@ func sweepScene(tb testing.TB, label string, sweeping bool) *canvas.Canvas {
 }
 
 // TestSweepMarkerInHeader checks that SWEEP only shows up in the header while
-// the gain sweep is running, and only in the accent colour. A sweep decodes
+// the gain sweep is running, and only in the caution colour. A sweep decodes
 // nothing for a few seconds, so this is the one line on screen that explains
 // why the scope looks empty rather than broken, and it must not linger once
 // the sweep has finished.
@@ -2625,13 +2635,25 @@ func TestSweepMarkerInHeader(t *testing.T) {
 	still := sweepScene(t, "SDR", false)
 	sweeping := sweepScene(t, "SDR", true)
 
-	if got := countColour(still, band, theme.Night.Accent); got != 0 {
-		t.Errorf("accent pixels in the header with no sweep running = %d, want 0", got)
+	if got := countColour(still, band, theme.Night.Caution); got != 0 {
+		t.Errorf("caution pixels in the header with no sweep running = %d, want 0", got)
 	}
 
-	if got := countColour(sweeping, band, theme.Night.Accent); got == 0 {
-		t.Error("no accent pixels in the header while the sweep is running, want the SWEEP marker drawn")
+	if got := countColour(sweeping, band, theme.Night.Caution); got == 0 {
+		t.Error("no caution pixels in the header while the sweep is running, want the SWEEP marker drawn")
 	}
+}
+
+// sweepLabelEnd is the rightmost column in box holding either the source
+// label (Data) or the SWEEP marker after it (Caution), or -1 if neither
+// drew anything: the header band's own fill no longer sits flush with the
+// field, so paintedEnd would find the band painted to its far edge
+// regardless of what the label says.
+func sweepLabelEnd(canv *canvas.Canvas, box image.Rectangle) int {
+	_, dataEnd := colourExtent(canv, box, theme.Night.Data)
+	_, cautionEnd := colourExtent(canv, box, theme.Night.Caution)
+
+	return max(dataEnd, cautionEnd)
 }
 
 // TestSweepMarkerLeavesRoomInALongLabel checks that the marker's room comes
@@ -2649,14 +2671,14 @@ func TestSweepMarkerLeavesRoomInALongLabel(t *testing.T) {
 	longLabel := strings.Repeat("X", longLabelRunes)
 
 	band := headerBand(panelWidth)
-	blockLeft, _ := paintedExtent(sourceLabelScene(t, panelWidth, ""), band)
+	blockLeft, _ := colourExtent(sourceLabelScene(t, panelWidth, ""), band, theme.Night.Data)
 	labelBand := image.Rect(band.Min.X, band.Min.Y, blockLeft, band.Max.Y)
 
 	still := sweepScene(t, longLabel, false)
 	sweeping := sweepScene(t, longLabel, true)
 
-	_, stillEnd := paintedExtent(still, labelBand)
-	_, sweepEnd := paintedExtent(sweeping, labelBand)
+	stillEnd := sweepLabelEnd(still, labelBand)
+	sweepEnd := sweepLabelEnd(sweeping, labelBand)
 
 	if stillEnd < 0 || sweepEnd < 0 {
 		t.Fatal("nothing at all was drawn for the source label")
@@ -3254,22 +3276,22 @@ func TestHeaderBandBleedsToTheEdges(t *testing.T) {
 
 	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
 
-	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Paper))
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithPalette(theme.Day))
 	scene.Draw(canv, 0)
 
 	for _, column := range []int{0, panelWidth - 1} {
-		if got := canv.Image().RGBAAt(column, 0); got != theme.Paper.Band {
-			t.Errorf("pixel (%d, 0) = %v, want the band colour %v", column, got, theme.Paper.Band)
+		if got := canv.Image().RGBAAt(column, 0); got != theme.Day.Band {
+			t.Errorf("pixel (%d, 0) = %v, want the band colour %v", column, got, theme.Day.Band)
 		}
 
 		rule := bandBottom(t, canv, column)
-		if got := canv.Image().RGBAAt(column, rule); got != theme.Paper.Rule {
-			t.Errorf("pixel (%d, %d) = %v, want the hairline %v", column, rule, got, theme.Paper.Rule)
+		if got := canv.Image().RGBAAt(column, rule); got != theme.Day.Rule {
+			t.Errorf("pixel (%d, %d) = %v, want the hairline %v", column, rule, got, theme.Day.Rule)
 		}
 
-		if got := canv.Image().RGBAAt(column, rule+1); got != theme.Paper.Field {
+		if got := canv.Image().RGBAAt(column, rule+1); got != theme.Day.Field {
 			t.Errorf("pixel (%d, %d) = %v, want the field under the hairline %v",
-				column, rule+1, got, theme.Paper.Field)
+				column, rule+1, got, theme.Day.Field)
 		}
 	}
 }
@@ -3280,7 +3302,7 @@ func bandBottom(tb testing.TB, canv *canvas.Canvas, column int) int {
 	tb.Helper()
 
 	for y := range canv.Bounds().Dy() {
-		if canv.Image().RGBAAt(column, y) != theme.Paper.Band {
+		if canv.Image().RGBAAt(column, y) != theme.Day.Band {
 			return y
 		}
 	}
@@ -3313,29 +3335,51 @@ func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
 	}
 }
 
-// The first compact row's bearing cell at the panel's resolution, split into
-// the three digits and the arrow that follows them, plus the attitude cell
-// beyond it.
+// The selected strip's DIST/BRG field at the panel's resolution, split into
+// where the bearing figure (or its three dashes) lands and where the arrow
+// that follows it lands.
 //
 // The numbers are read off a render rather than recomputed here, the same way
-// the row band above them is: the card and the header are sized from font
-// metrics alone, so the first row lands on the same pixels every time.
+// the header band above them is: the faces are sized from their own metrics
+// alone, so the first strip lands on the same pixels every time.
 //
-// All three moved left when the attitude column arrived and took 24 pixels
-// off the right-hand end of the table.
+// The selected strip's fill sits behind both boxes, so a bare "was anything
+// painted" check would always be true whether or not a figure landed in it;
+// the tests below check for the specific ink or muted colour a figure or a
+// placeholder is set in instead.
 //
 //nolint:gochecknoglobals // rectangles are data, and image.Rectangle cannot be const.
 var (
-	rowBearingDigits = image.Rect(1053, 313, 1089, 330)
-	rowBearingArrow  = image.Rect(1089, 313, 1105, 330)
-	rowAttitudeCell  = image.Rect(1126, 313, 1150, 330)
+	rowBearingDigits = image.Rect(1010, 316, 1074, 340)
+	rowBearingArrow  = image.Rect(1074, 316, 1090, 340)
 )
 
-// cardTrackArrow is the panel's TRACK line to the right of its degrees, which
-// is where the arrow goes and where nothing else is ever drawn.
+// rowTrackArrow is the first strip's TRK field to the right of its degrees,
+// which is where the needle goes and where nothing else is ever drawn.
+//
+// The selected aircraft's panel above the board writes the same course and
+// draws no needle beside it. The block already carries one, on the bearing,
+// and a second eight pixels away would read as a pair of directions to
+// reconcile rather than as one to fly.
 //
 //nolint:gochecknoglobals // ditto.
-var cardTrackArrow = image.Rect(712, 178, 736, 196)
+var rowTrackArrow = image.Rect(978, 316, 993, 340)
+
+// stripFillerPlane is a decoy aircraft that always sits first in a frame's
+// plane list, so it takes the selection and whatever is listed after it lands
+// on the second strip down, clear of the accent edge the first one wears.
+func stripFillerPlane() airplane.Snapshot {
+	return scenePlane("AAA111", "FILLER1", 0, 5, 2000, 10)
+}
+
+// firstStripAttitudeCell is the little aeroplane at the right end of the first
+// strip's ident field, and stripAttitudeCell the same cell one strip down.
+//
+//nolint:gochecknoglobals // ditto.
+var (
+	firstStripAttitudeCell = image.Rect(798, 316, 822, 340)
+	stripAttitudeCell      = image.Rect(798, 346, 822, 370)
+)
 
 // The identity the single-aircraft fixtures below fly under. They are the demo
 // fleet's own first aircraft, so a render from a test and a render from --demo
@@ -3677,7 +3721,7 @@ func TestRowBearingArrowTurnsWithTheBearing(t *testing.T) {
 			sceneFrame(scenePlane(icaoSample, callsignSample, testCase.bearing, nearNm, 2400, testCase.bearing)))
 		scene.Draw(canv, 0)
 
-		if painted(canv, rowBearingArrow) == 0 {
+		if countColour(canv, rowBearingArrow, theme.Night.Ink) == 0 {
 			t.Fatalf("a bearing of %g drew no arrow in the BRG cell", testCase.bearing)
 		}
 
@@ -3708,21 +3752,21 @@ func TestRowBearingWithoutAPositionDrawsNoArrow(t *testing.T) {
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(nowhere))
 	scene.Draw(canv, 0)
 
-	if painted(canv, rowBearingDigits) == 0 {
+	if countColour(canv, rowBearingDigits, theme.Night.Muted) == 0 {
 		t.Error("the BRG cell is empty, want the three dashes that stand in for a bearing")
 	}
 
-	if got := painted(canv, rowBearingArrow); got != 0 {
+	if got := countColour(canv, rowBearingArrow, theme.Night.Ink); got != 0 {
 		t.Errorf("an aircraft with no position drew %d arrow pixels, want none", got)
 	}
 }
 
-// TestCardTrackArrowTurnsWithTheHeading is the same check on the panel's
-// TRACK line, which carries the course the aircraft is flying rather than the
-// bearing it sits at. The unknown case is in the same table, because the
-// panel writing TRACK --- and drawing an arrow beside it would be the one
-// aircraft contradicting itself on one screen.
-func TestCardTrackArrowTurnsWithTheHeading(t *testing.T) {
+// TestRowTrackArrowTurnsWithTheHeading is the same check on a strip's TRK
+// field, which carries the course the aircraft is flying rather than the
+// bearing it sits at. The unknown case is in the same table, because a strip
+// writing TRK --- and drawing a needle beside it would be the one aircraft
+// contradicting itself on one screen.
+func TestRowTrackArrowTurnsWithTheHeading(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -3744,16 +3788,16 @@ func TestCardTrackArrowTurnsWithTheHeading(t *testing.T) {
 		sceneFrame(scenePlane(icaoSample, callsignSample, 45, nearNm, 2400, undecoded)))
 	unknown.Draw(unknownCanvas, 0)
 
-	if painted(northCanvas, cardTrackArrow) == 0 {
-		t.Error("the TRACK line drew no arrow for a heading of due north")
+	if countColour(northCanvas, rowTrackArrow, theme.Night.Ink) == 0 {
+		t.Error("the TRK field drew no needle for a heading of due north")
 	}
 
-	if identicalIn(northCanvas, eastCanvas, cardTrackArrow) {
-		t.Error("the TRACK arrow is the same picture at 000 and at 090, want it turned to the heading")
+	if identicalIn(northCanvas, eastCanvas, rowTrackArrow) {
+		t.Error("the TRK needle is the same picture at 000 and at 090, want it turned to the heading")
 	}
 
-	if got := painted(unknownCanvas, cardTrackArrow); got != 0 {
-		t.Errorf("TRACK --- drew %d arrow pixels, want none", got)
+	if got := countColour(unknownCanvas, rowTrackArrow, theme.Night.Ink); got != 0 {
+		t.Errorf("TRK --- drew %d needle pixels, want none", got)
 	}
 }
 

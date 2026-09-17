@@ -38,8 +38,8 @@ type SceneKind uint8
 
 // The two scenes, in the order buildScenes returns them.
 const (
-	// Radar is the slice 4 scope: aircraft, trails, range rings and the
-	// selected-flight card. It is first because it is what uScope is for;
+	// Radar is the slice 4 scope: aircraft, trails, range rings and the board
+	// of flight strips beside them. It is first because it is what uScope is for;
 	// Pattern is a diagnostic.
 	Radar SceneKind = iota
 

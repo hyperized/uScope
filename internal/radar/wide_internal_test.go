@@ -69,8 +69,8 @@ func TestToggleWide(t *testing.T) {
 				t.Errorf("wide = %v, want %v", scene.wide, testCase.want)
 			}
 
-			if got := scene.capOn(capWide); got != testCase.want {
-				t.Errorf("capOn(capWide) = %v, want it to follow the flag at %v", got, testCase.want)
+			if got := scene.capEngaged(capWide); got != testCase.want {
+				t.Errorf("capEngaged(capWide) = %v, want it to follow the flag at %v", got, testCase.want)
 			}
 		})
 	}

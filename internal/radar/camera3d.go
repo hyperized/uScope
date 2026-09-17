@@ -54,10 +54,11 @@ const (
 	// envelope is not a thing anyone has to decide to do.
 	orbitPeriod = 2 * time.Minute
 
-	// ringSpan is how much of the scope box's width the outer range ring is
-	// framed to take. Leaving a sixth of the box empty around it is what keeps
-	// the cardinal letters and a trail that runs to the edge of the range on
-	// the picture rather than half off it.
+	// ringSpan is how much of the scope box the picture is framed to take, in
+	// width for the outer range ring and in height for the top of the envelope.
+	// Leaving a sixth of the box empty around both is what keeps the cardinal
+	// letters, a trail that runs to the edge of the range, and the highest ring
+	// of the bowl on the picture rather than half off it.
 	ringSpan = 0.85
 
 	// minDepth is how close in front of the camera a point may be and still be
@@ -131,7 +132,24 @@ type camera3 struct {
 	modelSpan float64
 }
 
-// newCamera3 frames the outer range ring inside the scope box.
+// framing3 is what the camera has to fit inside the scope box: the outer range
+// ring on the ground and the top ring of the receiving envelope over it.
+//
+// It is a struct rather than five loose arguments because the last two only
+// make sense together. topNm is how high the envelope reaches after the
+// exaggeration and topRadiusNm how wide it is up there, and a caller that
+// passed one without the other would be asking the camera to frame half a
+// shape.
+type framing3 struct {
+	scopeNm     float64
+	azimuth     float64
+	elevation   float64
+	topNm       float64
+	topRadiusNm float64
+}
+
+// newCamera3 frames the whole picture inside the scope box: the outer range
+// ring across it, and the envelope over it from top to bottom.
 //
 // The camera orbits the point directly above the receiver at half the height
 // of the envelope, so the bowl sits in the middle of the picture rather than
@@ -144,18 +162,19 @@ type camera3 struct {
 // horizontal field of view of about 53 degrees, which is wide enough to hold
 // the envelope without the fisheye a shorter lens gives a scene this deep.
 //
-// The distance is solved from that. The ring's widest pair of points sit one
-// range radius off the view axis, so half the ring covers focal*scopeNm/depth
-// pixels and that has to come to ringSpan of half the box. The depth in
-// question is not the orbit distance: the camera looks down at a target half
-// the envelope's height up, and the ring is on the ground below it, which puts
-// the ring that much further away again. Subtracting it is what makes the ring
-// come out at the width asked for rather than at four fifths of it.
+// The distance is the larger of two answers, because the picture has to fit
+// both ways and either can be the binding one. Framing the ring across the box
+// is the answer that holds at life size, where the envelope is a film on the
+// floor; framing the envelope down the box is the answer that holds at the
+// default exaggeration and in the wide view, where the box is twice as wide as
+// it is tall and a distance solved on width alone cuts the top off the bowl.
+// See ringFraming3 and envelopeFraming3 for the two.
 //
-// minOrbitNm is the floor under the answer. At a high exaggeration and a steep
+// minOrbitNm is the floor under both. At a high exaggeration and a steep
 // elevation the height correction is larger than the whole distance, and
 // without the floor the camera would end up beside or behind its own target.
-func newCamera3(box image.Rectangle, scopeNm, azimuthDeg, elevationDeg, topNm float64) (camera3, bool) {
+func newCamera3(box image.Rectangle, framing framing3) (camera3, bool) {
+	scopeNm := framing.scopeNm
 	if box.Empty() || scopeNm <= 0 || math.IsNaN(scopeNm) {
 		return camera3{}, false
 	}
@@ -163,12 +182,15 @@ func newCamera3(box image.Rectangle, scopeNm, azimuthDeg, elevationDeg, topNm fl
 	width := float64(box.Dx())
 	focal := width
 
-	sinAz, cosAz := math.Sincos(azimuthDeg * math.Pi / halfCircle)
-	sinEl, cosEl := math.Sincos(elevationDeg * math.Pi / halfCircle)
+	sinAz, cosAz := math.Sincos(framing.azimuth * math.Pi / halfCircle)
+	sinEl, cosEl := math.Sincos(framing.elevation * math.Pi / halfCircle)
 
-	target := point3{up: topNm / 2}
-	framed := focal * scopeNm / (ringSpan / 2 * width)
-	distance := max(framed-target.up*sinEl, minOrbitNm*scopeNm)
+	target := point3{up: framing.topNm / 2}
+	distance := max(
+		ringFraming3(framing, sinEl),
+		envelopeFraming3(box, framing, sinEl, cosEl),
+		minOrbitNm*scopeNm,
+	)
 	away := point3{east: -sinAz * cosEl, north: -cosAz * cosEl, up: sinEl}
 	forward := point3{east: -away.east, north: -away.north, up: -away.up}
 
@@ -192,6 +214,60 @@ func newCamera3(box image.Rectangle, scopeNm, azimuthDeg, elevationDeg, topNm fl
 		limitY:    guardBoxes * float64(box.Dy()),
 		modelSpan: modelSpanPx,
 	}, true
+}
+
+// ringFraming3 is the orbit distance that makes the outer range ring span
+// ringSpan of the box's width.
+//
+// The ring's widest pair of points sit one range radius off the view axis, so
+// half the ring covers focal*scopeNm/depth pixels and that has to come to
+// ringSpan of half the box. focal is the box's own width, so the width cancels
+// and the answer is a depth in nautical miles and nothing else.
+//
+// The depth in question is not the orbit distance. The camera looks down at a
+// target half the envelope's height up and the ring is on the ground below it,
+// which puts the ring that much further away again. Subtracting it is what
+// makes the ring come out at the width asked for rather than at four fifths
+// of it.
+func ringFraming3(framing framing3, sinEl float64) float64 {
+	return 2*framing.scopeNm/ringSpan - framing.topNm/2*sinEl
+}
+
+// envelopeFraming3 is the orbit distance that keeps the envelope's top ring
+// inside ringSpan of the box's height.
+//
+// That ring is the highest thing in the picture and the only one that can be
+// cut off by the top or the bottom of the box. Its two screen extremes are the
+// points nearest and furthest from the camera, which both lie on the camera's
+// own vertical plane: every other point of the ring resolves onto the vertical
+// axis through the cosine of its bearing, so the extremes are where that cosine
+// is plus or minus one.
+//
+// Each of the two gives a distance. A point sits at screen offset
+// focal*vertical/depth from the middle of the box, where vertical and depth are
+// the point's offset from the target resolved onto the camera's up and forward
+// axes, so holding that offset inside half of ringSpan of the height is one
+// division rearranged into one subtraction. The near point is usually the
+// binding one at a steep tilt, because it is the closer of the two and a small
+// depth magnifies whatever height it has; the far point binds at a shallow one.
+// Taking the larger of the two covers both without asking which tilt is on.
+func envelopeFraming3(box image.Rectangle, framing framing3, sinEl, cosEl float64) float64 {
+	// half is how far from the middle of the box a point may land, in pixels,
+	// and focal is the box's own width. Both are read off the box rather than
+	// assumed square: the wide view hands this a box twice as wide as it is
+	// tall, which is the case the whole function exists for.
+	half := ringSpan / 2 * float64(box.Dy())
+	focal := float64(box.Dx())
+
+	// The target is half the envelope's height up, so the top ring sits the
+	// other half above it.
+	above := framing.topNm / 2
+	radius := framing.topRadiusNm
+
+	far := focal*math.Abs(radius*sinEl+above*cosEl)/half - (radius*cosEl - above*sinEl)
+	near := focal*math.Abs(-radius*sinEl+above*cosEl)/half + radius*cosEl + above*sinEl
+
+	return max(far, near)
 }
 
 // at projects a world point onto the canvas, reporting false when the camera

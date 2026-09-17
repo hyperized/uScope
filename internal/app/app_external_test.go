@@ -1592,8 +1592,8 @@ func TestRunLiveSwitchesTheme(t *testing.T) {
 	}
 
 	for range 2 {
-		if got := recvOrTimeout(t, palettes, testTimeout, "the palette after l"); got != theme.Paper {
-			t.Errorf("palette after l = %v, want %v", got, theme.Paper)
+		if got := recvOrTimeout(t, palettes, testTimeout, "the palette after l"); got != theme.Day {
+			t.Errorf("palette after l = %v, want %v", got, theme.Day)
 		}
 	}
 

@@ -163,8 +163,8 @@ func bandOf(altitude float64) int {
 //
 // It is the whole of the filter as far as the rest of the scene is concerned.
 // Every consumer asks this and asks nothing else: the flat scope, minimal
-// mode, the 3D view, the row list, the selection index, the centroid and the
-// auto range. One predicate in one place is what stops two views disagreeing
+// mode, the 3D view, the strip board, the selection index, the centroid and
+// the auto range. One predicate in one place stops two views disagreeing
 // about which aeroplanes are on the field, which is the rule trailMode.plan
 // already follows for the trails.
 //
@@ -317,8 +317,8 @@ func (s *Scene) countOperators(frame source.Frame) {
 //
 // It is the length of the ICAO index syncSelection has just rebuilt rather
 // than a second pass over the fleet. The two would have to agree in any case,
-// and a row list that counted differently from the selection would put the
-// accent bar on the wrong line.
+// and a board that counted differently from the selection would give the full
+// strip to the wrong aeroplane.
 func (s *Scene) shownPlanes() int { return len(s.icaos) }
 
 // findPlane is the aircraft with this ICAO, whether the filter is showing it

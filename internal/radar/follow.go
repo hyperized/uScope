@@ -76,9 +76,9 @@ type geo struct {
 //
 // Both halves have to be true. --recenter 0 keeps the old behaviour, and the
 // two views with chrome are never recentred at all: the scope has a home
-// marker in the middle, range rings measured from it and a row table of
-// bearings off it, and the 3D view draws the antenna's own envelope around the
-// same point, so moving the centre would make all of it lie.
+// marker in the middle, range rings measured from it and a board of strips
+// carrying bearings off it, and the 3D view draws the antenna's own envelope
+// around the same point, so moving the centre would make all of it lie.
 func (s *Scene) following() bool {
 	return s.bare() && s.recentre > 0
 }

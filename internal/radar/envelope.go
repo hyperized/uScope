@@ -61,27 +61,30 @@ const (
 // the same picture as blending every pixel and costs one operation instead of
 // thousands.
 const (
-	// measuredFade keeps the accent recognisable as the accent while dropping
+	// measuredFade keeps the data colour recognisable as itself while dropping
 	// it below the aircraft it surrounds.
 	measuredFade = 0.35
 
-	// bowlFade is applied to the muted colour, which is already the quietest;
-	// at 0.60 the bowl still outshone the measured mesh by luminance, so both
-	// sit at the same fade and the accent hue alone separates them.
-	// thing in the palette, because the theoretical bowl is the more
-	// speculative of the two shapes: it is an approximation from a formula,
-	// where the mesh is a record of what the antenna actually heard.
+	// bowlFade is applied to the muted colour, which is already the quietest in
+	// the palette; at 0.60 the bowl still outshone the measured mesh by
+	// luminance, so both sit at the same fade and the hue alone separates them.
 	bowlFade = 0.35
 )
 
 // measuredInk is the colour the measured wireframe is drawn in, and bowlInk
 // the theoretical bowl's.
 //
+// The mesh is Data rather than the accent it used to be. It is a record of what
+// the antenna heard, which is a reading about the machine and so cyan by the
+// same rule the source label and the clocks are, and the accent now means the
+// selected aircraft and nothing else. The two shapes were the one place the
+// accent appeared twice in a picture, which is exactly what it must not do.
+//
 // Both are worked out from the palette on every call rather than cached on the
 // Scene, for the reason SetPalette takes the light flag off the palette: two
 // fields can disagree about which theme is on and one cannot. The callers
 // hoist them out of their loops, so a frame does this arithmetic twice.
-func (s *Scene) measuredInk() color.RGBA { return s.fade(s.pal.Accent, measuredFade) }
+func (s *Scene) measuredInk() color.RGBA { return s.fade(s.pal.Data, measuredFade) }
 
 func (s *Scene) bowlInk() color.RGBA { return s.fade(s.pal.Muted, bowlFade) }
 

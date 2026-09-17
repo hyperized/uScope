@@ -1,7 +1,6 @@
 package radar
 
 import (
-	"image"
 	"image/color"
 	"math"
 	"time"
@@ -9,52 +8,30 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
-// The line of values under the panel's three figures: what the selected
-// aircraft is doing that a number in a large face cannot carry.
-//
-// These used to be a block of their own with a border and a DETAILS heading,
-// sitting between the rows and the legend. Two bordered blocks about the same
-// aeroplane is one too many, so the figures moved into the panel and the block
-// went. Bearing went with it: the compact rows already have a BRG column, and
-// the panel was repeating a value the operator could read three lines lower.
+// The small shapes and the stand-in words the flight strips are drawn from.
 const (
-	labelVert = "VERT"
-	labelPos  = "POS"
-	labelSeen = "SEEN"
-
-	// cardPairs is how many pairs the line holds, which is what every loop
-	// over them runs to.
-	cardPairs = 3
-
-	// cardValueChars is the longest value one pair can be asked to set. That
-	// is a position: "90.00 N / 179.77 E" is eighteen characters at the far
-	// corner of the world, and one more is left over so a cell sized from it
-	// is not sized to the exact edge. The other two are shorter, so a cell
-	// that holds a position holds all three.
-	cardValueChars = 19
-
 	// detailUnknown stands in for a figure that cannot be worked out, which is
-	// always because the aircraft has no position yet.
+	// always because the aircraft has no position yet, and trackUnknown for a
+	// direction nobody has decoded. uAirwaves marks the second with a negative
+	// heading, so zero is due north and reads as 000; it is a negative figure
+	// that would have a strip inventing a course.
 	detailUnknown = "---"
+	trackUnknown  = "---"
 
 	// noSquawk is four dashes rather than three, so an absent code is the same
-	// width as a real one and the panel's corner does not move when one
-	// arrives.
+	// width as a real one and the line under the callsign does not move when
+	// one arrives.
 	noSquawk = "----"
 
-	// noTraffic replaces the panel's contents when the sky is empty. The panel
-	// keeps its height rather than collapsing, because a column that changes
-	// shape whenever the last aircraft leaves range is worse to look at than
-	// one with a gap in it.
+	// noTraffic replaces the selected strip's callsign when the sky is empty.
+	// The strip keeps its height rather than collapsing, because a column that
+	// changes shape whenever the last aircraft leaves range is worse to look at
+	// than one with a gap in it.
 	noTraffic = "NO TRAFFIC"
-
-	emergencyTag = " EMERGENCY"
-
-	vertLevel = "LEVEL"
-	vertUnit  = " FT/MIN"
 
 	// vertMarker is the side of the climb and descent triangle, and vertGap the
 	// air between it and the figure. It is a filled triangle rather than a
@@ -112,140 +89,14 @@ const (
 	seenStaleText   = "1+ MIN"
 )
 
-// The three pairs, in reading order. They are named rather than written as
-// numbers at the call sites so each placement says which figure it is for.
-const (
-	pairVert = iota
-	pairPos
-	pairSeen
-)
-
-// cardPairWidest is the room one pair needs: the indent every value starts at,
-// plus the longest value that can land there, or zero without a body face to
-// set the values in.
-func (s *Scene) cardPairWidest() int {
-	glyph := glyphWidth(s.faces.Body)
-	if glyph == 0 {
-		return 0
-	}
-
-	return s.cardLabelIndent() + cardValueChars*glyph
-}
-
-// cardValueShape is how the three pairs are arranged for a panel of this inner
-// width: how many go side by side, and how many lines that takes.
-//
-// Three across is the panel at the uConsole's width. A narrower one wraps them
-// rather than squeezing, for the reason every other block here does: the values
-// are set in a bitmap face with one design size, so a narrower cell means fewer
-// characters, not smaller ones. A width that will not hold one whole pair draws
-// no line at all, and the panel is that much shorter.
-func (s *Scene) cardValueShape(width int) (int, int) {
-	widest := s.cardPairWidest()
-	if widest <= 0 {
-		return 0, 0
-	}
-
-	columns := min(width/widest, cardPairs)
-	if columns <= 0 {
-		return 0, 0
-	}
-
-	return columns, (cardPairs + columns - 1) / columns
-}
-
-// cardLabelIndent is how far a value sits from its pair's left edge.
-//
-// It is measured off the longest label rather than off each label in turn, so
-// every value on the line starts at the same offset and the pairs read as
-// columns instead of three ragged pieces.
-func (s *Scene) cardLabelIndent() int {
-	width, _ := text.Measure(s.faces.Small, labelSeen, text.WithSpacing(labelTracking))
-
-	return width + columnGap
-}
-
-// detailAt is where the pair at index lands inside the box.
-func detailAt(box image.Rectangle, columns, step, index int) (int, int) {
-	span := box.Dx() / columns
-
-	return box.Min.X + (index%columns)*span, box.Min.Y + (index/columns)*step
-}
-
-// rowStep is the pitch of one compact row, or zero without a body face.
-func (s *Scene) rowStep() int {
-	line := lineHeight(s.faces.Body)
-	if line == 0 {
-		return 0
-	}
-
-	return line + rowLead
-}
-
-// drawCardValues lays the three figures out under the panel's numbers,
-// reading left to right and then down, in whatever shape the width allows.
-func (s *Scene) drawCardValues(
-	dst *canvas.Canvas, box image.Rectangle, columns int, frame source.Frame, plane airplane.Snapshot,
-) {
-	if columns <= 0 {
-		return
-	}
-
-	step := s.rowStep()
-
-	left, top := detailAt(box, columns, step, pairVert)
-	s.drawVert(dst, left, top, plane)
-
-	left, top = detailAt(box, columns, step, pairPos)
-	s.drawPosition(dst, left, top, plane)
-
-	left, top = detailAt(box, columns, step, pairSeen)
-	s.drawSeen(dst, left, top, frame.Now, plane.LastUpdate)
-}
-
-// drawValueLabel writes one pair's label and returns the x its value starts
-// at.
-//
-// The label is set in the small face and the value in the body face, so it is
-// nudged down by half the difference to sit on the value's own line rather
-// than on its cap height.
-func (s *Scene) drawValueLabel(dst *canvas.Canvas, left, top int, label string) int {
-	small, body := s.faces.Small, s.faces.Body
-	offset := (lineHeight(body) - lineHeight(small)) / 2
-
-	text.Draw(dst, small, left, top+offset, label, s.pal.Muted, text.WithSpacing(labelTracking))
-
-	return left + s.cardLabelIndent()
-}
-
-// drawVert writes the vertical rate with a triangle for its direction.
-//
-// The triangle carries the sign, so the figure itself is drawn unsigned: a
-// minus sign next to a downward arrow would be the same fact twice, and the
-// number lines up with the one above it without one.
-func (s *Scene) drawVert(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
-	pen := s.drawValueLabel(dst, left, top, labelVert)
-	face := s.faces.Body
-
-	if level(plane.VertRate) {
-		text.Draw(dst, face, pen, top, vertLevel, s.pal.Ink)
-
-		return
-	}
-
-	pen = s.drawVertMarker(dst, pen, top, plane.VertRate, s.aircraftColour(plane))
-	pen = drawBytes(dst, face, pen, top, s.thousands(math.Abs(plane.VertRate)), s.pal.Ink)
-	text.Draw(dst, face, pen, top, vertUnit, s.pal.Muted)
-}
-
 // level reports whether a vertical rate counts as neither climbing nor
 // descending, which is also the answer for a rate nobody has decoded:
 // uAirwaves starts an aircraft at a vertical rate of zero and leaves it there.
 //
-// It is one function rather than a test at each call site because the panel
-// and the compact rows both have to agree: a row showing a triangle beside a
-// figure the panel calls LEVEL would be the same aircraft contradicting itself
-// on one screen.
+// It is one function rather than a test at each call site because the strips
+// and the scope tag both have to agree: a strip showing a triangle beside a
+// figure the tag has no arrow on would be the same aircraft contradicting
+// itself on one screen.
 func level(rate float64) bool {
 	return math.IsNaN(rate) || math.IsInf(rate, 0) || math.Abs(rate) < levelBand
 }
@@ -267,6 +118,39 @@ func (s *Scene) drawVertMarker(dst *canvas.Canvas, left, top int, rate float64, 
 	return left + vertMarker + vertGap
 }
 
+// drawTrend marks a climb or a descent after a level and returns the x just
+// past whatever it drew, which is the pen it was handed when the aircraft is
+// neither.
+//
+// The mark is a glyph where the face carries one and the drawn triangle where
+// it does not. Nothing guarantees a console font has U+2191 and U+2193, which
+// is the check the ellipsis went through, and a shape put on the canvas always
+// renders.
+//
+// Both blocks that write a level use it, each in its own face and its own
+// colour: the tag on the scope in the body face beside the reading ink, the
+// selected aircraft's panel in the large one beside the altitude band. One
+// function rather than two, because a panel showing a climb the tag has no
+// arrow on would be the same aeroplane contradicting itself on one screen.
+func (s *Scene) drawTrend(
+	dst *canvas.Canvas, face *psf.Font, pen, top int, rate float64, ink color.RGBA,
+) int {
+	if level(rate) {
+		return pen
+	}
+
+	glyph, mark := tagClimb, climbRune
+	if rate < 0 {
+		glyph, mark = tagDescend, descendRune
+	}
+
+	if _, has := face.Glyph(mark); has {
+		return text.Draw(dst, face, pen, top, glyph, ink)
+	}
+
+	return s.drawVertMarker(dst, pen, top, rate, ink)
+}
+
 // arrowWidth is the room the direction arrow takes beside a figure, the gap
 // before it included.
 func (*Scene) arrowWidth() int {
@@ -276,8 +160,8 @@ func (*Scene) arrowWidth() int {
 // drawArrow draws the direction arrow at left, pointing at the angle the
 // figure beside it has just given, and centred vertically on middle.
 //
-// Both places the scene writes a direction use it: the rows' BRG column and
-// the panel's TRACK line. An arrow rather than a compass point, because eight
+// Both places the scene writes a direction use it: a strip's TRK field and the
+// bearing in its DIST field. An arrow rather than a compass point, because eight
 // letters are eight sectors and NE says the same thing about 23 degrees as
 // about 67, where the arrow says the angle itself.
 //
@@ -319,7 +203,7 @@ func (*Scene) drawArrow(dst *canvas.Canvas, left, middle int, degrees float64, i
 func round(value float64) int { return int(math.Round(value)) }
 
 // bearingTo is the compass bearing from the receiver to an aircraft, which is
-// what the compact rows' BRG column reads.
+// what a strip's DIST field and the scope tag's bottom line both read.
 //
 // It uses the same local equirectangular approximation the scope projects
 // with, so the figure there and the dot on the field agree. A great-circle
@@ -350,35 +234,6 @@ func bearingTo(receiver source.Receiver, plane airplane.Snapshot) (float64, bool
 // cannot come to different answers about the same aeroplane.
 func hasPosition(plane airplane.Snapshot) bool {
 	return positioned(plane.Latitude, plane.Longitude)
-}
-
-// drawPosition writes where the aircraft is, to two decimals.
-//
-// Two places is about a nautical mile, which is as much as a figure read off a
-// scope is worth. The receiver's own line in the header carries four, because
-// that one is a claim about where the antenna is rather than about where an
-// aeroplane was a moment ago.
-func (s *Scene) drawPosition(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
-	pen := s.drawValueLabel(dst, left, top, labelPos)
-	face := s.faces.Body
-
-	if !hasPosition(plane) {
-		text.Draw(dst, face, pen, top, detailUnknown, s.pal.Muted)
-
-		return
-	}
-
-	// One half at a time: both share the scene's coordinate buffer, so
-	// formatting the second would overwrite the first.
-	pen = drawBytes(dst, face, pen, top, s.place(plane.Latitude, 'N', 'S'), s.pal.Ink)
-	pen = text.Draw(dst, face, pen, top, coordinateSeparator, s.pal.Muted)
-	drawBytes(dst, face, pen, top, s.place(plane.Longitude, 'E', 'W'), s.pal.Ink)
-}
-
-// drawSeen writes how long ago the aircraft was last heard.
-func (s *Scene) drawSeen(dst *canvas.Canvas, left, top int, now, last time.Time) {
-	pen := s.drawValueLabel(dst, left, top, labelSeen)
-	text.Draw(dst, s.faces.Body, pen, top, seenBucket(now.Sub(last)), s.pal.Ink)
 }
 
 // seenBucket names how long ago a contact was last heard.

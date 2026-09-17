@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/airports"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -54,10 +55,52 @@ const (
 	// small hollow circle. Radius 2 is five pixels across.
 	noHeadingRadius = 2
 
-	// selectionRadius is the ring around the selected aircraft, and leaderRun
-	// how far up and to the right its label sits.
+	// selectionRadius is the ring around the selected aircraft, leaderFoot
+	// where on that ring the leader line starts, and leaderRun how far up and
+	// to the right its tag sits.
+	//
+	// The foot is eight because the leader leaves the ring on the diagonal, and
+	// eight pixels along both axes is a hair over eleven from the centre. It
+	// used to be half the radius, which drew the first four pixels of the
+	// leader across the inside of the ring it was meant to start on.
 	selectionRadius = 11
+	leaderFoot      = 8
 	leaderRun       = 20
+
+	// tagLines is how many lines the selected aircraft's tag carries: who it
+	// is, what it is doing, and where it is from here.
+	tagLines = 3
+
+	// tagLead is the pitch between two lines of the tag.
+	//
+	// It is twelve rather than the body face's own sixteen. A tag is a block
+	// to take in at once and the leading a paragraph needs pulls it apart on a
+	// field of aircraft; twelve is what the data block in the study is set at.
+	// Nothing collides at that pitch because a tag carries capitals, digits
+	// and two arrows and no descenders, and Terminus draws all of those inside
+	// the middle twelve rows of its sixteen-row cell.
+	tagLead = 12
+
+	// tagLevelPerFoot is how many feet one step of the level is worth.
+	// Hundreds of feet is how a controller says an altitude, and three digits
+	// covers everything with a transponder in it: 024 is two thousand four
+	// hundred feet and 390 is thirty-nine thousand.
+	tagLevelPerFoot = 100.0
+
+	// tagGap is the air between the two figures on a line of the tag. It is a
+	// space rather than a measured gap because both figures are set in the same
+	// monospaced face, so one space is exactly one glyph wide wherever it lands.
+	tagGap = " "
+
+	// The trend arrows after the level, and the runes they are looked up by.
+	// All four embedded Terminus faces carry both, which was checked before
+	// this was written rather than assumed, the same way the ellipsis and the
+	// cardinal letters were. drawTagTrend falls back to the drawn triangle the
+	// flight strips use on a face that turns out not to.
+	tagClimb    = "↑"
+	tagDescend  = "↓"
+	climbRune   = '↑'
+	descendRune = '↓'
 
 	// Trails fade from tail to head. Starting at a quarter rather than at
 	// nothing keeps the oldest part of a long trail visible on the panel,
@@ -547,30 +590,29 @@ func (s *Scene) drawHome(lay *layout, geom scopeGeometry, mode source.FixMode) {
 
 // fixColour says how much the receiver's position is worth.
 //
-// Muted for nothing known, the reading colour for a position the operator
-// typed in, the accent for an estimate with a radius on it, and the altitude
-// ramp for a GPS: red for a fix that has gone and is being held on its last
-// position, amber for a fix without altitude, green for a full one. The
-// altitude bands are reused rather than given three colours of their own,
-// because they are already the palette's "getting better" ramp and a second
-// set would be three more colours to keep in step across two themes.
+// It is the cockpit's own three words. A GPS that has a fix is OK green,
+// whether or not that fix carries altitude: either way the position under it
+// was sensed rather than worked out. A fix that has gone and is being held on
+// its last reading is a caution, and so is a position derived from the traffic
+// instead of sensed at all. A position the operator typed in is neither, so it
+// takes the reading colour, and nothing known at all stays muted.
+//
+// The accent is no longer in the list. It marks the selected aircraft and
+// nothing else, and a receiver that had guessed its own position used to wear
+// the same magenta as the aeroplane the operator had picked out.
 //
 // The reading colour is passed in rather than taken from the palette, because
-// the header band has its own. The palette's Ink is a dark navy and paper's
-// band is a dark navy, so an Ink word on that band would be a word nobody can
-// read.
+// the header band has its own. The palette's Ink is near-black on the day theme
+// and the band is near-black on both, so an Ink word on that band would be a
+// word nobody can read.
 func (s *Scene) fixColour(mode source.FixMode, ink color.RGBA) color.RGBA {
 	switch mode {
 	case source.FixManual:
 		return ink
-	case source.FixEstimated:
-		return s.pal.Accent
-	case source.FixGPSNoFix:
-		return s.pal.AltHigh
-	case source.FixGPS2D:
-		return s.pal.AltMid
-	case source.FixGPS3D:
-		return s.pal.AltLow
+	case source.FixEstimated, source.FixGPSNoFix:
+		return s.pal.Caution
+	case source.FixGPS2D, source.FixGPS3D:
+		return s.pal.OK
 	case source.FixNone:
 		fallthrough
 	default:
@@ -686,7 +728,7 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 		// something, but minimal sets no type on screen at all, so the only
 		// thing the ring could refer to was a panel that is not there.
 		if !s.minimal() && plane.ICAO == s.selICAO {
-			s.drawSelection(lay, x, y, plane)
+			s.drawSelection(lay, x, y, plane, frame.Receiver)
 		}
 	}
 }
@@ -793,22 +835,98 @@ func knownHeading(heading float64) bool {
 	return !math.IsNaN(heading) && heading >= 0
 }
 
-// drawSelection rings the selected aircraft and labels it on a leader line,
-// so the panel on the right and the dot on the scope are obviously the same
-// aeroplane. Minimal mode never calls it.
-func (s *Scene) drawSelection(lay *layout, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
+// drawSelection rings the selected aircraft and hangs its data block off a
+// leader line, so the panel at the top of the column and the contact on the
+// scope are obviously the same aeroplane. Both bare views skip it.
+//
+// The tag replaced a bare callsign. A callsign says which aeroplane the ring is
+// round and nothing else, so reading what it was doing meant looking away from
+// the scope to find it in the column. The block answers the question where the
+// question is being asked.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawSelection(
+	lay *layout, x, y int, plane airplane.Snapshot, receiver source.Receiver,
+) {
 	dst := lay.dst
 	dst.Circle(x, y, selectionRadius, s.pal.Accent)
 
 	endX, endY := x+leaderRun, y-leaderRun
-	dst.Line(x+selectionRadius/2, y-selectionRadius/2, endX, endY, s.pal.Accent)
+	dst.Line(x+leaderFoot, y-leaderFoot, endX, endY, s.pal.Accent)
 
-	face := s.faces.BodyBold
-	if !lay.labels || face == nil {
+	if !lay.labels || s.faces.Body == nil {
 		return
 	}
 
-	text.Draw(dst, face, endX+labelTracking, endY-face.Height(), callsignOf(plane), s.pal.Accent)
+	s.drawTag(dst, endX+labelTracking, endY, plane, receiver)
+}
+
+// drawTag writes the selected aircraft's data block on the end of the leader.
+//
+// Three lines, the way a radar controller's label has read since they were
+// written in grease pencil: who it is, what it is doing, and where it is from
+// here. Each line has a colour of its own and that is the whole of the design.
+// The callsign wears the accent, because the accent means the operator picked
+// this one. The level and the speed are readings about an aeroplane and take
+// the reading ink. The range and the bearing are the quietest pair of the six
+// figures and go muted, so the eye lands on the middle line first.
+//
+// The lines stack upward from the leader's end, which puts the block's
+// lower-left corner where the leader arrives and the whole of it above and to
+// the right of the contact, clear of the ring, whatever the traffic underneath
+// is doing.
+func (s *Scene) drawTag(
+	dst *canvas.Canvas, left, bottom int, plane airplane.Snapshot, receiver source.Receiver,
+) {
+	top := bottom - tagLines*tagLead
+
+	text.Draw(dst, s.faces.BodyBold, left, top, clip(callsignOf(plane), maxCallsign), s.pal.Accent)
+
+	s.drawTagState(dst, left, top+tagLead, plane)
+	s.drawTagWhere(dst, left, top+2*tagLead, plane, receiver)
+}
+
+// drawTagState is the tag's middle line: the level in hundreds of feet with the
+// trend arrow after it, then the ground speed.
+//
+// The two figures are formatted one at a time and drawn as they go, because
+// both come out of the same scratch buffer and formatting the second would
+// overwrite the first.
+func (s *Scene) drawTagState(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+	face := s.faces.Body
+
+	pen := drawBytes(dst, face, left, top, s.flightLevel(plane.Altitude), s.pal.Ink)
+	pen = s.drawTrend(dst, face, pen, top, plane.VertRate, s.pal.Ink)
+	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Ink)
+
+	drawBytes(dst, face, pen, top, s.speed(plane.Velocity), s.pal.Ink)
+}
+
+// drawTagWhere is the tag's bottom line: how far the aircraft is from the
+// receiver and on what bearing.
+//
+// It repeats what the selected aircraft's panel in the column says, on purpose.
+// The tag exists so the scope can be read without looking away from it, and the
+// pair of figures that places a contact against the antenna is the pair worth
+// having in both places.
+func (s *Scene) drawTagWhere(
+	dst *canvas.Canvas, left, top int, plane airplane.Snapshot, receiver source.Receiver,
+) {
+	face := s.faces.Body
+
+	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
+
+	pen := drawBytes(dst, face, left, top, s.distance(away), s.pal.Muted)
+	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Muted)
+
+	bearing, known := bearingTo(receiver, plane)
+	if !known {
+		text.Draw(dst, face, pen, top, detailUnknown, s.pal.Muted)
+
+		return
+	}
+
+	drawBytes(dst, face, pen, top, s.degrees(bearing), s.pal.Muted)
 }
 
 // callsignOf is the callsign, or the ICAO hex when no callsign has been

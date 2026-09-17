@@ -81,28 +81,12 @@ func (s *Scene) count(value int) []byte {
 
 // shownCount writes a count into the grouped buffer instead of into digits.
 //
-// The row table's title line draws two numbers side by side while a filter is
+// The strips' count line draws two numbers side by side while a filter is
 // on, and both widths have to be known before either is set. One of them
 // therefore needs a buffer of its own, and grouped is free: thousands is its
 // only other user and nothing calls that while the title line is being drawn.
 func (s *Scene) shownCount(value int) []byte {
 	return strconv.AppendInt(s.grouped[:0], int64(value), decimalBase)
-}
-
-// index writes a one-based position with a leading zero under ten, which is
-// what keeps the compact rows' first column the same width all the way down.
-//
-// A negative value is written as it is. Nothing here passes one, because the
-// card guards on its notSelected sentinel before it formats anything, but
-// padding a minus sign into "0-3" would be a strange thing to leave lying
-// about for the next caller.
-func (s *Scene) index(value int) []byte {
-	out := s.digits[:0]
-	if value >= 0 && value < decimalBase {
-		out = append(out, '0')
-	}
-
-	return strconv.AppendInt(out, int64(value), decimalBase)
 }
 
 // counter writes an unsigned counter. Frame counts arrive as uint64 and
@@ -139,6 +123,35 @@ func (s *Scene) degrees(value float64) []byte {
 
 // hundred is where a heading stops needing a second leading zero.
 const hundred = 100
+
+// flightLevel writes an altitude in hundreds of feet as three digits, which is
+// how a data block says a level: 024 rather than 2,400.
+//
+// It is padded the way degrees is and for the same reason. A tag whose middle
+// line changed width as an aircraft climbed through a thousand feet would pull
+// the ground speed beside it sideways on that one frame.
+//
+// An altitude of zero is one nobody has decoded rather than sea level, which is
+// the reading bandColour and the 3D view's height both give it, so it comes out
+// as dashes rather than as a level of 000.
+func (s *Scene) flightLevel(altitudeFt float64) []byte {
+	if math.IsNaN(altitudeFt) || math.IsInf(altitudeFt, 0) || altitudeFt <= 0 {
+		return append(s.digits[:0], '-', '-', '-')
+	}
+
+	hundreds := int(math.Round(altitudeFt / tagLevelPerFoot))
+
+	out := s.digits[:0]
+	if hundreds < hundred {
+		out = append(out, '0')
+	}
+
+	if hundreds < decimalBase {
+		out = append(out, '0')
+	}
+
+	return strconv.AppendInt(out, int64(hundreds), decimalBase)
+}
 
 // thousands writes a rounded whole number with separators, so a flight level
 // reads as 39,000 rather than as a run of digits to be counted.
@@ -209,16 +222,6 @@ const (
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func drawBytes(dst *canvas.Canvas, face *psf.Font, x, y int, value []byte, ink color.RGBA) int {
 	return text.Draw(dst, face, x, y, string(value), ink)
-}
-
-// drawBytesRight draws a formatted number ending at rightX.
-//
-// Unlike drawBytes it returns nothing. A right-aligned run always ends where
-// it was told to, so there is no pen position worth passing on.
-//
-//nolint:varnamelen // y is the pixel-addressing idiom used throughout uScope.
-func drawBytesRight(dst *canvas.Canvas, face *psf.Font, rightX, y int, value []byte, ink color.RGBA) {
-	text.DrawRight(dst, face, rightX, y, string(value), ink)
 }
 
 // drawBytesTracked draws a formatted number at the scene's label tracking and
