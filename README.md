@@ -274,8 +274,16 @@ rings are lakes.
 
 `m` and `--shore` govern the fill and the outlines together. They are one
 picture rather than two overlays: a coastline with no fill behind it says where
-a line is, and the fill is what says which side of it is sea. The two tilted
-views keep the outlines and no fill; see the open list in DESIGN.md.
+a line is, and the fill is what says which side of it is sea.
+
+The tilted views fill too. There the ground is a plate rather than a plane: the
+disc the view reaches to, projected onto the floor of the world, which is the
+outer range ring in the full 3D view and the two range radii the bare one draws
+to. The sea stops where the picture stops saying anything, because that same
+circle is what the coastlines are clipped against and what the traffic is
+culled by. Filling all the way to the horizon instead would need land rings out
+to a dozen range radii, which at 200 nautical miles is a quarter of the world
+on every frame.
 
 The data is compiled into the binary, about 4 MB of it in two files, covering
 the whole world. uScope runs on a handheld with no network and is used outside
@@ -371,6 +379,12 @@ on. `+`, `-` and `r` still move the range, and everything on the ground moves
 with it. There are no range numbers on the rings: in perspective a ring is an
 ellipse, and a number pinned to one point of it would only be true from one
 side of the orbit.
+
+`m` brings the water with it. The floor inside the outer ring is flooded with
+the same tint the flat scope uses and the land is painted back out of it, so
+the picture reads as a piece of the world seen at an angle rather than as
+coastlines drawn on nothing. The bare 3D view floods the two range radii it
+draws to, which runs off the bottom of the frame at every tilt.
 
 Every aircraft gets a thin stalk from its shadow on the ground up to where it
 is flying. The stalk is the only thing in the picture that says how high an

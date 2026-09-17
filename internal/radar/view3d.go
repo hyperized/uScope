@@ -304,8 +304,8 @@ func (s *Scene) window(dst *canvas.Canvas, box image.Rectangle) (*canvas.Canvas,
 	return sub, true
 }
 
-// drawGround3 paints the floor of the world: the coastline under everything,
-// then the centre marks and the airfields.
+// drawGround3 paints the floor of the world: the water, the land and the
+// coastline under everything, then the centre marks and the airfields.
 //
 // The two overlays ask shoreDrawn and airportsDrawn rather than reading a
 // field, so the full view gets the scope's pair and the bare one gets the pair
@@ -430,11 +430,19 @@ func (s *Scene) drawCardinals3(lay *layout, view scene3) {
 	}
 }
 
-// drawShore3 paints the coastline on the floor of the world.
+// drawShore3 paints the water, the land and the coastlines on the floor of the
+// world, in that order.
 //
-// The box handed to the shore set is the scope view's, around the receiver at
-// the current range: the 3D view never recentres, so the receiver is always
-// what the ground is drawn around.
+// It is drawShore in perspective, down to the order: the fill goes down first
+// and the outlines over it, so the join between sea and land is covered by the
+// line that describes it and the jagged edge the fill leaves never shows.
+// fillGround3 is the first half and the call to Within below is the second.
+//
+// The box handed to the shore set is the same one both halves use, around the
+// origin at whatever the view reaches to. The full view never recentres, so
+// that origin is the receiver; the bare one follows the traffic and reaches
+// two range radii, which is why the span is measured off the view rather than
+// off the range.
 func (s *Scene) drawShore3(dst *canvas.Canvas, view scene3) {
 	if s.shoreSet == nil {
 		return
@@ -442,6 +450,8 @@ func (s *Scene) drawShore3(dst *canvas.Canvas, view scene3) {
 
 	latSpan := view.reachNm / nmPerDegree
 	lonSpan := latSpan / max(view.cosLat0, minCosLat)
+
+	s.fillGround3(dst, view, latSpan, lonSpan)
 
 	s.shoreSet.Within(
 		view.origin.lat-latSpan, view.origin.lat+latSpan,

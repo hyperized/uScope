@@ -3090,15 +3090,21 @@ func TestApplyRangePinsTheScope(t *testing.T) {
 	})
 }
 
-// BenchmarkBackground measures the background layer on its own, at a narrow
-// and a wide range, against the real embedded coastline rather than a
-// synthetic one. BenchmarkDraw already prices a whole frame; this isolates
-// the one part of it that does not run every frame, so a regression in the
-// rings, the shore or the airports shows up here rather than being lost in
-// the aircraft's own cost.
+// BenchmarkBackground measures the background on its own, at a narrow and a
+// wide range, against the real embedded coastline rather than a synthetic
+// one. BenchmarkDraw already prices a whole frame; this isolates the part of
+// it that carries the map, so a regression in the fill, the shore, the rings
+// or the airports shows up here rather than being lost in the aircraft's own
+// cost.
+//
+// The flat cases rebuild the background layer, which happens only when
+// something it depends on moves. The tilted ones draw the same furniture
+// straight into the frame, because a camera that orbits leaves nothing worth
+// caching, so their figure is a per-frame cost rather than a per-keypress one.
 //
 // It lives in this file, rather than in the _test package, because it calls
-// renderLayer and layerKeyFor directly, both unexported.
+// renderLayer, layerKeyFor, measure3D and drawGround3 directly, all
+// unexported.
 func BenchmarkBackground(b *testing.B) {
 	set, err := shore.Load()
 	if err != nil {
@@ -3108,10 +3114,13 @@ func BenchmarkBackground(b *testing.B) {
 	for _, testCase := range []struct {
 		name    string
 		rangeNm float64
+		tilted  bool
 	}{
 		{name: "40nm", rangeNm: 40},
 		{name: "200nm", rangeNm: 200},
 		{name: "400nm", rangeNm: 400},
+		{name: "3d-40nm", rangeNm: 40, tilted: true},
+		{name: "3d-200nm", rangeNm: 200, tilted: true},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
 			canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
@@ -3123,6 +3132,12 @@ func BenchmarkBackground(b *testing.B) {
 			scene := New(layerTestFaces(b), &stubSource{frame: frame},
 				scope.New(scope.WithCurrent(testCase.rangeNm)), WithShore(set))
 
+			if testCase.tilted {
+				benchmarkGround3(b, scene, canv, frame)
+
+				return
+			}
+
 			b.ReportAllocs()
 			b.ResetTimer()
 
@@ -3130,6 +3145,42 @@ func BenchmarkBackground(b *testing.B) {
 				scene.renderLayer(canv, scene.layerKeyFor(canv, frame), frame)
 			}
 		})
+	}
+}
+
+// benchmarkGround3 prices everything the tilted view puts on the floor of the
+// world: the field it is cleared to, the water, the land, the coastline, the
+// range rings and the cardinal letters.
+//
+// It carves the frame and builds the window the way draw3D does, so the fill
+// is clipped to the scope box rather than to the whole canvas, which is what
+// decides how many rows the scanline sweep paints.
+func benchmarkGround3(b *testing.B, scene *Scene, canv *canvas.Canvas, frame source.Frame) {
+	b.Helper()
+
+	scene.shown = View3D
+
+	lay := stalkLayout(scene, canv)
+
+	view, drawable := scene.measure3D(lay, frame, 0)
+	if !drawable {
+		b.Fatal("measure3D found no room for the tilted view at the panel's own size")
+	}
+
+	window, room := scene.window(lay.dst, lay.scope)
+	if !room {
+		b.Fatal("the scope box has no pixels under it")
+	}
+
+	clipped := *lay
+	clipped.dst = window
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		canv.Clear(scene.pal.Field)
+		scene.drawGround3(&clipped, view, frame.Receiver)
 	}
 }
 

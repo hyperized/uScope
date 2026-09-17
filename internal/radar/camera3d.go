@@ -299,6 +299,38 @@ func (c camera3) at(world point3) (int, int, bool) {
 	return c.centerX + int(math.Round(offX)), c.centerY - int(math.Round(offY)), true
 }
 
+// depth is how far in front of the lens a point in the world sits, in nautical
+// miles. A negative figure is behind the camera.
+//
+// The ground fill wants the figure rather than at's verdict on it, because it
+// cuts its rings against the plane the camera sees past instead of dropping
+// whatever falls behind it. See addRingStep.
+func (c camera3) depth(world point3) float64 { return world.minus(c.eye).dot(c.forward) }
+
+// pixel is where a point the caller has already put in front of the camera
+// lands on the canvas, with no guard box around the answer.
+//
+// at refuses a point that lands far outside the picture, because a line drawn
+// to one is a million rejected Set calls for nothing. A fill cannot refuse a
+// point: dropping one vertex of a closed ring moves the two edges either side
+// of it and opens the shape. So this answers wherever the point lands, however
+// far off the canvas that is, and the scanline fill throws away the rows and
+// the columns that miss its clip rectangle instead.
+//
+// The depth is floored at the same minDepth the ring clip cuts at. That only
+// ever bites on a vertex the clip put exactly on the plane and rounding left a
+// hair under it, and such a vertex projects hundreds of screen heights below
+// the picture either way.
+func (c camera3) pixel(world point3) image.Point {
+	rel := world.minus(c.eye)
+	scale := c.focal / max(rel.dot(c.forward), minDepth)
+
+	return image.Point{
+		X: c.centerX + int(math.Round(rel.dot(c.right)*scale)),
+		Y: c.centerY - int(math.Round(rel.dot(c.above)*scale)),
+	}
+}
+
 // cameraAzimuth is where the camera is pointing on this frame, in degrees.
 //
 // While the orbit is running it is wound forward from the azimuth the last

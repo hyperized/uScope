@@ -90,14 +90,14 @@ func TestWaterFillOffBySetting(t *testing.T) {
 	}
 }
 
-// TestPerspectiveKeepsOutlinesOnly pins the decision DESIGN.md's open list
-// carries: the tilted view draws the coastline and nothing under it.
+// TestPerspectiveFillsTheGround checks that the tilted view carries the fill
+// and not only the outlines, and that m governs the two together there as it
+// does on the flat scope.
 //
-// In perspective the ground is a trapezium running to a horizon rather than a
-// disc, so there is no flooded shape for the land to be taken back out of.
-// Filling it needs its own answer to where the world stops, and that is a
-// separate piece of work from this one.
-func TestPerspectiveKeepsOutlinesOnly(t *testing.T) {
+// The ground in perspective is the projected reach disc rather than a circle
+// of pixels, so this is the test that would fail if the polygon came out
+// inside out, empty, or painted over by the rings drawn after it.
+func TestPerspectiveFillsTheGround(t *testing.T) {
 	t.Parallel()
 
 	scene, canv := waterFleetScene(t)
@@ -106,12 +106,82 @@ func TestPerspectiveKeepsOutlinesOnly(t *testing.T) {
 
 	bounds := canv.Bounds()
 
-	if got := countColour(canv, bounds, theme.Night.Shore); got == 0 {
-		t.Error("the 3D view drew no coastline, so this test proves nothing about the fill")
+	tintOn := countColour(canv, bounds, waterTint)
+	shoreOn := countColour(canv, bounds, theme.Night.Shore)
+
+	if tintOn == 0 || shoreOn == 0 {
+		t.Fatalf("the 3D view drew %d tint and %d shore pixels, want both above 0", tintOn, shoreOn)
 	}
 
+	if !press(scene, keyShore) {
+		t.Fatal("Handle('m') = false in the 3D view, want the scene to take it")
+	}
+
+	scene.Draw(canv, 0)
+
 	if got := countColour(canv, bounds, waterTint); got != 0 {
-		t.Errorf("the 3D view drew %d water pixels, want 0: it keeps outlines only", got)
+		t.Errorf("after m the 3D view has %d water pixels, want 0", got)
+	}
+
+	if got := countColour(canv, bounds, theme.Night.Shore); got != 0 {
+		t.Errorf("after m the 3D view has %d shore pixels, want 0", got)
+	}
+}
+
+// TestBare3DFloodsPastThePicture checks the difference between the two tilted
+// grounds, which is the reach each of them is drawn to.
+//
+// The full view's ground is the outer range ring, and the camera frames that
+// ring well inside the box, so the edge of the picture stays on the bare
+// field. The bare view's ground is the two range radii minimalReach3 draws to,
+// which at every tilt runs off the bottom of the frame.
+//
+// The set is outlines with no land half at all, the same trick
+// TestBareViewFillsEdgeToEdge uses: with nothing to take the water back out,
+// every filled pixel is the tint and the count is exact.
+func TestBare3DFloodsPastThePicture(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		view      radar.View
+		presses   []rune
+		wantWater bool
+	}{
+		{name: "the full view stops short of the frame", view: radar.View3D},
+		{
+			name:      "the bare view runs off the bottom of it",
+			view:      radar.ViewMinimal3D,
+			presses:   []rune{keyShore},
+			wantWater: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame,
+				radar.WithShore(syntheticShoreSet(t, shoreLineThroughReceiver())))
+			scene.Apply(radar.Settings{View: testCase.view, RangeNm: waterFleetRangeNm})
+
+			// The bare views open with both overlays off, which is what they
+			// are for, so the coastline has to be asked for.
+			for _, value := range testCase.presses {
+				if !press(scene, value) {
+					t.Fatalf("Handle(%q) = false, want the scene to take it", value)
+				}
+			}
+
+			scene.Draw(canv, 0)
+
+			bottom := canv.Image().RGBAAt(panelWidth/2, panelHeight-1)
+
+			if got := bottom == waterTint; got != testCase.wantWater {
+				t.Errorf("the bottom of the frame is %v, water = %v, want water = %v",
+					bottom, got, testCase.wantWater)
+			}
+		})
 	}
 }
 
@@ -209,6 +279,17 @@ func TestWaterRenderPNG(t *testing.T) {
 	// asked for before the picture has anything in it.
 	writeWaterPNG(t, dir, "water-minimal.png",
 		radar.Settings{RangeNm: nearNm, View: radar.ViewMinimal}, night, []rune{keyShore})
+
+	// The three tilted ones, which are the decisions the perspective fill
+	// made: the ground disc at a range where the coast is the picture and at
+	// one where it is a continent, and the bare view where the disc is two
+	// range radii and runs off the frame instead of sitting inside it.
+	writeWaterPNG(t, dir, "water-3d-40.png",
+		radar.Settings{RangeNm: nearNm, View: radar.View3D}, night, nil)
+	writeWaterPNG(t, dir, "water-3d-200.png",
+		radar.Settings{RangeNm: farNm, View: radar.View3D}, night, nil)
+	writeWaterPNG(t, dir, "water-minimal3d.png",
+		radar.Settings{RangeNm: nearNm, View: radar.ViewMinimal3D}, night, []rune{keyShore})
 }
 
 // writeWaterPNG draws one frame of the demo fleet over the real coastline and
