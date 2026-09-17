@@ -386,39 +386,91 @@ func TestBowlRadiusClampsToTheRange(t *testing.T) {
 }
 
 // TestBandReachNm checks how far one altitude band of a coverage snapshot is
-// read as reaching: the outer edge of its farthest occupied distance bin, and
-// nothing at all for a band nobody has heard anything in.
+// read as reaching: the outer edge of the bin at which reachPercentile of its
+// observations have accumulated, and nothing at all for a band with fewer
+// than minBandObservations in total.
 func TestBandReachNm(t *testing.T) {
 	t.Parallel()
 
-	const (
-		nearBin = 2
-		farBin  = 7
-		band    = 3
-	)
+	const band = 3
 
-	var snapshot coverage.Snapshot
+	t.Run("an empty band reaches nothing", func(t *testing.T) {
+		t.Parallel()
 
-	if got := bandReachNm(snapshot, band); got != 0 {
-		t.Errorf("bandReachNm on an empty band = %g, want 0", got)
-	}
+		var snapshot coverage.Snapshot
 
-	snapshot.Cells[band][nearBin] = 1
-	snapshot.Cells[band][farBin] = 1
+		if got := bandReachNm(snapshot, band); got != 0 {
+			t.Errorf("bandReachNm on an empty band = %g, want 0", got)
+		}
+	})
 
-	want := float64(farBin+1) * coverage.DistanceBinNm
-	if got := bandReachNm(snapshot, band); got != want {
-		t.Errorf("bandReachNm = %g, want %g (the outer edge of bin %d)", got, want, farBin)
-	}
+	t.Run("below the minimum reaches nothing", func(t *testing.T) {
+		t.Parallel()
 
-	// The last bin is the one everything past 250 nautical miles clamps into,
-	// so it has to be reachable rather than falling off the end of the walk.
-	snapshot.Cells[band][coverage.DistanceBinCount-1] = 1
+		var snapshot coverage.Snapshot
 
-	want = coverage.DistanceBinCount * coverage.DistanceBinNm
-	if got := bandReachNm(snapshot, band); got != want {
-		t.Errorf("bandReachNm with the last bin filled = %g, want %g", got, want)
-	}
+		snapshot.Cells[band][0] = minBandObservations - 1
+
+		if got := bandReachNm(snapshot, band); got != 0 {
+			t.Errorf("bandReachNm below minBandObservations = %g, want 0", got)
+		}
+	})
+
+	t.Run("one stray count in a far bin does not drag the reach out to it", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			nearTopBin = 5
+			farBin     = 20
+		)
+
+		var snapshot coverage.Snapshot
+
+		// A hundred observations settle into the near bins, most of them by
+		// bin 5, and one lone count lands at bin 20: the mis-decode that used
+		// to pin the whole band's reach out there.
+		copy(snapshot.Cells[band][:nearTopBin+1], []uint32{17, 17, 17, 17, 16, 16})
+		snapshot.Cells[band][farBin] = 1
+
+		want := float64(nearTopBin+1) * coverage.DistanceBinNm
+		if got := bandReachNm(snapshot, band); got != want {
+			t.Errorf("bandReachNm with one stray count at bin %d = %g, want the edge of bin %d (%g)",
+				farBin, got, nearTopBin, want)
+		}
+	})
+
+	t.Run("an even spread needs every one of its bins to clear the percentile", func(t *testing.T) {
+		t.Parallel()
+
+		const lastBin = 9
+
+		var snapshot coverage.Snapshot
+
+		for bin := 0; bin <= lastBin; bin++ {
+			snapshot.Cells[band][bin] = 10
+		}
+
+		want := float64(lastBin+1) * coverage.DistanceBinNm
+		if got := bandReachNm(snapshot, band); got != want {
+			t.Errorf("bandReachNm spread evenly over bins 0-%d = %g, want the edge of bin %d (%g)",
+				lastBin, got, lastBin, want)
+		}
+	})
+
+	t.Run("counts near saturation still sum without overflowing", func(t *testing.T) {
+		t.Parallel()
+
+		var snapshot coverage.Snapshot
+
+		for bin := range snapshot.Cells[band] {
+			snapshot.Cells[band][bin] = math.MaxUint32
+		}
+
+		want := float64(coverage.DistanceBinCount) * coverage.DistanceBinNm
+		if got := bandReachNm(snapshot, band); got != want {
+			t.Errorf("bandReachNm saturated across every bin = %g, want the far edge (%g)", got, want)
+		}
+	})
 }
 
 // TestSectorReach checks the measured envelope's one piece of arithmetic: a
@@ -457,7 +509,7 @@ func TestSectorReach(t *testing.T) {
 
 		var snapshot coverage.Snapshot
 
-		snapshot.Cells[band][farBin] = 1
+		snapshot.Cells[band][farBin] = minBandObservations
 		snapshot.Sectors[heardSect] = heardNm
 		snapshot.Sectors[cappedSect] = distantNm
 
@@ -485,9 +537,10 @@ func TestSectorReach(t *testing.T) {
 
 		var snapshot coverage.Snapshot
 
-		// One occupied bin, so the band reaches ten nautical miles: less than
-		// the sector's own twenty-five, and less than the range.
-		snapshot.Cells[band][0] = 1
+		// One occupied bin, comfortably over minBandObservations, so the band
+		// reaches ten nautical miles: less than the sector's own twenty-five,
+		// and less than the range.
+		snapshot.Cells[band][0] = minBandObservations
 		snapshot.Sectors[heardSect] = heardNm
 
 		reach, filled := sectorReach(view, snapshot, band)
@@ -616,7 +669,9 @@ var view3DPicture = image.Rect(0, 0, 620, layerCanvasHeight)
 // directional antenna looks like and is the case the wireframe has to leave an
 // edge out of; the band list is how a stack with a hole in it gets built.
 // A gapSector of -1 is a sector nothing matches, so the envelope closes all
-// the way round.
+// the way round. Each named band carries minBandObservations counts in its
+// one bin, clearing bandReachNm's floor, so every band in the list comes back
+// filled rather than read as too little data to draw.
 func coveredFrame(gapSector int, bands ...int) source.Frame {
 	frame := source.Frame{
 		Receiver: source.Receiver{
@@ -631,7 +686,7 @@ func coveredFrame(gapSector int, bands ...int) source.Frame {
 	)
 
 	for _, band := range bands {
-		frame.Coverage.Cells[band][bin] = 1
+		frame.Coverage.Cells[band][bin] = minBandObservations
 	}
 
 	for sector := range coverage.BearingSectorCount {

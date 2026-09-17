@@ -1059,7 +1059,7 @@ func TestBearingOf(t *testing.T) {
 	}
 }
 
-// TestCoverageCacheObserve checks observe's success path and its three drop
+// TestCoverageCacheObserve checks observe's success path and its four drop
 // guards. A dropped fix must leave the tracker's Snapshot entirely at its
 // zero value, since nothing was ever folded into it.
 func TestCoverageCacheObserve(t *testing.T) {
@@ -1101,24 +1101,49 @@ func TestCoverageCacheObserve(t *testing.T) {
 		}
 	})
 
+	t.Run("a low but positive altitude lands too", func(t *testing.T) {
+		t.Parallel()
+
+		const lowAltitudeFt = 1200.0
+
+		cache := newCoverage()
+		cache.observe(receiverLat, receiverLon, aircraftLat, aircraftLon, lowAltitudeFt)
+
+		if snapshot := cache.tracker.Snapshot(); snapshot.MaxRangeNm <= 0 {
+			t.Errorf("MaxRangeNm at %g ft = %v, want > 0", lowAltitudeFt, snapshot.MaxRangeNm)
+		}
+	})
+
 	for _, testCase := range []struct {
 		name                     string
 		receiverLat, receiverLon float64
 		lat, lon                 float64
+		altitudeFt               float64
 	}{
-		{name: "receiver at (0, 0) is dropped", receiverLat: 0, receiverLon: 0, lat: aircraftLat, lon: aircraftLon},
-		{name: "aircraft at (0, 0) is dropped", receiverLat: receiverLat, receiverLon: receiverLon, lat: 0, lon: 0},
+		{
+			name:        "receiver at (0, 0) is dropped",
+			receiverLat: 0, receiverLon: 0, lat: aircraftLat, lon: aircraftLon, altitudeFt: altitudeFt,
+		},
+		{
+			name:        "aircraft at (0, 0) is dropped",
+			receiverLat: receiverLat, receiverLon: receiverLon, lat: 0, lon: 0, altitudeFt: altitudeFt,
+		},
 		{
 			name:        "a NaN coordinate is dropped",
 			receiverLat: receiverLat, receiverLon: receiverLon,
-			lat: math.NaN(), lon: aircraftLon,
+			lat: math.NaN(), lon: aircraftLon, altitudeFt: altitudeFt,
+		},
+		{
+			name:        "an undecoded altitude is dropped",
+			receiverLat: receiverLat, receiverLon: receiverLon,
+			lat: aircraftLat, lon: aircraftLon, altitudeFt: 0,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
 			cache := newCoverage()
-			cache.observe(testCase.receiverLat, testCase.receiverLon, testCase.lat, testCase.lon, altitudeFt)
+			cache.observe(testCase.receiverLat, testCase.receiverLon, testCase.lat, testCase.lon, testCase.altitudeFt)
 
 			if snapshot := cache.tracker.Snapshot(); snapshot != (coverage.Snapshot{}) {
 				t.Errorf("Snapshot() = %+v, want the zero value (fix dropped)", snapshot)

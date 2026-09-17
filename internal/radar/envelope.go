@@ -162,12 +162,13 @@ type reachBySector [coverage.BearingSectorCount]float64
 // coverage.Snapshot has no bearing-by-altitude grid to read directly: Cells is
 // altitude band by distance bin, and Sectors is one farthest distance per
 // bearing sector over every altitude. The wireframe is the two put together,
-// which is as much as the tracker can say. A band reaches as far as its
-// farthest occupied distance bin, a sector as far as its own farthest
-// observation, and a vertex is the nearer of the two. So the bands decide how
-// the shape stacks up and the sectors decide its outline, and a sector nothing
-// has ever been heard in stays at zero and draws no edge at all, which is what
-// makes a directional antenna come out lopsided rather than round.
+// which is as much as the tracker can say. A band reaches as far as
+// bandReachNm's percentile of what it has observed, a sector as far as its
+// own farthest observation, and a vertex is the nearer of the two. So the
+// bands decide how the shape stacks up and the sectors decide its outline,
+// and a sector nothing has ever been heard in stays at zero and draws no edge
+// at all, which is what makes a directional antenna come out lopsided rather
+// than round.
 //
 // Everything is clamped to the range on screen for the reason the bowl is: a
 // wireframe two hundred and fifty nautical miles across on a forty mile scope
@@ -196,22 +197,66 @@ func sectorReach(view scene3, snapshot coverage.Snapshot, band int) (reachBySect
 	return reach, filled
 }
 
-// bandReachNm is the outer edge of the farthest distance bin holding an
-// observation in one altitude band, or zero when the band is empty.
+// minBandObservations is the fewest observations an altitude band must carry
+// in total before bandReachNm reports a reach for it at all. A handful of
+// decodes can swing a percentile just as easily as they swing a maximum, so
+// below this the band counts as unfilled rather than answered from too
+// little data.
+const minBandObservations = 16
+
+// reachPercentile is the share of a band's observations that bandReachNm
+// requires at or inside the bin it returns. A maximum takes the single
+// farthest bin any observation ever landed in, so one mis-decoded position at
+// low altitude and long range is enough to pin that band's reach to the far
+// bins for the rest of the session. A percentile just under all of it drops
+// that one bad decode on the floor instead: two percent is comfortably above
+// the rate a real receiver mis-decodes a position at, and comfortably below
+// the share of genuine traffic sitting at the edge of any band that has
+// actually been flown.
+const reachPercentile = 0.98
+
+// bandReachNm is the outer edge of the distance bin at which reachPercentile
+// of one altitude band's observations have accumulated, counting from the
+// nearest bin outward, or zero when the band holds fewer than
+// minBandObservations in total.
 //
-// The outer edge rather than the middle of the bin, because the farthest
-// aircraft in it was somewhere in that ten nautical miles and the near edge
-// would understate every band by up to a bin. The sector's own figure is an
-// exact distance and caps it wherever it is the smaller of the two, so the
-// overstatement only survives in sectors where the band itself is the limit.
+// It used to be a maximum: the outer edge of the farthest occupied bin. That
+// reads as a cone that should shrink with altitude, right up until one
+// mis-decoded fix lands in a low band's farthest bin and holds it there for
+// good, and after long enough every band has picked up such a fix and the
+// cone flattens into a cylinder. A percentile only moves the reach out to a
+// bin once a real share of the band's traffic sits there, so a stray bad
+// decode changes nothing unless its own bin is more than reachPercentile's
+// share of everything the band has ever heard, which no antenna gets wrong
+// that often.
+//
+// Counts are summed as uint64 so twenty-five bins each saturated at
+// math.MaxUint32 add up without overflowing before the percentile is worked
+// out.
 func bandReachNm(snapshot coverage.Snapshot, band int) float64 {
-	for bin := coverage.DistanceBinCount - 1; bin >= 0; bin-- {
-		if snapshot.Cells[band][bin] > 0 {
+	var total uint64
+
+	for _, count := range snapshot.Cells[band] {
+		total += uint64(count)
+	}
+
+	if total < minBandObservations {
+		return 0
+	}
+
+	threshold := float64(total) * reachPercentile
+
+	var cumulative uint64
+
+	for bin, count := range snapshot.Cells[band] {
+		cumulative += uint64(count)
+
+		if float64(cumulative) >= threshold {
 			return float64(bin+1) * coverage.DistanceBinNm
 		}
 	}
 
-	return 0
+	return float64(coverage.DistanceBinCount) * coverage.DistanceBinNm
 }
 
 // sectorPoint is one vertex of the measured envelope: the middle of a bearing

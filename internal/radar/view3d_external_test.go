@@ -47,9 +47,13 @@ func covered(frame source.Frame) source.Frame {
 		band    = 2
 		bin     = 1
 		heardNm = 20.0
+		// observations is comfortably over bandReachNm's own floor (16 at the
+		// time of writing), so the one bin counts as filled rather than too
+		// little data to draw.
+		observations = 20
 	)
 
-	frame.Coverage.Cells[band][bin] = 1
+	frame.Coverage.Cells[band][bin] = observations
 
 	for sector := range coverage.BearingSectorCount {
 		frame.Coverage.Sectors[sector] = heardNm

@@ -460,7 +460,10 @@ The second is the measured one: where the antenna has actually heard
 something. uScope runs uAirwaves' coverage tracker behind every
 source, binning each decoded fix by distance, altitude band and bearing sector,
 and the wireframe is a ring through the sixteen sectors at each altitude band
-with vertical edges joining the bands. A sector nothing has ever
+with vertical edges joining the bands. Each band's edge is the 98th percentile
+of what has actually been observed in it rather than the single farthest bin
+ever touched, so one stray mis-decoded position at long range does not drag
+the whole band out to it. A sector nothing has ever
 been heard in is skipped, so a directional antenna, or one with a chimney on
 one side of it, comes out lopsided rather than round. `--demo-sector` shows what
 that looks like without a receiver: the invented fleet sits in one quadrant and

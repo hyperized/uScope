@@ -40,17 +40,25 @@ func newCoverage() *coverageCache {
 
 // observe folds one aircraft fix into the tracker, measured from the receiver.
 //
-// It mirrors uAirwaves' own positionObserver. The one guard is
-// HaversineDistance's MaxFloat64 sentinel, which is what that function returns
-// when either end is the undecoded (0, 0): a fix taken before the receiver
-// knows where it is, or an aircraft whose position has not resolved yet, has
-// no distance and no bearing worth binning. NaN is refused alongside it
-// because Observe only tests for a negative distance, and NaN loses every
-// comparison it is put through.
+// It mirrors uAirwaves' own positionObserver, with one guard ahead of it: an
+// altitude at or below zero is what an undecoded altitude reports, not a real
+// one on the ground, and folding it in would land the fix in the lowest band
+// regardless of where the aircraft actually was.
+//
+// Past that, the guard is HaversineDistance's MaxFloat64 sentinel, which is
+// what that function returns when either end is the undecoded (0, 0): a fix
+// taken before the receiver knows where it is, or an aircraft whose position
+// has not resolved yet, has no distance and no bearing worth binning. NaN is
+// refused alongside it because Observe only tests for a negative distance,
+// and NaN loses every comparison it is put through.
 //
 // It runs on the ingest goroutine, so it allocates nothing and takes one
 // mutex.
 func (c *coverageCache) observe(receiverLat, receiverLon, latitude, longitude, altitudeFt float64) {
+	if altitudeFt <= 0 {
+		return
+	}
+
 	distanceNm := airplanes.HaversineDistance(receiverLat, receiverLon, latitude, longitude)
 	if distanceNm == math.MaxFloat64 || math.IsNaN(distanceNm) {
 		return

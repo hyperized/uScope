@@ -186,10 +186,14 @@ func ghostFleet(count, history int) []source.Trail {
 // every bearing sector, which is the busiest wireframe the tracker can
 // produce and so the most expensive one to draw.
 func benchCoverage() coverage.Snapshot {
+	// benchObservations is comfortably over bandReachNm's own floor (16 at
+	// the time of writing), so every band below counts as filled.
+	const benchObservations = 20
+
 	var snapshot coverage.Snapshot
 
 	for band := range coverage.AltitudeBandCount {
-		snapshot.Cells[band][band%coverage.DistanceBinCount] = 1
+		snapshot.Cells[band][band%coverage.DistanceBinCount] = benchObservations
 	}
 
 	for sector := range coverage.BearingSectorCount {
