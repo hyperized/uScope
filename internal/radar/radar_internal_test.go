@@ -3110,6 +3110,7 @@ func BenchmarkBackground(b *testing.B) {
 		rangeNm float64
 	}{
 		{name: "40nm", rangeNm: 40},
+		{name: "200nm", rangeNm: 200},
 		{name: "400nm", rangeNm: 400},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {

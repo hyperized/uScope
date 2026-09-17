@@ -259,7 +259,7 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.airports, "airports", defaultOn,
 		"draw the airfield markers on the scope: on or off")
 	set.StringVar(&raw.shore, "shore", defaultOn,
-		"draw the coastline under the scope: on or off")
+		"draw the coastline and the water fill under the scope: on or off")
 	set.StringVar(&raw.scopeRange, "range", defaultRange,
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
 	// The flag is spelled the American way and the Go identifiers behind it

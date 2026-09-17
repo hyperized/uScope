@@ -77,12 +77,15 @@ run-blocks:
 run-pattern:
 	go run . --scene pattern
 
-# Rebuild the embedded shorelines from Natural Earth.
+# Rebuild the embedded shorelines and land from Natural Earth.
 #
-# The two GeoJSON files come to 15 MB and go to a temporary directory, never
-# into the repository; only the packed 2 MB result is committed. Run this when
-# Natural Earth publishes a new release, not as part of a build: the data does
-# not change between one and the next.
+# The three GeoJSON files come to 25 MB and go to a temporary directory, never
+# into the repository; only the two packed files, 4 MB together, are committed.
+# Run this when Natural Earth publishes a new release, not as part of a build:
+# the data does not change between one and the next.
+#
+# Both outputs are reproducible. The same three inputs produce the same bytes,
+# so a run that changes nothing leaves `git status` clean.
 NE_GEOJSON ?= https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson
 
 shore-data:
@@ -92,11 +95,14 @@ shore-data:
 	echo "downloading Natural Earth into $$tmp"; \
 	curl -sSfL -o "$$tmp/coastline.geojson" $(NE_GEOJSON)/ne_10m_coastline.geojson; \
 	curl -sSfL -o "$$tmp/lakes.geojson"     $(NE_GEOJSON)/ne_10m_lakes.geojson; \
+	curl -sSfL -o "$$tmp/land.geojson"      $(NE_GEOJSON)/ne_10m_land.geojson; \
 	go run ./internal/tools/shoregen \
 	  -coastline "$$tmp/coastline.geojson" \
 	  -lakes "$$tmp/lakes.geojson" \
-	  -out pkg/shore/shore.bin.gz; \
-	ls -l pkg/shore/shore.bin.gz
+	  -land "$$tmp/land.geojson" \
+	  -out pkg/shore/shore.bin.gz \
+	  -land-out pkg/shore/land.bin.gz; \
+	ls -l pkg/shore/shore.bin.gz pkg/shore/land.bin.gz
 
 test:
 	go test -race -cover ./...

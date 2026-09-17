@@ -1,22 +1,34 @@
-// Package shore carries the coastlines and lake shores uScope draws under the
-// scope, so the surroundings are recognisable without a map service.
+// Package shore carries the coastlines, lake shores and land uScope draws
+// under the scope, so the surroundings are recognisable without a map service.
 //
-// The data is Natural Earth's 1:10m coastline and lakes, converted once by
-// internal/tools/shoregen and compiled into the binary. See README.md in this
-// directory for the provenance, the licence and how to regenerate it. uScope
-// runs on a handheld with no network, anywhere in the world, so querying a
-// tile server or an Overpass endpoint at run time was never an option: the
-// data ships or it does not exist.
+// The data is Natural Earth's 1:10m coastline, lakes and land, converted once
+// by internal/tools/shoregen and compiled into the binary as two packed files.
+// See README.md in this directory for the provenance, the licence and how to
+// regenerate them. uScope runs on a handheld with no network, anywhere in the
+// world, so querying a tile server or an Overpass endpoint at run time was
+// never an option: the data ships or it does not exist.
 //
-// The world is cut into five degree cells and every polyline is filed under
-// the cell it lies in. A scope covering a few hundred nautical miles touches
-// a handful of those, so Within walks a few thousand points instead of the
-// half million in the set. Five degrees is the compromise: smaller cells mean
-// a longer index and more polylines cut in half, larger ones mean more points
+// There are two halves because the scope draws two things. Within gives the
+// open polylines the coastline is drawn as. LandWithin gives the closed rings
+// that say which side of it is sea, which a line cannot: an open curve has no
+// inside, so the fill has to come from polygons.
+//
+// The world is cut into five degree cells and every shape is filed under the
+// cell it lies in. A scope covering a few hundred nautical miles touches a
+// handful of those, so a query walks a few thousand points instead of the half
+// million in the set. Five degrees is the compromise: smaller cells mean a
+// longer index and more shapes cut in half, larger ones mean more points
 // visited that are nowhere near the scope.
 //
+// The two halves are cut into those cells differently. A polyline is split
+// where it leaves a cell, with the crossing segment kept on both sides so the
+// line shows no gap. A ring is clipped against the cell rectangle with
+// Sutherland-Hodgman, so each piece is a closed ring that runs along the
+// boundary where the original ran off it; splitting it the way a line is split
+// would leave two open curves, and an open curve cannot be filled. See land.go.
+//
 // A Set is read-only once Decode has built it, so any number of goroutines
-// may call Within on the same one.
+// may call Within or LandWithin on the same one.
 package shore
 
 import (
@@ -32,9 +44,15 @@ type Point struct {
 	Lon float64
 }
 
-// Polyline is a run of shoreline. It is a line rather than a ring even when
-// it came from a lake: the scope draws outlines, and a closed ring is a line
-// whose last point repeats its first.
+// Polyline is a run of points, and what it means depends on which half of the
+// set it came from.
+//
+// From Within it is an open line: a stretch of coastline, or a lake shore,
+// which arrives as a ring whose last point repeats its first because the
+// source data has it that way. From LandWithin it is a closed ring, and the
+// edge from its last point back to its first is part of it whether or not that
+// point is repeated. It is not, because repeating it would cost bytes in the
+// file and say nothing the shape does not already say.
 type Polyline []Point
 
 // Set is the whole world's shorelines, indexed by cell.
@@ -47,28 +65,39 @@ type Set struct {
 	// cell with nothing in it is absent rather than empty, so open ocean
 	// costs nothing.
 	cells map[int][]Polyline
+
+	// land is the same index over the closed rings that separate land from
+	// water: the outer ring of every landmass, the holes in it, and the lake
+	// shores cut out of it. It is empty in a Set that came from Decode rather
+	// than DecodeWithLand, and LandWithin then visits nothing.
+	land map[int][]Polyline
 }
 
-// The packed data, built by internal/tools/shoregen from the two Natural
-// Earth files. Regenerate it with `make shore-data`.
+// The packed data, built by internal/tools/shoregen from the three Natural
+// Earth files. Regenerate both with `make shore-data`.
 //
 //nolint:gochecknoglobals // go:embed needs a package-level variable.
 //go:embed shore.bin.gz
 var packed []byte
 
+//nolint:gochecknoglobals // go:embed needs a package-level variable.
+//go:embed land.bin.gz
+var packedLand []byte
+
 // loaded is the decode that happens at most once. It is a pointer so the
 // sync.Once inside is never copied.
 //
 //nolint:gochecknoglobals // the cache has to outlive the call that fills it.
-var loaded = &cache{data: packed}
+var loaded = &cache{data: packed, land: packedLand}
 
 // cache holds the decoded set and replays the outcome, error included, to
-// every caller after the first. The bytes are a field rather than read
-// straight off the embed, the way pkg/fonts does it, so a test can put a
-// damaged file through the same path the real one takes.
+// every caller after the first. The bytes are fields rather than read straight
+// off the embeds, the way pkg/fonts does it, so a test can put a damaged file
+// through the same path the real one takes.
 type cache struct {
 	once sync.Once
 	data []byte
+	land []byte
 	set  *Set
 	err  error
 }
@@ -85,7 +114,7 @@ func Load() (*Set, error) { return loaded.load() }
 // load runs the decode under the Once.
 func (c *cache) load() (*Set, error) {
 	c.once.Do(func() {
-		c.set, c.err = Decode(bytes.NewReader(c.data))
+		c.set, c.err = DecodeWithLand(bytes.NewReader(c.data), bytes.NewReader(c.land))
 	})
 
 	return c.set, c.err
@@ -107,7 +136,45 @@ func (c *cache) load() (*Set, error) {
 // nil-check. Longitudes outside the usual range are wrapped, because a scope
 // near the dateline is centred on a box that runs off both ends of it.
 func (s *Set) Within(latMin, latMax, lonMin, lonMax float64, visit func(Polyline)) {
-	if s == nil || visit == nil || badBox(latMin, latMax, lonMin, lonMax) {
+	if s == nil {
+		return
+	}
+
+	visitCells(s.cells, latMin, latMax, lonMin, lonMax, visit)
+}
+
+// LandWithin calls visit for every land ring whose cell meets the box, which
+// is given in degrees.
+//
+// A ring is a closed piece of the boundary between land and water, cut to the
+// cell it is filed under: the outline of a landmass, a hole in one, or a lake
+// shore. Which side of it is land is not recorded and does not need to be.
+// Fill every ring the call visits in one even-odd pass and the answer falls
+// out: a point on land is enclosed an odd number of times, a point in a lake
+// inside that land an even number, and a point at sea none at all.
+//
+// The pieces two neighbouring cells hold meet on exactly the same
+// coordinates, because both were cut from the same ring by the same
+// arithmetic, so one even-odd pass over the rings of several cells fills them
+// as one shape with no seam between them.
+//
+// Everything Within's own documentation says about allocation, aliasing, nil
+// receivers and the dateline holds here word for word: the two walk the same
+// index in the same way.
+func (s *Set) LandWithin(latMin, latMax, lonMin, lonMax float64, visit func(Polyline)) {
+	if s == nil {
+		return
+	}
+
+	visitCells(s.land, latMin, latMax, lonMin, lonMax, visit)
+}
+
+// visitCells hands every polyline in the cells the box meets to visit. It is
+// the walk Within and LandWithin share; only the index differs.
+func visitCells(
+	cells map[int][]Polyline, latMin, latMax, lonMin, lonMax float64, visit func(Polyline),
+) {
+	if visit == nil || badBox(latMin, latMax, lonMin, lonMax) {
 		return
 	}
 
@@ -121,14 +188,14 @@ func (s *Set) Within(latMin, latMax, lonMin, lonMax float64, visit func(Polyline
 	}
 
 	for row := rowLow; row <= rowHigh; row++ {
-		s.visitRow(row, colLow, colHigh, visit)
+		visitRow(cells, row, colLow, colHigh, visit)
 	}
 }
 
 // visitRow hands over one row's share of the box.
-func (s *Set) visitRow(row, colLow, colHigh int, visit func(Polyline)) {
+func visitRow(cells map[int][]Polyline, row, colLow, colHigh int, visit func(Polyline)) {
 	for col := colLow; col <= colHigh; col++ {
-		for _, line := range s.cells[row*cellCols+wrapColumn(col)] {
+		for _, line := range cells[row*cellCols+wrapColumn(col)] {
 			visit(line)
 		}
 	}

@@ -253,6 +253,275 @@ func TestSameSign(t *testing.T) {
 	}
 }
 
+// TestHlineOffCanvas exercises hline's early-return branches: a row above or
+// below the canvas, and a span that clips down to nothing because its ends
+// cross once each is clamped to the canvas width.
+func TestHlineOffCanvas(t *testing.T) {
+	t.Parallel()
+
+	const canvasSide = 10
+
+	for _, testCase := range []struct {
+		name string
+		x0   int
+		x1   int
+		y    int
+	}{
+		{name: "row above the canvas", x0: 2, x1: 6, y: -1},
+		{name: "row below the canvas", x0: 2, x1: 6, y: canvasSide},
+		{name: "reversed span crosses after clipping", x0: 6, x1: 2, y: 4},
+		{name: "span entirely left of the canvas", x0: -5, x1: -1, y: 4},
+		{name: "span entirely right of the canvas", x0: canvasSide, x1: canvasSide + 4, y: 4},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := New(canvasSide, canvasSide)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			canv.hline(testCase.x0, testCase.x1, testCase.y, Red)
+
+			for y := range canvasSide {
+				for x := range canvasSide {
+					assertPixelAt(t, canv, x, y, color.RGBA{})
+				}
+			}
+		})
+	}
+}
+
+// TestHlinePartialOverlap checks that a span running off one side of the
+// canvas paints exactly the part that survives clipping, nothing either side
+// of it.
+func TestHlinePartialOverlap(t *testing.T) {
+	t.Parallel()
+
+	const (
+		canvasSide = 10
+		lineRow    = 4
+	)
+
+	canv, err := New(canvasSide, canvasSide)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	canv.hline(-3, 4, lineRow, Green)
+
+	for x := range 5 {
+		assertPixelAt(t, canv, x, lineRow, Green)
+	}
+
+	assertPixelAt(t, canv, 5, lineRow, color.RGBA{})
+}
+
+// TestHlineSinglePixel checks the doubling copy loop does not run past the
+// end of the row: a one-pixel span has nothing to double into.
+func TestHlineSinglePixel(t *testing.T) {
+	t.Parallel()
+
+	const (
+		canvasSide = 10
+		column     = 3
+		lineRow    = 6
+	)
+
+	canv, err := New(canvasSide, canvasSide)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	canv.hline(column, column, lineRow, Blue)
+
+	assertPixelAt(t, canv, column, lineRow, Blue)
+	assertPixelAt(t, canv, column-1, lineRow, color.RGBA{})
+	assertPixelAt(t, canv, column+1, lineRow, color.RGBA{})
+}
+
+// TestAppendEdge covers the three ways an edge can produce nothing to sweep:
+// it runs flat along a row, or it falls entirely above or entirely below the
+// clip rectangle once trimmed to it.
+func TestAppendEdge(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		from, to image.Point
+		area     image.Rectangle
+	}{
+		{
+			name: "horizontal edge is dropped",
+			from: image.Pt(0, 5), to: image.Pt(10, 5),
+			area: image.Rect(0, 0, 20, 20),
+		},
+		{
+			name: "edge entirely above clip is dropped",
+			from: image.Pt(0, 0), to: image.Pt(0, 5),
+			area: image.Rect(0, 10, 20, 20),
+		},
+		{
+			name: "edge entirely below clip is dropped",
+			from: image.Pt(0, 15), to: image.Pt(0, 20),
+			area: image.Rect(0, 0, 20, 10),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := appendEdge(nil, testCase.from, testCase.to, testCase.area)
+			if len(got) != 0 {
+				t.Errorf("appendEdge(%v, %v, %v) = %v, want no edges", testCase.from, testCase.to, testCase.area, got)
+			}
+		})
+	}
+}
+
+// TestAppendEdgeNormalisesDirection checks that an edge handed over bottom to
+// top produces the same polyEdge as the same edge handed top to bottom, which
+// is what lets a ring wind either way without the sweep caring.
+func TestAppendEdgeNormalisesDirection(t *testing.T) {
+	t.Parallel()
+
+	area := image.Rect(0, 0, 20, 20)
+
+	topDown := appendEdge(nil, image.Pt(2, 0), image.Pt(6, 10), area)
+	bottomUp := appendEdge(nil, image.Pt(6, 10), image.Pt(2, 0), area)
+
+	if len(topDown) != 1 || len(bottomUp) != 1 {
+		t.Fatalf("appendEdge produced %d and %d edges, want 1 each", len(topDown), len(bottomUp))
+	}
+
+	if topDown[0] != bottomUp[0] {
+		t.Errorf("top-down edge = %+v, bottom-up edge = %+v, want equal", topDown[0], bottomUp[0])
+	}
+}
+
+func TestByTopRow(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		left, right polyEdge
+		want        int
+	}{
+		{name: "left starts earlier", left: polyEdge{top: 1}, right: polyEdge{top: 5}, want: -1},
+		{name: "left starts later", left: polyEdge{top: 5}, right: polyEdge{top: 1}, want: 1},
+		{name: "same start row", left: polyEdge{top: 3}, right: polyEdge{top: 3}, want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := byTopRow(testCase.left, testCase.right); got != testCase.want {
+				t.Errorf("byTopRow(%+v, %+v) = %d, want %d", testCase.left, testCase.right, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestPixelAt(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		x    float64
+		want int
+	}{
+		{name: "crossing exactly on a pixel boundary", x: 4, want: 4},
+		{name: "crossing at the pixel centre lands in that pixel", x: 4.5, want: 4},
+		{name: "just short of the centre lands in the same pixel", x: 4.4, want: 4},
+		{name: "just past the centre lands in the next pixel", x: 4.6, want: 5},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := pixelAt(testCase.x); got != testCase.want {
+				t.Errorf("pixelAt(%v) = %d, want %d", testCase.x, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestSweepReturnsWhenNothingLeftToAdmit draws a small polygon near the top of
+// a clip rectangle that runs much further down, so every edge has already
+// retired and none is left to admit long before the clip ends. That is what
+// the early return is for: without it, sweep would keep walking empty rows
+// all the way to the bottom of the clip for nothing.
+func TestSweepReturnsWhenNothingLeftToAdmit(t *testing.T) {
+	t.Parallel()
+
+	const (
+		canvasSide = 20
+		polyTop    = 2
+		polyBottom = 5
+	)
+
+	canv, err := New(canvasSide, canvasSide)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	canv.edges = []polyEdge{
+		{top: polyTop, bottom: polyBottom, x: 4, slope: 0},
+		{top: polyTop, bottom: polyBottom, x: 8, slope: 0},
+	}
+
+	canv.sweep(image.Rect(0, 0, canvasSide, canvasSide), Green)
+
+	for y := polyTop; y < polyBottom; y++ {
+		assertPixelAt(t, canv, 4, y, Green)
+		assertPixelAt(t, canv, 7, y, Green)
+	}
+
+	for y := range polyTop {
+		assertPixelAt(t, canv, 4, y, color.RGBA{})
+	}
+
+	for y := polyBottom; y < canvasSide; y++ {
+		assertPixelAt(t, canv, 4, y, color.RGBA{})
+	}
+}
+
+// TestSweepContinuesThroughGapBetweenRings feeds two rings separated by rows
+// with nothing on them at all. On those rows the active list is empty but
+// edges further down the sorted list still need admitting, which is the
+// continue rather than the return: sweep must keep walking rather than
+// stopping early.
+func TestSweepContinuesThroughGapBetweenRings(t *testing.T) {
+	t.Parallel()
+
+	const canvasSide = 10
+
+	canv, err := New(canvasSide, canvasSide)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	canv.edges = []polyEdge{
+		{top: 0, bottom: 2, x: 2, slope: 0},
+		{top: 0, bottom: 2, x: 6, slope: 0},
+		{top: 5, bottom: 7, x: 3, slope: 0},
+		{top: 5, bottom: 7, x: 5, slope: 0},
+	}
+
+	canv.sweep(image.Rect(0, 0, canvasSide, canvasSide), Red)
+
+	for y := range 2 {
+		assertPixelAt(t, canv, 2, y, Red)
+		assertPixelAt(t, canv, 5, y, Red)
+	}
+
+	for y := 2; y < 5; y++ {
+		assertPixelAt(t, canv, 2, y, color.RGBA{})
+	}
+
+	for y := 5; y < 7; y++ {
+		assertPixelAt(t, canv, 3, y, Red)
+		assertPixelAt(t, canv, 4, y, Red)
+	}
+}
+
 func TestPointOnCircle(t *testing.T) {
 	t.Parallel()
 

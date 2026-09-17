@@ -55,14 +55,14 @@ startup is a worse trade than falling back to blocks.
 
 ## The radar
 
-`--scene radar` is the default. The left half is the scope: a square field
-with the coastline under it, three dashed range rings, the cardinal letters, a
-marker where the receiver is, and the airfields that fall inside the current
-range as small hollow squares with their ICAO codes beside them. Each ring
-carries its range in nautical miles, and an airfield that would land under
-that label is left off rather than drawn through it. `a` turns the airfields
-off when the field is busy enough that they are in the way, and `--airports
-off` starts without them.
+`--scene radar` is the default. The left half is the scope: a square field with
+the sea tinted and the coastline drawn over it, three dashed range rings, the
+cardinal letters, a marker where the receiver is, and the airfields that fall
+inside the current range as small hollow squares with their ICAO codes beside
+them. Each ring carries its range in nautical miles, and an airfield that would
+land under that label is left off rather than drawn through it. `a` turns the
+airfields off when the field is busy enough that they are in the way, and
+`--airports off` starts without them.
 
 None of that is redrawn every frame. It goes onto a background layer of its
 own and gets copied under each frame, and the layer is rebuilt only when
@@ -257,16 +257,37 @@ quietest colour any of the six palettes has, so the surroundings are
 recognisable without turning the scope into a map with aircraft on it. `m`
 turns them off and `--shore off` starts without them.
 
-The data is compiled into the binary, about 2 MB of it, covering the whole
-world. uScope runs on a handheld with no network and is used outside the
-Netherlands as well as in it, so there was never a version of this
+Under the outlines, the sea is tinted. The scope floods the ground inside the
+range ring with a colour eight per cent off the field towards the palette's
+data hue, then paints the land back out of it in the field colour, so land
+reads from sea at a glance the way it does on a glass cockpit map. The tint
+comes out cyan-black on Glass night, a deeper green on Phosphor, a lighter grey
+on Mono where there is no hue to borrow, and a faint blue-grey on the three day
+pages. Lakes are water again: the IJsselmeer is a hole in the land, not a lake
+shape drawn on top of one.
+
+The fill is why there is a second data file. A coastline is a line, and nothing
+in a line says which side of it is water, so the land has to arrive as
+polygons. Every land ring in view is filled in one even-odd pass, which is what
+makes a lake inside a landmass come out as sea without anything recording which
+rings are lakes.
+
+`m` and `--shore` govern the fill and the outlines together. They are one
+picture rather than two overlays: a coastline with no fill behind it says where
+a line is, and the fill is what says which side of it is sea. The two tilted
+views keep the outlines and no fill; see the open list in DESIGN.md.
+
+The data is compiled into the binary, about 4 MB of it in two files, covering
+the whole world. uScope runs on a handheld with no network and is used outside
+the Netherlands as well as in it, so there was never a version of this
 that asked a tile server or an Overpass endpoint for anything while it drew.
 
 > Made with Natural Earth. Free vector and raster map data at
 > [naturalearthdata.com](https://www.naturalearthdata.com).
 
-Natural Earth is public domain. `pkg/shore/README.md` has the provenance, the
-packed format and how to rebuild it; `make shore-data` is the one command.
+Natural Earth is public domain. `pkg/shore/README.md` has the provenance, both
+packed files, the cell scheme they are cut into and how to rebuild them;
+`make shore-data` is the one command and it writes both.
 
 ### Minimal
 
@@ -1003,7 +1024,7 @@ on a slow link, since a frame of half blocks is a fraction of the bytes.
 | `r`, `R` | auto range on or off |
 | `t`, `T` | cycle the trail mode: off, short, long, all |
 | `a`, `A` | airfield markers on or off; minimal keeps its own |
-| `m`, `M` | coastline on or off; minimal keeps its own |
+| `m`, `M` | coastline and the water fill on or off; minimal keeps its own |
 | `c`, `C` | cycle the colour mode: altitude or airline |
 | `f`, `F` | cycle the filter to one entry of the current legend, then back to all |
 | `l`, `L` | cycle the colour theme: night or day |
@@ -1077,7 +1098,7 @@ before the outer ring's range while auto range is on.
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--colour` | `altitude` | what an aircraft's colour means: `altitude` or `airline` |
 | `--airports` | `on` | draw the airfield markers: `on` or `off` |
-| `--shore` | `on` | draw the coastline: `on` or `off` |
+| `--shore` | `on` | draw the coastline and the water fill: `on` or `off` |
 | `--range` | `auto` | scope range in nautical miles, 20 to 500, or `auto` |
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` to stay on the receiver |
 | `--battery` | | power-supply uevent file to read the battery from, Linux only |
@@ -1120,7 +1141,7 @@ make run-airline    # go run . --demo --colour airline
 make run-beast      # go run . --beast $(BEAST)
 make run-blocks     # go run . --backend blocks --demo
 make run-pattern    # go run . --scene pattern
-make shore-data     # rebuild pkg/shore/shore.bin.gz from Natural Earth
+make shore-data     # rebuild pkg/shore/shore.bin.gz and land.bin.gz from Natural Earth
 make test           # go test -race -cover ./...
 make lint           # golangci-lint run ./...
 make radar          # ship, then paint one radar frame on the panel
@@ -1136,10 +1157,11 @@ Tests that touch a real framebuffer or a real terminal sit behind the
 `integration` build tag, so `make test` never opens a device. `make
 test-device` is what runs them, on the hardware where they mean something.
 
-`make shore-data` is the only target that needs the network. It downloads 15 MB
-of GeoJSON to a temporary directory, packs it, and writes the 2 MB result into
-`pkg/shore`. Run it when Natural Earth publishes a new release, not as part of
-a build: the same two files always produce the same bytes.
+`make shore-data` is the only target that needs the network. It downloads 25 MB
+of GeoJSON to a temporary directory, packs it, and writes the two results, 4 MB
+together, into `pkg/shore`. Run it when Natural Earth publishes a new release,
+not as part of a build: the same three files always produce the same bytes, so
+a run that changes nothing leaves `git status` clean.
 
 ## Layout
 
@@ -1158,7 +1180,7 @@ pkg/termbackend       owns the terminal, drives kitty or blocks
 pkg/psf               PSF1 and PSF2 console font parser
 pkg/fonts             the four embedded Terminus faces
 pkg/text              draws strings with a PSF font
-pkg/shore             the embedded world coastlines and the packed format
+pkg/shore             the embedded world coastlines and land, and the packed format
 internal/term         raw tty mode
 internal/input        bytes to key events
 internal/theme        the colour palettes
@@ -1166,7 +1188,7 @@ internal/source       where aircraft come from: the radio, a feed, or invented
 internal/radar        the radar scene
 internal/pattern      the orientation scene
 internal/app          the run loop
-internal/tools/shoregen  packs Natural Earth into pkg/shore/shore.bin.gz
+internal/tools/shoregen  packs Natural Earth into pkg/shore's two files
 ```
 
 `pkg/kitty` and `pkg/blocks` are pure encoders: they take an image and an

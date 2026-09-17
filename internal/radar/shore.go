@@ -1,6 +1,8 @@
 package radar
 
 import (
+	"image"
+	"image/color"
 	"math"
 
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -24,6 +26,29 @@ const (
 	// wide; a hundredth is a little under 89.5 degrees, past which the box is
 	// the whole world anyway.
 	minCosLat = 0.01
+
+	// waterFade is how far the water tint is pulled off the field towards the
+	// data colour.
+	//
+	// Eight per cent is the whole argument. The tint has one job, which is to
+	// say at a glance which side of a coastline is sea, and it has to do that
+	// without becoming something anybody reads: an aircraft two pixels wide
+	// has to stand off it, the range rings have to stay the loudest lines on
+	// the scope, and a shoreline drawn in the quietest colour in the palette
+	// still has to be visible against it. Anything stronger turns the scope
+	// into a map that happens to have aircraft on it, which is the line the
+	// shore colour was picked to stay on the right side of.
+	//
+	// Fading towards Data rather than towards a colour of its own is what
+	// makes it work in all six palettes without a table: Data is the cyan a
+	// glass panel sets a reading in, the pale green of the phosphor look and
+	// the plain ink of mono, so the tint comes out cyan-black on Glass night,
+	// a deeper green on Phosphor, a lighter grey on Mono and a faint
+	// blue-grey on the three day palettes.
+	waterFade = 0.08
+
+	// minFillRing is the fewest points that enclose an area worth filling.
+	minFillRing = 3
 )
 
 // circle is the scope's outer ring, which shore segments are clipped against.
@@ -41,7 +66,28 @@ type segment struct {
 	toY   float64
 }
 
-// drawShore paints the coastlines and lake shores that fall on the scope.
+// landSpan is one projected ring's window on the Scene's point buffer.
+type landSpan struct {
+	start int
+	end   int
+}
+
+// waterInk is the tint the sea is filled with.
+//
+// It is worked out here rather than carried on the palette for the reason
+// envelope.go works its two out here: internal/theme is the colours somebody
+// picked, and this is one of them mixed with the field for a job only the
+// scene knows about. A palette that had to carry every derived shade would
+// have to be re-picked every time a scene found a new use for one.
+func (s *Scene) waterInk() color.RGBA { return s.fade(s.pal.Data, waterFade) }
+
+// drawShore paints the water, the land and the coastlines that fall on the
+// scope, in that order.
+//
+// The fill goes down first and the outlines over it, so the join between sea
+// and land is covered by the line that describes it and the jagged edge the
+// fill leaves never shows. fillGround is the first half; everything below the
+// call to it is the second.
 //
 // Both the box and the clipping circle are taken off the projection rather
 // than off the receiver and the range ring. The two are the same thing in the
@@ -75,11 +121,135 @@ func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame) {
 		radius:  proj.limitNm * proj.scale,
 	}
 
+	s.fillGround(dst, proj, ring, latSpan, lonSpan)
+
 	s.shoreSet.Within(
 		proj.lat0-latSpan, proj.lat0+latSpan,
 		proj.lon0-lonSpan, proj.lon0+lonSpan,
 		func(line shore.Polyline) { s.drawShoreLine(dst, proj, ring, line) },
 	)
+}
+
+// fillGround tints the sea and paints the land back out of it, under the
+// outlines drawn on top.
+//
+// The order is water first and land second rather than the other way round
+// because a coastline is a line: nothing in the data says which side of it is
+// sea, which is the whole reason the land polygons are carried at all. So the
+// ground is flooded, and the land rings take it back.
+//
+// One even-odd pass does the taking. A lake arrives as another ring inside the
+// ring around it, so a pixel in the IJsselmeer is enclosed twice, comes out
+// even, and is left as the water it was flooded with. Nothing here has to know
+// which rings are lakes, and neither does the file they came out of.
+//
+// Outside the flooded ground nothing is painted that would show: the land fill
+// is the field colour, which is what the layer was cleared to, and the sea and
+// the lakes are left alone. That is what lets the fill be clipped to a
+// rectangle while the scope is a disc.
+func (s *Scene) fillGround(dst *canvas.Canvas, proj projector, ring circle, latSpan, lonSpan float64) {
+	box := s.floodWater(dst, ring)
+
+	s.landPoints = s.landPoints[:0]
+	s.landSpans = s.landSpans[:0]
+
+	s.shoreSet.LandWithin(
+		proj.lat0-latSpan, proj.lat0+latSpan,
+		proj.lon0-lonSpan, proj.lon0+lonSpan,
+		func(line shore.Polyline) { s.collectLand(proj, box, line) },
+	)
+
+	s.landRings = s.landRings[:0]
+	for _, span := range s.landSpans {
+		s.landRings = append(s.landRings, s.landPoints[span.start:span.end:span.end])
+	}
+
+	dst.FillPolygon(s.landRings, box, s.pal.Field)
+}
+
+// floodWater paints the ground the scope covers in the water tint and returns
+// the rectangle the land fill is clipped to.
+//
+// The ground is the range ring's own disc in the scope view, because that is
+// where the picture is: a square of sea behind a round scope would put tint
+// under the flight strips. The bare view has no ring and reaches to the
+// corners, so there the ground is the whole canvas.
+func (s *Scene) floodWater(dst *canvas.Canvas, ring circle) image.Rectangle {
+	water := s.waterInk()
+
+	if s.minimal() {
+		dst.Clear(water)
+
+		return dst.Bounds()
+	}
+
+	centerX, centerY := int(ring.centerX), int(ring.centerY)
+	radius := int(math.Round(ring.radius))
+
+	dst.FillCircle(centerX, centerY, radius, water)
+
+	return image.Rect(centerX-radius, centerY-radius, centerX+radius+1, centerY+radius+1)
+}
+
+// collectLand projects one land ring onto the canvas and records it for the
+// fill, unless it lands nowhere near the picture.
+//
+// Points that round onto the pixel the last one did are dropped. That is the
+// only thinning the fill does, and it is deliberately weaker than the one
+// drawShoreLine applies to the outlines: two neighbouring cells hold pieces
+// cut from the same ring, and they only meet without a seam because both hold
+// the crossing points exactly. Thinning by distance would drop such a point
+// from one piece and keep it in the other, leaving a hairline of sea along a
+// cell boundary a thousand miles long. Dropping a point that lands on a pixel
+// already taken cannot move an edge off that pixel, so it cannot open one.
+//
+// A ring whose own bounding box misses box is thrown away whole, which at the
+// narrow ranges is most of what a five degree cell holds: a cell is a couple
+// of thousand pixels across when the scope is five hundred. Throwing it away
+// is safe rather than merely close enough, because a closed ring crosses any
+// row an even number of times. Those crossings pair off into spans that lie
+// entirely outside box and are clipped away, so removing them leaves the
+// parity inside box exactly where it was.
+func (s *Scene) collectLand(proj projector, box image.Rectangle, line shore.Polyline) {
+	if len(line) < minFillRing {
+		return
+	}
+
+	start := len(s.landPoints)
+	reach := image.Rectangle{}
+
+	for _, point := range line {
+		pixel := pixelOf(proj.offset(point.Lat, point.Lon))
+
+		if len(s.landPoints) > start && s.landPoints[len(s.landPoints)-1] == pixel {
+			continue
+		}
+
+		s.landPoints = append(s.landPoints, pixel)
+		reach = grow(reach, pixel)
+	}
+
+	if len(s.landPoints)-start < minFillRing || !reach.Overlaps(box) {
+		s.landPoints = s.landPoints[:start]
+
+		return
+	}
+
+	s.landSpans = append(s.landSpans, landSpan{start: start, end: len(s.landPoints)})
+}
+
+// grow widens a bounding box to hold one more pixel.
+//
+// An empty rectangle is the seed rather than a sentinel pair of infinities:
+// image.Rectangle.Union treats an empty rectangle as nothing at all, so the
+// first point sets the box and every later one widens it.
+func grow(box image.Rectangle, point image.Point) image.Rectangle {
+	return box.Union(image.Rectangle{Min: point, Max: point.Add(image.Point{X: 1, Y: 1})})
+}
+
+// pixelOf rounds a projected position onto the pixel grid.
+func pixelOf(x, y float64) image.Point {
+	return image.Point{X: int(math.Round(x)), Y: int(math.Round(y))}
 }
 
 // drawShoreLine projects one polyline and draws whatever part of it lands on

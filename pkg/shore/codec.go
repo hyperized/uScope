@@ -108,8 +108,23 @@ var (
 // and because it is the only way to build a Set by hand: Encode into a buffer
 // and Decode back out is how a test makes one.
 func Encode(out io.Writer, lines []Polyline) error {
-	buckets := bucket(lines)
+	return encodeCells(out, bucket(lines))
+}
 
+// EncodeLand writes land rings to w in the same packed format, gzipped.
+//
+// The rings are clipped to the cells they cross rather than cut the way
+// Encode cuts a polyline, because a piece of an area has to be an area: see
+// the note at the top of land.go. What comes out is a file Decode reads with
+// the same code and the same limits, holding closed rings instead of open
+// lines.
+func EncodeLand(out io.Writer, rings []Polyline) error {
+	return encodeCells(out, bucketRings(rings))
+}
+
+// encodeCells writes an already-bucketed set, which is the half Encode and
+// EncodeLand share. Only the bucketing differs between the two.
+func encodeCells(out io.Writer, buckets map[int][]Polyline) error {
 	keys := make([]int, 0, len(buckets))
 	for key := range buckets {
 		keys = append(keys, key)
@@ -243,13 +258,51 @@ func split(buckets map[int][]Polyline, line Polyline) {
 	buckets[cell] = append(buckets[cell], piece)
 }
 
-// Decode reads a packed file and builds the Set it describes.
+// Decode reads a packed shoreline file and builds the Set it describes.
 //
 // Every count in the file is checked against the bytes that are left and
 // against the caps above before anything is allocated for it, so a damaged or
 // hostile file produces a sentinel error rather than a panic or an
 // out-of-memory kill.
+//
+// The Set it returns has no land rings in it, so LandWithin visits nothing.
+// That is the right answer for a caller that only wants outlines, and
+// DecodeWithLand is the one that reads both files.
 func Decode(r io.Reader) (*Set, error) {
+	cells, err := decodeCells(r)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Set{cells: cells}, nil
+}
+
+// DecodeWithLand reads the shoreline file and the land file together, which is
+// what Load does with the two the binary carries.
+//
+// The two are separate files rather than two sections of one because they are
+// read by different code paths for different reasons: a caller that draws
+// outlines and no fill has no use for a couple of megabytes of polygons, and a
+// format with an optional half in it is a format with a version problem
+// waiting in it.
+func DecodeWithLand(outlines, land io.Reader) (*Set, error) {
+	set, err := Decode(outlines)
+	if err != nil {
+		return nil, err
+	}
+
+	cells, err := decodeCells(land)
+	if err != nil {
+		return nil, fmt.Errorf("land: %w", err)
+	}
+
+	set.land = cells
+
+	return set, nil
+}
+
+// decodeCells reads one packed file into its cell index.
+func decodeCells(r io.Reader) (map[int][]Polyline, error) {
 	zipped, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("shore: reading gzip header: %w", err)
@@ -270,7 +323,7 @@ func Decode(r io.Reader) (*Set, error) {
 }
 
 // decodeBody parses the decompressed body.
-func decodeBody(body []byte) (*Set, error) {
+func decodeBody(body []byte) (map[int][]Polyline, error) {
 	dec := decoder{buf: body}
 
 	if err := dec.header(); err != nil {
@@ -427,8 +480,9 @@ func (d *decoder) step() (int64, int64, error) {
 	return lat, lon, nil
 }
 
-// finish turns the recorded spans into the polylines and cells of a Set.
-func (d *decoder) finish() *Set {
+// finish turns the recorded spans into the polylines and the cell index they
+// are filed under.
+func (d *decoder) finish() map[int][]Polyline {
 	lines := make([]Polyline, len(d.spans))
 
 	for index, window := range d.spans {
@@ -446,7 +500,7 @@ func (d *decoder) finish() *Set {
 		cells[cell.key] = lines[cell.first:end:end]
 	}
 
-	return &Set{cells: cells}
+	return cells
 }
 
 // countOf reads a count and refuses one the rest of the file could not hold.

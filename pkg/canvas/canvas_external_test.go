@@ -1152,3 +1152,260 @@ func TestSubTrimsAndRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestFillPolygonSquare checks the half-open fill convention: a ring from
+// (0,0) to (4,4) fills exactly what image.Rect(0,0,4,4) covers, no more and
+// no less.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestFillPolygonSquare(t *testing.T) {
+	t.Parallel()
+
+	const side = 8
+
+	canv := mustCanvas(t, side)
+
+	ring := []image.Point{{X: 0, Y: 0}, {X: 4, Y: 0}, {X: 4, Y: 4}, {X: 0, Y: 4}}
+	want := image.Rect(0, 0, 4, 4)
+
+	canv.FillPolygon([][]image.Point{ring}, canv.Bounds(), canvas.White)
+
+	for y := range side {
+		for x := range side {
+			expect := color.RGBA{}
+			if image.Pt(x, y).In(want) {
+				expect = canvas.White
+			}
+
+			assertPixel(t, canv, x, y, expect)
+		}
+	}
+}
+
+// TestFillPolygonConcaveL fills an L shape, which only a scanline fill that
+// walks every crossing gets right; a fill that just paints the bounding box
+// would also light up the notch.
+func TestFillPolygonConcaveL(t *testing.T) {
+	t.Parallel()
+
+	const side = 8
+
+	canv := mustCanvas(t, side)
+
+	ring := []image.Point{
+		{X: 0, Y: 0}, {X: 2, Y: 0}, {X: 2, Y: 4}, {X: 6, Y: 4}, {X: 6, Y: 6}, {X: 0, Y: 6},
+	}
+
+	canv.FillPolygon([][]image.Point{ring}, canv.Bounds(), canvas.Red)
+
+	assertPixel(t, canv, 1, 1, canvas.Red)
+	assertPixel(t, canv, 4, 1, color.RGBA{})
+}
+
+// TestFillPolygonHoleNeedsOneCall proves the point of the [][]image.Point
+// signature: a hole only comes out empty when the outer ring and the hole
+// are handed to the same call, so the even-odd rule counts the boundaries
+// between them. Two separate calls have no memory of each other and just
+// paint two overlapping rectangles, leaving the hole filled in.
+func TestFillPolygonHoleNeedsOneCall(t *testing.T) {
+	t.Parallel()
+
+	const side = 8
+
+	outer := []image.Point{{X: 0, Y: 0}, {X: 8, Y: 0}, {X: 8, Y: 8}, {X: 0, Y: 8}}
+	hole := []image.Point{{X: 2, Y: 2}, {X: 6, Y: 2}, {X: 6, Y: 6}, {X: 2, Y: 6}}
+
+	oneCall := mustCanvas(t, side)
+	oneCall.FillPolygon([][]image.Point{outer, hole}, oneCall.Bounds(), canvas.White)
+
+	assertPixel(t, oneCall, 1, 1, canvas.White)
+	assertPixel(t, oneCall, 4, 4, color.RGBA{})
+
+	twoCalls := mustCanvas(t, side)
+	twoCalls.FillPolygon([][]image.Point{outer}, twoCalls.Bounds(), canvas.White)
+	twoCalls.FillPolygon([][]image.Point{hole}, twoCalls.Bounds(), canvas.White)
+
+	assertPixel(t, twoCalls, 4, 4, canvas.White)
+
+	if oneCall.Image().RGBAAt(4, 4) == twoCalls.Image().RGBAAt(4, 4) {
+		t.Error("one call with both rings and two separate calls produced the same pixel over the hole, want different")
+	}
+}
+
+// TestFillPolygonClippedByRect confirms clip, not the canvas, is the hard
+// boundary a ring is trimmed against: a ring larger than clip only paints
+// what clip allows.
+func TestFillPolygonClippedByRect(t *testing.T) {
+	t.Parallel()
+
+	const side = 10
+
+	canv := mustCanvas(t, side)
+
+	ring := []image.Point{{X: 0, Y: 0}, {X: 8, Y: 0}, {X: 8, Y: 8}, {X: 0, Y: 8}}
+	clip := image.Rect(0, 0, 4, 4)
+
+	canv.FillPolygon([][]image.Point{ring}, clip, canvas.Green)
+
+	assertPixel(t, canv, 1, 1, canvas.Green)
+	assertPixel(t, canv, 3, 3, canvas.Green)
+	assertPixel(t, canv, 5, 5, color.RGBA{})
+	assertPixel(t, canv, 4, 4, color.RGBA{})
+}
+
+// TestFillPolygonRingOffCanvas runs a ring whose left edge is negative and
+// whose bottom edge runs past the canvas height, with clip covering the
+// whole canvas. Nothing should panic, and only the part that overlaps the
+// canvas is painted.
+func TestFillPolygonRingOffCanvas(t *testing.T) {
+	t.Parallel()
+
+	const side = 10
+
+	canv := mustCanvas(t, side)
+
+	ring := []image.Point{{X: -5, Y: -5}, {X: 5, Y: -5}, {X: 5, Y: 15}, {X: -5, Y: 15}}
+
+	canv.FillPolygon([][]image.Point{ring}, canv.Bounds(), canvas.Blue)
+
+	assertPixel(t, canv, 2, 5, canvas.Blue)
+	assertPixel(t, canv, 7, 5, color.RGBA{})
+}
+
+// TestFillPolygonWindingOrderMatches draws the same square with its points in
+// both orders and requires the two images to match pixel for pixel, since
+// even-odd filling does not care which way a ring winds.
+func TestFillPolygonWindingOrderMatches(t *testing.T) {
+	t.Parallel()
+
+	const side = 8
+
+	clockwise := mustCanvas(t, side)
+	counterClockwise := mustCanvas(t, side)
+
+	clockwise.FillPolygon(
+		[][]image.Point{{{X: 0, Y: 0}, {X: 4, Y: 0}, {X: 4, Y: 4}, {X: 0, Y: 4}}},
+		clockwise.Bounds(), canvas.Yellow,
+	)
+	counterClockwise.FillPolygon(
+		[][]image.Point{{{X: 0, Y: 0}, {X: 0, Y: 4}, {X: 4, Y: 4}, {X: 4, Y: 0}}},
+		counterClockwise.Bounds(), canvas.Yellow,
+	)
+
+	for y := range side {
+		for x := range side {
+			got, want := clockwise.Image().RGBAAt(x, y), counterClockwise.Image().RGBAAt(x, y)
+			if got != want {
+				t.Errorf("pixel (%d, %d) = %v, want %v (reversed winding)", x, y, got, want)
+			}
+		}
+	}
+}
+
+// TestFillPolygonImplicitClose checks a ring closes even when the caller does
+// not repeat the first point: the edge from the last point back to the first
+// still gets walked.
+func TestFillPolygonImplicitClose(t *testing.T) {
+	t.Parallel()
+
+	const side = 8
+
+	canv := mustCanvas(t, side)
+
+	// A right triangle: without the closing edge from (0,4) back to (0,0),
+	// the shape would have no left side at all and nothing would fill.
+	ring := []image.Point{{X: 0, Y: 0}, {X: 4, Y: 0}, {X: 0, Y: 4}}
+
+	canv.FillPolygon([][]image.Point{ring}, canv.Bounds(), canvas.Magenta)
+
+	assertPixel(t, canv, 1, 1, canvas.Magenta)
+	assertPixel(t, canv, 3, 3, color.RGBA{})
+}
+
+// TestFillPolygonNoOp covers FillPolygon's two early-return paths: a clip
+// rectangle that misses the canvas outright, and rings that produce no edges
+// to sweep at all.
+func TestFillPolygonNoOp(t *testing.T) {
+	t.Parallel()
+
+	const side = 8
+
+	for _, testCase := range []struct {
+		name  string
+		rings [][]image.Point
+		clip  image.Rectangle
+	}{
+		{
+			name:  "clip misses the canvas entirely",
+			rings: [][]image.Point{{{X: 0, Y: 0}, {X: 4, Y: 0}, {X: 4, Y: 4}, {X: 0, Y: 4}}},
+			clip:  image.Rect(side, side, side+4, side+4),
+		},
+		{name: "nil rings", rings: nil, clip: image.Rect(0, 0, side, side)},
+		{name: "empty rings slice", rings: [][]image.Point{}, clip: image.Rect(0, 0, side, side)},
+		{
+			name:  "single point ring has no edges",
+			rings: [][]image.Point{{{X: 2, Y: 2}}},
+			clip:  image.Rect(0, 0, side, side),
+		},
+		{
+			name:  "ring flat on one horizontal line has no edges",
+			rings: [][]image.Point{{{X: 0, Y: 2}, {X: 2, Y: 2}, {X: 4, Y: 2}}},
+			clip:  image.Rect(0, 0, side, side),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustCanvas(t, side)
+
+			canv.FillPolygon(testCase.rings, testCase.clip, canvas.Red)
+
+			if got := countPixels(canv, canvas.Red); got != 0 {
+				t.Errorf("FillPolygon painted %d pixels, want 0", got)
+			}
+		})
+	}
+}
+
+// TestFillPolygonAllocs does not call t.Parallel: testing.AllocsPerRun panics
+// if it runs while the test is marked parallel, since it needs the runtime's
+// undivided attention to count allocations accurately.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestFillPolygonAllocs(t *testing.T) {
+	const side = 64
+
+	canv := mustCanvas(t, side)
+
+	rings := [][]image.Point{{{X: 0, Y: 0}, {X: side, Y: 0}, {X: side, Y: side}, {X: 0, Y: side}}}
+
+	// Warm the scratch buffers to their largest size before measuring:
+	// FillPolygon's allocation-free guarantee is for a canvas that has
+	// already grown them, not for the first call ever made on it.
+	canv.FillPolygon(rings, canv.Bounds(), canvas.White)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		canv.FillPolygon(rings, canv.Bounds(), canvas.White)
+	})
+
+	if allocs != 0 {
+		t.Errorf("FillPolygon allocated %v times per call, want 0", allocs)
+	}
+}
+
+func BenchmarkFillPolygon(b *testing.B) {
+	const side = 256
+
+	canv, err := canvas.New(side, side)
+	if err != nil {
+		b.Fatalf("New: %v", err)
+	}
+
+	rings := [][]image.Point{{{X: 0, Y: 0}, {X: side, Y: 0}, {X: side, Y: side}, {X: 0, Y: side}}}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		canv.FillPolygon(rings, canv.Bounds(), canvas.White)
+	}
+}

@@ -26,6 +26,16 @@ const (
 	// the widest range uScope draws, and it takes about 11% off the file.
 	defaultToleranceM = 0
 
+	// defaultLandToleranceM is Douglas-Peucker on the land rings, in metres.
+	// It is on where the coastline's is off, because the land file has to
+	// carry the same geometry twice over: once as the outline of each
+	// landmass and once more wherever a ring is cut at a cell boundary and
+	// walks along it. A hundred metres is a fifth of a pixel at the widest
+	// range uScope draws, and it is what brings the packed rings inside the
+	// two megabytes the binary has room for. See pkg/shore/README.md for the
+	// measurement.
+	defaultLandToleranceM = 100
+
 	// The two geometry types a coastline arrives as, and the two a lake does.
 	typeLineString      = "LineString"
 	typeMultiLineString = "MultiLineString"
@@ -112,6 +122,86 @@ func Build(coastline, lakes io.Reader, opts ...BuildOption) ([]Polyline, error) 
 	}
 
 	return lines, nil
+}
+
+// BuildLand turns Natural Earth's land and lakes files into the closed rings
+// to pack as the fill.
+//
+// It keeps every ring of every land Polygon and MultiPolygon, the outer
+// boundary and the holes alike, and adds the outer ring of every lake big
+// enough to see. The lakes are in here rather than in a file of their own
+// because a lake is a hole in the land: drawn in one even-odd pass with the
+// rings around it, it comes out as water without anything having to record
+// which of the two a ring encloses.
+//
+// Natural Earth's land layer does not cut its lakes out, which is why they
+// have to be brought in from the other file. The threshold is the one the
+// shoreline uses, so the same lakes are filled that are outlined.
+//
+// The order of the result follows the order of the input, so the same files
+// always produce the same rings in the same order, and EncodeLand turns that
+// into the same bytes.
+func BuildLand(land, lakes io.Reader, opts ...BuildOption) ([]Polyline, error) {
+	cfg := build{minLakeKm2: defaultMinLakeKm2, toleranceM: defaultLandToleranceM}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	landFeatures, err := features(land)
+	if err != nil {
+		return nil, fmt.Errorf("land: %w", err)
+	}
+
+	lakeFeatures, err := features(lakes)
+	if err != nil {
+		return nil, fmt.Errorf("lakes: %w", err)
+	}
+
+	rings := make([]Polyline, 0, len(landFeatures)+len(lakeFeatures))
+
+	for _, item := range landFeatures {
+		rings = cfg.appendLand(rings, item)
+	}
+
+	for _, item := range lakeFeatures {
+		rings = cfg.appendLake(rings, item)
+	}
+
+	return rings, nil
+}
+
+// appendLand adds every ring of one land feature.
+func (b build) appendLand(dst []Polyline, item feature) []Polyline {
+	switch item.Geometry.Type {
+	case typePolygon:
+		return b.appendRings(dst, groups(item.Geometry.Coordinates))
+	case typeMultiPolygon:
+		for _, part := range nests(item.Geometry.Coordinates) {
+			dst = b.appendRings(dst, part)
+		}
+
+		return dst
+	default:
+		return dst
+	}
+}
+
+// appendRings adds the rings of one polygon, outer boundary and holes alike.
+//
+// No area threshold here, unlike the lakes. An island too small to fill is
+// also too small to be worth a test, and dropping it would leave its coastline
+// drawn around nothing: the outline file keeps every island Natural Earth has,
+// so the fill has to as well or the two would disagree at the smallest sizes.
+func (b build) appendRings(dst []Polyline, rings []Polyline) []Polyline {
+	for _, ring := range rings {
+		if len(ring) < minRingPoints {
+			continue
+		}
+
+		dst = append(dst, simplify(ring, b.toleranceM))
+	}
+
+	return dst
 }
 
 // collection is as much of a GeoJSON FeatureCollection as the conversion

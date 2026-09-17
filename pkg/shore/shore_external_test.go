@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -267,20 +268,23 @@ func TestDecodeBodyTooLarge(t *testing.T) {
 	}
 }
 
-func TestWithin(t *testing.T) {
-	t.Parallel()
+// boxCase is one shape of box Within and LandWithin are both tested against:
+// a hit, a miss, minimum past maximum, a NaN edge, an infinite edge clamped
+// rather than rejected, a box wider than the world, and one that wraps the
+// dateline.
+type boxCase struct {
+	name                           string
+	latMin, latMax, lonMin, lonMax float64
+	wantFound                      bool
+}
 
-	lineA := shore.Polyline{{Lat: 52, Lon: 4}, {Lat: 52, Lon: 4.5}, {Lat: 52, Lon: 5}}
-	lineB := shore.Polyline{{Lat: 10, Lon: -175}, {Lat: 10, Lon: -174.9}}
-
-	set := buildSet(t, []shore.Polyline{lineA, lineB})
-
-	for _, testCase := range []struct {
-		name                           string
-		latMin, latMax, lonMin, lonMax float64
-		wantFound                      bool
-	}{
-		{name: "a box that finds the line", latMin: 51, latMax: 53, lonMin: 3, lonMax: 6, wantFound: true},
+// boxCases is the table TestWithin and TestLandWithin share. The two methods
+// walk the same cell index the same way, so the box shapes that matter to
+// one matter equally to the other. It is a function rather than a package
+// variable so nothing but checkBoxCases ever holds a reference to it.
+func boxCases() []boxCase {
+	return []boxCase{
+		{name: "a box that finds it", latMin: 51, latMax: 53, lonMin: 3, lonMax: 6, wantFound: true},
 		{name: "an empty part of the world", latMin: -10, latMax: -5, lonMin: -10, lonMax: -5, wantFound: false},
 		{name: "minimum past maximum", latMin: 53, latMax: 51, lonMin: 3, lonMax: 6, wantFound: false},
 		{name: "a NaN edge", latMin: 51, latMax: math.NaN(), lonMin: 3, lonMax: 6, wantFound: false},
@@ -299,22 +303,42 @@ func TestWithin(t *testing.T) {
 			latMin: 9, latMax: 11, lonMin: 170, lonMax: 190,
 			wantFound: true,
 		},
-	} {
+	}
+}
+
+// checkBoxCases drives call, a Within or a LandWithin bound to some Set,
+// over boxCases and checks each one only ever reports whether it found
+// something, which is all either method's own tests need to tell apart.
+func checkBoxCases(t *testing.T, call func(latMin, latMax, lonMin, lonMax float64, visit func(shore.Polyline))) {
+	t.Helper()
+
+	for _, testCase := range boxCases() {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
 			var found bool
 
-			set.Within(testCase.latMin, testCase.latMax, testCase.lonMin, testCase.lonMax, func(shore.Polyline) {
+			call(testCase.latMin, testCase.latMax, testCase.lonMin, testCase.lonMax, func(shore.Polyline) {
 				found = true
 			})
 
 			if found != testCase.wantFound {
-				t.Errorf("Within(%v, %v, %v, %v) found = %v, want %v",
+				t.Errorf("(%v, %v, %v, %v) found = %v, want %v",
 					testCase.latMin, testCase.latMax, testCase.lonMin, testCase.lonMax, found, testCase.wantFound)
 			}
 		})
 	}
+}
+
+func TestWithin(t *testing.T) {
+	t.Parallel()
+
+	lineA := shore.Polyline{{Lat: 52, Lon: 4}, {Lat: 52, Lon: 4.5}, {Lat: 52, Lon: 5}}
+	lineB := shore.Polyline{{Lat: 10, Lon: -175}, {Lat: 10, Lon: -174.9}}
+
+	set := buildSet(t, []shore.Polyline{lineA, lineB})
+
+	checkBoxCases(t, set.Within)
 }
 
 // TestWithinNilSet checks that a nil *Set visits nothing rather than
@@ -579,4 +603,357 @@ func TestBuildInvalidJSON(t *testing.T) {
 			t.Errorf("Build() error = %v, want it to wrap ErrGeoJSON", err)
 		}
 	})
+}
+
+// TestBuildLandRings checks that BuildLand keeps every ring of a Polygon,
+// outer boundary and hole alike, and every ring of a MultiPolygon, all in
+// input order.
+func TestBuildLandRings(t *testing.T) {
+	t.Parallel()
+
+	rings, err := shore.BuildLand(openFixture(t, "land_basic.geojson"), strings.NewReader(emptyCollection))
+	if err != nil {
+		t.Fatalf("BuildLand() error = %v, want nil", err)
+	}
+
+	checkLines(t, rings, [][]wantPoint{
+		{{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}},
+		{{0.2, 0.2}, {0.8, 0.2}, {0.8, 0.8}, {0.2, 0.8}, {0.2, 0.2}},
+		{{10, 10}, {10, 11}, {11, 11}, {11, 10}, {10, 10}},
+		{{20, 20}, {20, 21}, {21, 21}, {21, 20}, {20, 20}},
+	})
+}
+
+// TestBuildLandDropped checks that a geometry type BuildLand does not know
+// and a ring with fewer than three points both vanish from the result
+// without failing the run.
+func TestBuildLandDropped(t *testing.T) {
+	t.Parallel()
+
+	rings, err := shore.BuildLand(openFixture(t, "land_dropped.geojson"), strings.NewReader(emptyCollection))
+	if err != nil {
+		t.Fatalf("BuildLand() error = %v, want nil", err)
+	}
+
+	if len(rings) != 0 {
+		t.Errorf("BuildLand() = %v, want no rings", rings)
+	}
+}
+
+// TestBuildLandSimplify checks that WithSimplify changes BuildLand's result.
+// Unlike Build, BuildLand simplifies by default, so the direction here runs
+// the other way from TestBuildSimplify: passing WithSimplify(0) is what turns
+// simplification off and keeps every point of the fixture's straight run.
+func TestBuildLandSimplify(t *testing.T) {
+	t.Parallel()
+
+	plain, err := shore.BuildLand(openFixture(t, "land_simplify.geojson"), strings.NewReader(emptyCollection))
+	if err != nil {
+		t.Fatalf("BuildLand() error = %v, want nil", err)
+	}
+
+	if len(plain) != 1 || len(plain[0]) != 2 {
+		t.Fatalf("BuildLand() with the default tolerance = %v, want one 2-point ring", plain)
+	}
+
+	unsimplified, err := shore.BuildLand(
+		openFixture(t, "land_simplify.geojson"), strings.NewReader(emptyCollection), shore.WithSimplify(0),
+	)
+	if err != nil {
+		t.Fatalf("BuildLand() with WithSimplify(0) error = %v, want nil", err)
+	}
+
+	if len(unsimplified) != 1 || len(unsimplified[0]) != 6 {
+		t.Errorf("BuildLand() with WithSimplify(0) = %v, want one 6-point ring", unsimplified)
+	}
+}
+
+// TestBuildLandLakes checks that BuildLand adds the same lake rings Build
+// does, at the same default area threshold.
+func TestBuildLandLakes(t *testing.T) {
+	t.Parallel()
+
+	rings, err := shore.BuildLand(strings.NewReader(emptyCollection), openFixture(t, "lakes_basic.geojson"))
+	if err != nil {
+		t.Fatalf("BuildLand() error = %v, want nil", err)
+	}
+
+	checkLines(t, rings, [][]wantPoint{
+		{{0, 0}, {0, 0.1}, {0.1, 0.1}, {0.1, 0}, {0, 0}},
+		{{10, 10}, {10, 10.1}, {10.1, 10.1}, {10.1, 10}, {10, 10}},
+	})
+}
+
+// TestBuildLandLakeAreaThreshold checks that a lake below the default area
+// survives in BuildLand's result only once WithMinLakeArea lowers the bar.
+func TestBuildLandLakeAreaThreshold(t *testing.T) {
+	t.Parallel()
+
+	dropped, err := shore.BuildLand(strings.NewReader(emptyCollection), openFixture(t, "lakes_small.geojson"))
+	if err != nil {
+		t.Fatalf("BuildLand() error = %v, want nil", err)
+	}
+
+	if len(dropped) != 0 {
+		t.Errorf("BuildLand() with the default area threshold = %v, want it dropped", dropped)
+	}
+
+	kept, err := shore.BuildLand(
+		strings.NewReader(emptyCollection), openFixture(t, "lakes_small.geojson"), shore.WithMinLakeArea(0),
+	)
+	if err != nil {
+		t.Fatalf("BuildLand() with WithMinLakeArea(0) error = %v, want nil", err)
+	}
+
+	if len(kept) != 1 || len(kept[0]) != 5 {
+		t.Errorf("BuildLand() with WithMinLakeArea(0) = %v, want one 5-point ring kept", kept)
+	}
+}
+
+// TestBuildLandInvalidJSON checks that a land or a lakes reader returning
+// invalid JSON fails the whole run with ErrGeoJSON.
+func TestBuildLandInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("invalid land", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := shore.BuildLand(strings.NewReader("not valid json"), strings.NewReader(emptyCollection))
+		if !errors.Is(err, shore.ErrGeoJSON) {
+			t.Errorf("BuildLand() error = %v, want it to wrap ErrGeoJSON", err)
+		}
+	})
+
+	t.Run("invalid lakes", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := shore.BuildLand(strings.NewReader(emptyCollection), strings.NewReader("not valid json"))
+		if !errors.Is(err, shore.ErrGeoJSON) {
+			t.Errorf("BuildLand() error = %v, want it to wrap ErrGeoJSON", err)
+		}
+	})
+}
+
+// buildLandSet builds a Set whose outline half is empty and whose land half
+// is the given rings, going through Encode, EncodeLand and DecodeWithLand the
+// same way a real caller would: it is the only way an external test can get
+// hold of a *shore.Set with land in it, since the field is unexported.
+func buildLandSet(t *testing.T, rings []shore.Polyline) *shore.Set {
+	t.Helper()
+
+	var outlineBuf, landBuf bytes.Buffer
+
+	if err := shore.Encode(&outlineBuf, nil); err != nil {
+		t.Fatalf("Encode() error = %v, want nil", err)
+	}
+
+	if err := shore.EncodeLand(&landBuf, rings); err != nil {
+		t.Fatalf("EncodeLand() error = %v, want nil", err)
+	}
+
+	set, err := shore.DecodeWithLand(&outlineBuf, &landBuf)
+	if err != nil {
+		t.Fatalf("DecodeWithLand() error = %v, want nil", err)
+	}
+
+	return set
+}
+
+// collectAllLand drains every ring LandWithin can see for the whole world, in
+// the row-then-column order visitCells walks, the same way collectAll does
+// for the outline half.
+func collectAllLand(set *shore.Set) []shore.Polyline {
+	var got []shore.Polyline
+
+	set.LandWithin(-90, 90, -180, 180, func(line shore.Polyline) {
+		got = append(got, slices.Clone(line))
+	})
+
+	return got
+}
+
+// TestEncodeLandDecodeWithLandRoundTrip checks that a ring survives Encode,
+// EncodeLand, and DecodeWithLand to the file's fixed-point precision, and
+// that Within on the resulting Set still returns the outline half's
+// polylines rather than the rings LandWithin sees.
+func TestEncodeLandDecodeWithLandRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	outline := []shore.Polyline{{{Lat: 0, Lon: 0}, {Lat: 0, Lon: 1}}}
+	ring := shore.Polyline{
+		{Lat: 10, Lon: 10}, {Lat: 10, Lon: 11}, {Lat: 11, Lon: 11}, {Lat: 11, Lon: 10}, {Lat: 10, Lon: 10},
+	}
+
+	var outlineBuf, landBuf bytes.Buffer
+
+	if err := shore.Encode(&outlineBuf, outline); err != nil {
+		t.Fatalf("Encode() error = %v, want nil", err)
+	}
+
+	if err := shore.EncodeLand(&landBuf, []shore.Polyline{ring}); err != nil {
+		t.Fatalf("EncodeLand() error = %v, want nil", err)
+	}
+
+	set, err := shore.DecodeWithLand(&outlineBuf, &landBuf)
+	if err != nil {
+		t.Fatalf("DecodeWithLand() error = %v, want nil", err)
+	}
+
+	gotLand := collectAllLand(set)
+	if len(gotLand) != 1 || !polylinesClose(gotLand[0], ring) {
+		t.Errorf("LandWithin(...) = %v, want one ring close to %v", gotLand, ring)
+	}
+
+	gotOutline := collectAll(set)
+	if len(gotOutline) != 1 || !polylinesClose(gotOutline[0], outline[0]) {
+		t.Errorf("Within(...) = %v, want the outline polyline %v, not the land ring", gotOutline, outline[0])
+	}
+}
+
+// TestLandWithin mirrors TestWithin: the same shapes of box, against a Set
+// whose land half holds the rings instead of the outline half holding lines.
+// Both rings need a third point that TestWithin's matching lines do not,
+// since fileRing drops anything under minRingPoints before it ever reaches a
+// cell.
+func TestLandWithin(t *testing.T) {
+	t.Parallel()
+
+	ringA := shore.Polyline{{Lat: 52, Lon: 4}, {Lat: 52, Lon: 4.5}, {Lat: 52, Lon: 5}}
+	ringB := shore.Polyline{{Lat: 10, Lon: -175}, {Lat: 10, Lon: -174.9}, {Lat: 10.05, Lon: -174.95}}
+
+	set := buildLandSet(t, []shore.Polyline{ringA, ringB})
+
+	checkBoxCases(t, set.LandWithin)
+}
+
+// TestLandWithinNilSet checks that a nil *Set visits nothing rather than
+// panicking, the same contract Within has.
+func TestLandWithinNilSet(t *testing.T) {
+	t.Parallel()
+
+	var set *shore.Set
+
+	visited := false
+
+	set.LandWithin(-1, 1, -1, 1, func(shore.Polyline) { visited = true })
+
+	if visited {
+		t.Error("LandWithin() on a nil Set called visit, want it to visit nothing")
+	}
+}
+
+// TestLandWithinNilVisit checks that a nil visit function is a no-op rather
+// than a panic.
+func TestLandWithinNilVisit(t *testing.T) {
+	t.Parallel()
+
+	set := buildLandSet(t, []shore.Polyline{{{Lat: 0, Lon: 0}, {Lat: 0, Lon: 1}}})
+
+	set.LandWithin(-1, 1, -1, 1, nil)
+}
+
+// TestLandWithinNoLandHalf checks that a Set built by Decode, which never
+// reads a land file, visits nothing when asked for land: it has no land
+// index to walk, not an empty one it walks and finds nothing in.
+func TestLandWithinNoLandHalf(t *testing.T) {
+	t.Parallel()
+
+	set := buildSet(t, []shore.Polyline{{{Lat: 52, Lon: 4}, {Lat: 52, Lon: 4.5}}})
+
+	visited := false
+
+	set.LandWithin(-90, 90, -180, 180, func(shore.Polyline) { visited = true })
+
+	if visited {
+		t.Error("LandWithin() on a Set from Decode called visit, want it to visit nothing")
+	}
+}
+
+// TestDecodeWithLandOutlinesError checks that a bad outlines reader is
+// reported without DecodeWithLand ever touching the land reader.
+func TestDecodeWithLandOutlinesError(t *testing.T) {
+	t.Parallel()
+
+	_, err := shore.DecodeWithLand(strings.NewReader("not a gzip stream"), strings.NewReader("does not matter"))
+	if err == nil {
+		t.Fatal("DecodeWithLand() error = nil, want non-nil")
+	}
+
+	const want = "reading gzip header"
+
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("DecodeWithLand() error = %q, want to contain %q", err.Error(), want)
+	}
+}
+
+// TestDecodeWithLandLandErrors checks that a bad land reader, behind a good
+// outlines reader, is reported with "land" in the message and still
+// satisfies errors.Is against the right sentinel: one case that never gets
+// past gzip, one that does and fails on the packed format itself.
+func TestDecodeWithLandLandErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		land      io.Reader
+		wantErrIs error
+	}{
+		{name: "not a gzip stream at all", land: strings.NewReader("not a gzip stream")},
+		{
+			name:      "a gzip stream with the wrong magic",
+			land:      bytes.NewReader(gzipBytes(t, []byte("XXXX"))),
+			wantErrIs: shore.ErrMagic,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			var outlineBuf bytes.Buffer
+			if err := shore.Encode(&outlineBuf, nil); err != nil {
+				t.Fatalf("Encode() error = %v, want nil", err)
+			}
+
+			_, err := shore.DecodeWithLand(&outlineBuf, testCase.land)
+			if err == nil {
+				t.Fatal("DecodeWithLand() error = nil, want non-nil")
+			}
+
+			if testCase.wantErrIs != nil && !errors.Is(err, testCase.wantErrIs) {
+				t.Errorf("DecodeWithLand() error = %v, want it to wrap %v", err, testCase.wantErrIs)
+			}
+
+			const want = "land"
+
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("DecodeWithLand() error = %q, want to contain %q", err.Error(), want)
+			}
+		})
+	}
+}
+
+// TestLoadHasLandNearTheNetherlands checks the real, embedded land file
+// against a spot that has to be dry land: the cell around 52N 4E, well
+// inland of the Dutch coast. Load is cached, so this costs nothing beyond
+// the first shore test that also calls it.
+func TestLoadHasLandNearTheNetherlands(t *testing.T) {
+	t.Parallel()
+
+	set, err := shore.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	visited := 0
+
+	set.LandWithin(51.9, 52.1, 3.9, 4.1, func(line shore.Polyline) {
+		visited++
+
+		if len(line) < 3 {
+			t.Errorf("LandWithin() visited a ring of %d points, want at least 3", len(line))
+		}
+	})
+
+	if visited == 0 {
+		t.Error("LandWithin() around 52N 4E visited nothing, want at least one land ring")
+	}
 }

@@ -6,7 +6,10 @@
 // layout gets checked without a uConsole on the desk.
 //
 // A Canvas is not safe for concurrent use. One goroutine draws, then hands
-// the frame to the blitter.
+// the frame to the blitter. That holds harder than it looks: FillPolygon
+// sweeps through scratch buffers kept on the canvas, so two goroutines
+// filling one canvas would corrupt each other's geometry rather than merely
+// race on pixels.
 package canvas
 
 import (
@@ -47,6 +50,15 @@ var (
 // Canvas is a fixed-size RGBA drawing surface anchored at the origin.
 type Canvas struct {
 	img *image.RGBA
+
+	// The scratch FillPolygon sweeps with. They are held here, rather than
+	// built per call, because the background layer fills a coastline's worth
+	// of rings at a time and a fresh edge list per call would be the largest
+	// allocation on that path. They grow to the widest polygon the canvas has
+	// been handed and are reused from then on; see pkg/canvas/fill.go.
+	edges     []polyEdge
+	active    []polyEdge
+	crossings []float64
 }
 
 // New allocates a canvas of width by height pixels.
@@ -232,9 +244,38 @@ func (c *Canvas) FillCircle(centerX, centerY, radius int, col color.RGBA) {
 }
 
 // hline fills the inclusive span from x0 to x1 on row y.
+//
+// It clips once and then writes the run directly, doubling the filled part
+// into the rest with copy, which is the trick Clear uses down a column. A
+// per-pixel loop through Set was fine while the only filled shapes were a
+// home marker and a few softkey boxes; it became the most expensive thing on
+// the background layer once that layer started filling a disc of sea and a
+// continent of land, at which point it was over a third of the whole render.
+//
+// The span is empty, and nothing is written, when the row is off the canvas
+// or the two ends cross after clipping.
+//
+//nolint:varnamelen // x0, x1, y is the pixel-addressing idiom used throughout this package.
 func (c *Canvas) hline(x0, x1, y int, col color.RGBA) {
-	for x := x0; x <= x1; x++ {
-		c.Set(x, y, col)
+	rect := c.img.Rect
+	if y < rect.Min.Y || y >= rect.Max.Y {
+		return
+	}
+
+	//nolint:varnamelen // from, to bound the clipped span; short names keep the arithmetic below readable.
+	from, to := max(x0, rect.Min.X), min(x1, rect.Max.X-1)
+	if from > to {
+		return
+	}
+
+	start := c.img.PixOffset(from, y)
+	end := c.img.PixOffset(to, y) + bytesPerPixel
+	row := c.img.Pix[start:end:end]
+
+	row[0], row[1], row[2], row[3] = col.R, col.G, col.B, col.A
+
+	for filled := bytesPerPixel; filled < len(row); filled *= 2 {
+		copy(row[filled:], row[:filled])
 	}
 }
 

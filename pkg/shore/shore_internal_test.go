@@ -556,16 +556,16 @@ func TestDecodeBodySuccess(t *testing.T) {
 	body = binary.AppendVarint(body, nextLatStep)
 	body = binary.AppendVarint(body, nextLonStep)
 
-	set, err := decodeBody(body)
+	cells, err := decodeBody(body)
 	if err != nil {
 		t.Fatalf("decodeBody() error = %v, want nil", err)
 	}
 
 	key := row*cellCols + column
 
-	lines, ok := set.cells[key]
+	lines, ok := cells[key]
 	if !ok || len(lines) != 1 || len(lines[0]) != 2 {
-		t.Fatalf("decodeBody() cells[%v] = %v, want one polyline of two points", key, set.cells[key])
+		t.Fatalf("decodeBody() cells[%v] = %v, want one polyline of two points", key, cells[key])
 	}
 
 	want := Polyline{{Lat: 5, Lon: 10}, {Lat: 6, Lon: 9.5}}
@@ -798,6 +798,457 @@ func TestFinite(t *testing.T) {
 
 			if got := finite(testCase.value); got != testCase.want {
 				t.Errorf("finite(%v) = %v, want %v", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
+
+// relativeAreaTolerance is how far a sum of clipped areas may drift from the
+// original ring's area before a test calls it wrong. The arithmetic is plain
+// float64 shoelace on both sides, so anything closer than this is rounding.
+const relativeAreaTolerance = 1e-9
+
+// shoelaceArea is the planar shoelace formula over a closed ring, in degrees
+// squared. It is deliberately independent of areaKm2: that function squeezes
+// longitude by a latitude cosine for a real-world estimate, and the land
+// tests below want the plain planar figure clip's arithmetic itself works in.
+func shoelaceArea(ring Polyline) float64 {
+	var twice float64
+
+	for index, point := range ring {
+		next := ring[(index+1)%len(ring)]
+		twice += point.Lon*next.Lat - next.Lon*point.Lat
+	}
+
+	return math.Abs(twice) / 2
+}
+
+// areaClose reports whether got is within relativeAreaTolerance of want.
+func areaClose(got, want float64) bool {
+	return math.Abs(got-want) <= math.Abs(want)*relativeAreaTolerance
+}
+
+func TestBoxOf(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		row, col int
+		want     cellBox
+	}{
+		{
+			name: "the cell straddling the equator and the prime meridian",
+			row:  18, col: 36,
+			want: cellBox{latMin: 0, latMax: 5, lonMin: 0, lonMax: 5},
+		},
+		{
+			name: "the south-west corner of the grid",
+			row:  0, col: 0,
+			want: cellBox{latMin: -90, latMax: -85, lonMin: -180, lonMax: -175},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := boxOf(testCase.row, testCase.col); got != testCase.want {
+				t.Errorf("boxOf(%v, %v) = %v, want %v", testCase.row, testCase.col, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestCellBoxSides checks the four half-planes come out in the fixed order
+// clip relies on and each carries the right limit, axis and side.
+func TestCellBoxSides(t *testing.T) {
+	t.Parallel()
+
+	box := cellBox{latMin: 10, latMax: 15, lonMin: 20, lonMax: 25}
+
+	want := [4]halfPlane{
+		{limit: 20, lat: false, upper: false},
+		{limit: 25, lat: false, upper: true},
+		{limit: 10, lat: true, upper: false},
+		{limit: 15, lat: true, upper: true},
+	}
+
+	if got := box.sides(); got != want {
+		t.Errorf("cellBox.sides() = %v, want %v", got, want)
+	}
+}
+
+func TestHalfPlaneValue(t *testing.T) {
+	t.Parallel()
+
+	point := Point{Lat: 12, Lon: 34}
+
+	for _, testCase := range []struct {
+		name string
+		lat  bool
+		want float64
+	}{
+		{name: "a latitude plane measures latitude", lat: true, want: 12},
+		{name: "a longitude plane measures longitude", lat: false, want: 34},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			plane := halfPlane{lat: testCase.lat}
+			if got := plane.value(point); got != testCase.want {
+				t.Errorf("value(%v) = %v, want %v", point, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestHalfPlaneInside(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		plane halfPlane
+		point Point
+		want  bool
+	}{
+		{
+			name:  "an upper plane keeps a point at the limit",
+			plane: halfPlane{limit: 10, upper: true},
+			point: Point{Lon: 10}, want: true,
+		},
+		{
+			name:  "an upper plane rejects a point past the limit",
+			plane: halfPlane{limit: 10, upper: true},
+			point: Point{Lon: 11}, want: false,
+		},
+		{
+			name:  "a lower plane keeps a point at the limit",
+			plane: halfPlane{limit: 10, upper: false},
+			point: Point{Lon: 10}, want: true,
+		},
+		{
+			name:  "a lower plane rejects a point short of the limit",
+			plane: halfPlane{limit: 10, upper: false},
+			point: Point{Lon: 9}, want: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.plane.inside(testCase.point); got != testCase.want {
+				t.Errorf("inside(%v) = %v, want %v", testCase.point, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestHalfPlaneCross covers cross on both axes it measures and both sides a
+// cell keeps, which between them are the only shapes of call clip ever makes:
+// a segment with one end above the limit and one below it.
+func TestHalfPlaneCross(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		plane    halfPlane
+		from, to Point
+		want     Point
+	}{
+		{
+			name:  "crossing a lower latitude plane",
+			plane: halfPlane{limit: 0, lat: true, upper: false},
+			from:  Point{Lat: -2, Lon: 0}, to: Point{Lat: 2, Lon: 4},
+			want: Point{Lat: 0, Lon: 2},
+		},
+		{
+			name:  "crossing an upper latitude plane",
+			plane: halfPlane{limit: 0, lat: true, upper: true},
+			from:  Point{Lat: 2, Lon: 4}, to: Point{Lat: -2, Lon: 0},
+			want: Point{Lat: 0, Lon: 2},
+		},
+		{
+			name:  "crossing a lower longitude plane",
+			plane: halfPlane{limit: 0, lat: false, upper: false},
+			from:  Point{Lat: 0, Lon: -2}, to: Point{Lat: 4, Lon: 2},
+			want: Point{Lat: 2, Lon: 0},
+		},
+		{
+			name:  "crossing an upper longitude plane",
+			plane: halfPlane{limit: 0, lat: false, upper: true},
+			from:  Point{Lat: 4, Lon: 2}, to: Point{Lat: 0, Lon: -2},
+			want: Point{Lat: 2, Lon: 0},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.plane.cross(testCase.from, testCase.to); got != testCase.want {
+				t.Errorf("cross(%v, %v) = %v, want %v", testCase.from, testCase.to, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestClipHalf checks one Sutherland-Hodgman pass directly: a rectangle that
+// crosses the plane comes back with the far corners replaced by the two
+// crossing points, in the same walk order the ring was given in.
+func TestClipHalf(t *testing.T) {
+	t.Parallel()
+
+	side := halfPlane{limit: 5, lat: false, upper: true}
+	ring := Polyline{{Lat: 0, Lon: 3}, {Lat: 0, Lon: 7}, {Lat: 2, Lon: 7}, {Lat: 2, Lon: 3}}
+	want := Polyline{{Lat: 0, Lon: 3}, {Lat: 0, Lon: 5}, {Lat: 2, Lon: 5}, {Lat: 2, Lon: 3}}
+
+	if got := clipHalf(nil, ring, side); !slicesEqualPoints(got, want) {
+		t.Errorf("clipHalf(%v, %v) = %v, want %v", ring, side, got, want)
+	}
+}
+
+// TestClipHalfEmptySource checks the one case clip itself never reaches: clip
+// always returns as soon as a pass leaves c.from empty, so the only way to
+// hand clipHalf zero points is to call it directly.
+func TestClipHalfEmptySource(t *testing.T) {
+	t.Parallel()
+
+	if got := clipHalf(nil, nil, halfPlane{}); got != nil {
+		t.Errorf("clipHalf(nil, nil, ...) = %v, want nil", got)
+	}
+}
+
+// TestClipperClip checks the properties Sutherland-Hodgman promises for a
+// single cell: a ring wholly inside comes back untouched, a ring wholly
+// outside comes back as nothing, and a ring that contains the whole cell
+// comes back as exactly the cell's rectangle.
+func TestClipperClip(t *testing.T) {
+	t.Parallel()
+
+	box := boxOf(18, 36)
+
+	t.Run("wholly inside the cell comes back unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		ring := Polyline{{Lat: 1, Lon: 1}, {Lat: 1, Lon: 2}, {Lat: 2, Lon: 2}, {Lat: 2, Lon: 1}, {Lat: 1, Lon: 1}}
+
+		got := (&clipper{}).clip(ring, box)
+		if !slicesEqualPoints(got, ring) {
+			t.Errorf("clip() = %v, want %v unchanged", got, ring)
+		}
+	})
+
+	t.Run("wholly outside the cell comes back as nothing", func(t *testing.T) {
+		t.Parallel()
+
+		ring := Polyline{{Lat: 20, Lon: 20}, {Lat: 20, Lon: 21}, {Lat: 21, Lon: 21}, {Lat: 20, Lon: 20}}
+
+		if got := (&clipper{}).clip(ring, box); got != nil {
+			t.Errorf("clip() = %v, want nil", got)
+		}
+	})
+
+	t.Run("surviving points below minRingPoints come back as nothing", func(t *testing.T) {
+		t.Parallel()
+
+		// Both points sit inside the box on every one of the four planes, so
+		// none of the four passes empties c.from early: it is the length
+		// check after the loop, not the one inside it, that has to catch a
+		// ring too short to enclose anything.
+		ring := Polyline{{Lat: 1, Lon: 1}, {Lat: 1, Lon: 2}}
+
+		if got := (&clipper{}).clip(ring, box); got != nil {
+			t.Errorf("clip() = %v, want nil for a ring left with only %d points", got, len(ring))
+		}
+	})
+
+	t.Run("containing the whole cell comes back as its rectangle", func(t *testing.T) {
+		t.Parallel()
+
+		ring := Polyline{
+			{Lat: -10, Lon: -10}, {Lat: -10, Lon: 20}, {Lat: 20, Lon: 20}, {Lat: 20, Lon: -10}, {Lat: -10, Lon: -10},
+		}
+
+		const wantArea = 25.0
+
+		got := (&clipper{}).clip(ring, box)
+		if len(got) != 4 {
+			t.Fatalf("clip() = %v, want 4 points", got)
+		}
+
+		if area := shoelaceArea(got); !areaClose(area, wantArea) {
+			t.Errorf("clip() area = %v, want %v", area, wantArea)
+		}
+	})
+}
+
+// TestClipperClipConcaveRing checks that a concave ring straddling a cell
+// boundary still encloses the right area once clipped, even though the
+// algorithm may hand back a zero-width bridge along the boundary rather than
+// a tidy rectangle: see the note at the top of land.go on why that costs an
+// even-odd fill nothing. The ring is an L-shape whose notch sits entirely
+// inside the cell and whose outer arm runs past its eastern edge, so only
+// that arm is cut.
+func TestClipperClipConcaveRing(t *testing.T) {
+	t.Parallel()
+
+	ring := Polyline{
+		{Lat: 0, Lon: 3}, {Lat: 0, Lon: 7}, {Lat: 2, Lon: 7},
+		{Lat: 2, Lon: 5}, {Lat: 3, Lon: 5}, {Lat: 3, Lon: 3},
+		{Lat: 0, Lon: 3},
+	}
+
+	const wantArea = 6.0
+
+	got := (&clipper{}).clip(ring, boxOf(18, 36))
+	if len(got) < minRingPoints {
+		t.Fatalf("clip() = %v, want at least %d points", got, minRingPoints)
+	}
+
+	if area := shoelaceArea(got); !areaClose(area, wantArea) {
+		t.Errorf("clip() area = %v, want %v", area, wantArea)
+	}
+}
+
+// TestBucketRingsAcrossCellBoundaries covers the three ways a ring can
+// straddle the grid: across a longitude boundary, across a latitude one, and
+// across the corner where four cells meet. In every case the ring is filed
+// under every cell it touches, each piece is a closed ring of at least three
+// points, and the pieces' areas sum back to the original ring's area: the two
+// neighbouring cells compute the same crossing from the same arithmetic, so
+// nothing is lost and nothing is doubled at the seam.
+func TestBucketRingsAcrossCellBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		ring      Polyline
+		wantCells int
+	}{
+		{
+			name: "straddling a longitude boundary",
+			ring: Polyline{
+				{Lat: 1, Lon: 3}, {Lat: 1, Lon: 7}, {Lat: 3, Lon: 7}, {Lat: 3, Lon: 3}, {Lat: 1, Lon: 3},
+			},
+			wantCells: 2,
+		},
+		{
+			name: "straddling a latitude boundary",
+			ring: Polyline{
+				{Lat: 3, Lon: 1}, {Lat: 7, Lon: 1}, {Lat: 7, Lon: 3}, {Lat: 3, Lon: 3}, {Lat: 3, Lon: 1},
+			},
+			wantCells: 2,
+		},
+		{
+			name: "straddling the corner where four cells meet",
+			ring: Polyline{
+				{Lat: 3, Lon: 3}, {Lat: 3, Lon: 7}, {Lat: 7, Lon: 7}, {Lat: 7, Lon: 3}, {Lat: 3, Lon: 3},
+			},
+			wantCells: 4,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			buckets := bucketRings([]Polyline{testCase.ring})
+			if len(buckets) != testCase.wantCells {
+				t.Fatalf("bucketRings() filed under %d cells, want %d", len(buckets), testCase.wantCells)
+			}
+
+			want := shoelaceArea(testCase.ring)
+
+			var sum float64
+
+			for _, pieces := range buckets {
+				for _, piece := range pieces {
+					if len(piece) < minRingPoints {
+						t.Errorf("piece %v has %d points, want at least %d", piece, len(piece), minRingPoints)
+					}
+
+					sum += shoelaceArea(piece)
+				}
+			}
+
+			if !areaClose(sum, want) {
+				t.Errorf("sum of piece areas = %v, want %v", sum, want)
+			}
+		})
+	}
+}
+
+// TestFileRingTooShort mirrors TestSplitTooShort for the ring side of the
+// codec: a ring with fewer than three points cannot enclose anything, so it
+// is dropped before it ever reaches the clipper.
+func TestFileRingTooShort(t *testing.T) {
+	t.Parallel()
+
+	buckets := make(map[int][]Polyline)
+	fileRing(buckets, &clipper{}, Polyline{{Lat: 1, Lon: 1}, {Lat: 2, Lon: 2}})
+
+	if len(buckets) != 0 {
+		t.Errorf("fileRing() touched %d buckets for a two-point ring, want 0", len(buckets))
+	}
+}
+
+// TestFileRingSkipsCellsTheRingMisses checks the other half of bucketRings's
+// doc comment: a cell inside the ring's bounding box that the ring itself
+// never reaches comes back empty from the clipper and is never filed. A
+// right triangle is the simplest shape whose bounding box has a corner its
+// own hypotenuse cuts away, here three of the nine cells the 3x3 box covers.
+func TestFileRingSkipsCellsTheRingMisses(t *testing.T) {
+	t.Parallel()
+
+	ring := Polyline{{Lat: 0, Lon: 0}, {Lat: 0, Lon: 10}, {Lat: 10, Lon: 0}, {Lat: 0, Lon: 0}}
+
+	const wantCells = 6
+
+	buckets := bucketRings([]Polyline{ring})
+	if len(buckets) != wantCells {
+		t.Errorf("bucketRings() filed under %d cells, want %d", len(buckets), wantCells)
+	}
+}
+
+func TestRingCells(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		ring Polyline
+		want cellRange
+	}{
+		{
+			name: "a ring that never leaves one cell",
+			ring: Polyline{{Lat: 1, Lon: 1}, {Lat: 2, Lon: 2}, {Lat: 1, Lon: 2}},
+			want: cellRange{rowLow: 18, rowHigh: 18, colLow: 36, colHigh: 36},
+		},
+		{
+			name: "a ring spanning several rows and columns",
+			ring: Polyline{{Lat: -3, Lon: -3}, {Lat: 8, Lon: 8}},
+			want: cellRange{rowLow: 17, rowHigh: 19, colLow: 35, colHigh: 37},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := ringCells(testCase.ring); got != testCase.want {
+				t.Errorf("ringCells(%v) = %v, want %v", testCase.ring, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestBoundedColumn(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		lon  float64
+		want int
+	}{
+		{name: "an ordinary longitude", lon: 10, want: 38},
+		{name: "exactly the dateline pins to the last column", lon: 180, want: cellCols - 1},
+		{name: "exactly the west edge pins to the first column", lon: -180, want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := boundedColumn(testCase.lon); got != testCase.want {
+				t.Errorf("boundedColumn(%v) = %v, want %v", testCase.lon, got, testCase.want)
 			}
 		})
 	}

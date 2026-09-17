@@ -19,35 +19,69 @@ import (
 const (
 	coastlineFixture = "testdata/coastline.geojson"
 	lakesFixture     = "testdata/lakes.geojson"
+	landFixture      = "testdata/land.geojson"
 	brokenFixture    = "testdata/broken.geojson"
 	missingFixture   = "testdata/does-not-exist.geojson"
 )
 
-// The three flag names, named once so goconst does not see a dozen repeated
+// The five flag names, named once so goconst does not see a dozen repeated
 // string literals across the table-driven cases below.
 const (
 	flagCoastline = "-coastline"
 	flagLakes     = "-lakes"
+	flagLand      = "-land"
 	flagOut       = "-out"
+	flagLandOut   = "-land-out"
 )
 
-// TestRunErrors drives run through every error branch that a single process
-// can reach on its own: a bad flag, a missing input on either side, and an
-// input that is not GeoJSON at all.
+// runErrorCase is one case run's own error-branch tests share, split across
+// TestRunErrors and TestRunErrorsLandAndWrite so neither function runs long.
+type runErrorCase struct {
+	name          string
+	args          []string
+	wantErrIs     error
+	wantErrSubstr string
+}
+
+// checkRunErrors drives run over every case and checks the error it comes
+// back with, which is the assertion body both error tests share.
+func checkRunErrors(t *testing.T, cases []runErrorCase) {
+	t.Helper()
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+
+			err := run(testCase.args, &stdout)
+			if err == nil {
+				t.Fatalf("run(%v) error = nil, want non-nil", testCase.args)
+			}
+
+			if testCase.wantErrIs != nil && !errors.Is(err, testCase.wantErrIs) {
+				t.Errorf("run(%v) error = %v, want errors.Is match for %v", testCase.args, err, testCase.wantErrIs)
+			}
+
+			if testCase.wantErrSubstr != "" && !strings.Contains(err.Error(), testCase.wantErrSubstr) {
+				t.Errorf("run(%v) error = %q, want to contain %q", testCase.args, err.Error(), testCase.wantErrSubstr)
+			}
+		})
+	}
+}
+
+// TestRunErrors drives run through every error branch a single process can
+// reach on its own before it ever touches the land half: a bad flag, a
+// missing input on either side, and an input that is not GeoJSON at all.
 func TestRunErrors(t *testing.T) {
 	t.Parallel()
 
-	// None of the cases below ever reach write, so this path is never
-	// actually created. It still lives outside the repository rather than
-	// inside testdata, in case that ever stops being true.
+	// Neither case below ever reaches write, so this path is never actually
+	// created. It still lives outside the repository rather than inside
+	// testdata, in case that ever stops being true.
 	unusedOut := filepath.Join(t.TempDir(), "unused.bin.gz")
 
-	for _, testCase := range []struct {
-		name          string
-		args          []string
-		wantErrIs     error
-		wantErrSubstr string
-	}{
+	checkRunErrors(t, []runErrorCase{
 		{
 			name:          "an unknown flag is a parse failure before anything is opened",
 			args:          []string{"-nope"},
@@ -93,25 +127,105 @@ func TestRunErrors(t *testing.T) {
 			},
 			wantErrIs: shore.ErrGeoJSON,
 		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+	})
+}
 
-			var stdout bytes.Buffer
+// TestRunErrorsLandAndWrite drives run through the error branches that only
+// exist once outlines has already succeeded: the land half failing to open
+// or to parse, and either write call failing to create its file. Every case
+// here writes a real shoreline file along the way, unlike the ones in
+// TestRunErrors, so each needs its own -out rather than a shared unused path.
+func TestRunErrorsLandAndWrite(t *testing.T) {
+	t.Parallel()
 
-			err := run(testCase.args, &stdout)
-			if err == nil {
-				t.Fatalf("run(%v) error = nil, want non-nil", testCase.args)
-			}
+	checkRunErrors(t, []runErrorCase{
+		{
+			name: "a missing land file is named in the error",
+			args: []string{
+				flagCoastline, coastlineFixture,
+				flagLakes, lakesFixture,
+				flagLand, missingFixture,
+				flagOut, filepath.Join(t.TempDir(), "shore.bin.gz"),
+				flagLandOut, filepath.Join(t.TempDir(), "land.bin.gz"),
+			},
+			wantErrSubstr: "opening the land",
+		},
+		{
+			name: "a land file that is not json fails the build with ErrGeoJSON",
+			args: []string{
+				flagCoastline, coastlineFixture,
+				flagLakes, lakesFixture,
+				flagLand, brokenFixture,
+				flagOut, filepath.Join(t.TempDir(), "shore.bin.gz"),
+				flagLandOut, filepath.Join(t.TempDir(), "land.bin.gz"),
+			},
+			wantErrIs: shore.ErrGeoJSON,
+		},
+		{
+			name: "an output path that cannot be created fails the first write inside run",
+			args: []string{
+				flagCoastline, coastlineFixture,
+				flagLakes, lakesFixture,
+				flagOut, t.TempDir(),
+			},
+			wantErrSubstr: "creating",
+		},
+		{
+			// The first write, for the shoreline, has to succeed here so that
+			// run reaches the second one: -land-out names a directory, which
+			// os.Create cannot write a file over.
+			name: "a land-out path that cannot be created fails the second write inside run",
+			args: []string{
+				flagCoastline, coastlineFixture,
+				flagLakes, lakesFixture,
+				flagLand, landFixture,
+				flagOut, filepath.Join(t.TempDir(), "shore.bin.gz"),
+				flagLandOut, t.TempDir(),
+			},
+			wantErrSubstr: "creating",
+		},
+	})
+}
 
-			if testCase.wantErrIs != nil && !errors.Is(err, testCase.wantErrIs) {
-				t.Errorf("run(%v) error = %v, want errors.Is match for %v", testCase.args, err, testCase.wantErrIs)
-			}
+// TestRingsSecondLakesOpenFails covers the one failure run itself can never
+// reach: rings opens the lakes file a second time, after outlines has
+// already opened and read it once. Driving paths.outlines and paths.rings
+// directly, with the lakes file removed in between, is what puts the second
+// open on a path the first one already found.
+func TestRingsSecondLakesOpenFails(t *testing.T) {
+	t.Parallel()
 
-			if testCase.wantErrSubstr != "" && !strings.Contains(err.Error(), testCase.wantErrSubstr) {
-				t.Errorf("run(%v) error = %q, want to contain %q", testCase.args, err.Error(), testCase.wantErrSubstr)
-			}
-		})
+	lakesPath := filepath.Join(t.TempDir(), "lakes.geojson")
+
+	data, err := os.ReadFile(lakesFixture)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) error = %v, want nil", lakesFixture, err)
+	}
+
+	//nolint:gosec // lakesPath is built from t.TempDir() above, not attacker input.
+	if err := os.WriteFile(lakesPath, data, 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v, want nil", lakesPath, err)
+	}
+
+	target := paths{coastline: coastlineFixture, lakes: lakesPath, land: landFixture}
+
+	if _, err := target.outlines(); err != nil {
+		t.Fatalf("outlines() error = %v, want nil", err)
+	}
+
+	if err := os.Remove(lakesPath); err != nil {
+		t.Fatalf("os.Remove(%q) error = %v, want nil", lakesPath, err)
+	}
+
+	_, err = target.rings()
+	if err == nil {
+		t.Fatal("rings() error = nil, want non-nil")
+	}
+
+	const want = "opening the lakes"
+
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("rings() error = %q, want to contain %q", err.Error(), want)
 	}
 }
 
@@ -123,6 +237,15 @@ func TestRunErrors(t *testing.T) {
 const (
 	wantPolylines = 4
 	wantPoints    = 14
+
+	// wantRings and wantRingPoints are what shore.BuildLand produces from
+	// land.geojson and lakes.geojson: the one land polygon's ring, at five
+	// points, plus the same lake ring the outline half keeps, also five
+	// points. Both sit wholly inside a single cell each, so clipping never
+	// splits either one and the tally run reports matches these counts
+	// exactly.
+	wantRings      = 2
+	wantRingPoints = 10
 
 	// The box below has to cover both cells the fixtures land in: the
 	// coastline sits east of 4 degrees, the lakes east of 5, and a five
@@ -143,18 +266,21 @@ const (
 )
 
 // TestRunHappyPath runs the whole generator over the testdata fixtures and
-// checks what came out the other end: the packed file decodes, the shoreline
-// it holds sits where the fixtures put it, and the counts run reports match
-// what shore.Build actually produced.
+// checks what came out the other end: both packed files decode, the shapes
+// they hold sit where the fixtures put them, and the counts run reports
+// match what shore.Build and shore.BuildLand actually produced.
 func TestRunHappyPath(t *testing.T) {
 	t.Parallel()
 
 	outPath := filepath.Join(t.TempDir(), "shore.bin.gz")
+	landOutPath := filepath.Join(t.TempDir(), "land.bin.gz")
 
 	args := []string{
 		flagCoastline, coastlineFixture,
 		flagLakes, lakesFixture,
+		flagLand, landFixture,
 		flagOut, outPath,
+		flagLandOut, landOutPath,
 	}
 
 	var stdout bytes.Buffer
@@ -163,22 +289,24 @@ func TestRunHappyPath(t *testing.T) {
 		t.Fatalf("run(%v) error = %v, want nil", args, err)
 	}
 
-	wantStdout := fmt.Sprintf("wrote %s: %d polylines, %d points\n", outPath, wantPolylines, wantPoints)
+	wantStdout := fmt.Sprintf(
+		"wrote %s: %d polylines, %d points\nwrote %s: %d rings, %d points\n",
+		outPath, wantPolylines, wantPoints, landOutPath, wantRings, wantRingPoints,
+	)
 	if got := stdout.String(); got != wantStdout {
 		t.Errorf("run(%v) stdout = %q, want %q", args, got, wantStdout)
 	}
 
-	packed, err := os.Open(outPath) //nolint:gosec // outPath is built above from t.TempDir(), not attacker input.
-	if err != nil {
-		t.Fatalf("os.Open(%q) error = %v, want nil", outPath, err)
-	}
+	checkShoreline(t, outPath)
+	checkLand(t, landOutPath)
+}
 
-	defer func() { _ = packed.Close() }()
+// checkShoreline decodes the shoreline file run wrote and checks the
+// coastline and lake it holds sit where the fixtures put them.
+func checkShoreline(t *testing.T, path string) {
+	t.Helper()
 
-	set, err := shore.Decode(packed)
-	if err != nil {
-		t.Fatalf("shore.Decode(%q) error = %v, want nil", outPath, err)
-	}
+	set := decodeFixtureOutput(t, path)
 
 	var (
 		visited []shore.Polyline
@@ -203,6 +331,53 @@ func TestRunHappyPath(t *testing.T) {
 	if !containsPoint(visited, fixtureLat, fixtureLon, pointEpsilon) {
 		t.Errorf("Within(...) = %v, want it to contain the coastline fixture's first point", visited)
 	}
+}
+
+// checkLand decodes the land file run wrote and checks it holds the rings
+// BuildLand produced, whole: land.geojson's polygon and lakes.geojson's one
+// large enough lake both sit inside a single cell each, so clipping never
+// touches either one and this should see them back unchanged.
+func checkLand(t *testing.T, path string) {
+	t.Helper()
+
+	set := decodeFixtureOutput(t, path)
+
+	var rings, points int
+
+	set.Within(-90, 90, -180, 180, func(line shore.Polyline) {
+		rings++
+		points += len(line)
+	})
+
+	if rings != wantRings {
+		t.Errorf("Within(...) visited %d rings, want %d", rings, wantRings)
+	}
+
+	if points != wantRingPoints {
+		t.Errorf("Within(...) visited %d points, want %d", points, wantRingPoints)
+	}
+}
+
+// decodeFixtureOutput opens and decodes one file run wrote, failing the test
+// if either step errors. The packed format is the same for both the
+// shoreline and the land file, so Decode reads either.
+func decodeFixtureOutput(t *testing.T, path string) *shore.Set {
+	t.Helper()
+
+	//nolint:gosec // path is built from t.TempDir() in the caller, not attacker input.
+	packed, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("os.Open(%q) error = %v, want nil", path, err)
+	}
+
+	t.Cleanup(func() { _ = packed.Close() })
+
+	set, err := shore.Decode(packed)
+	if err != nil {
+		t.Fatalf("shore.Decode(%q) error = %v, want nil", path, err)
+	}
+
+	return set
 }
 
 // containsPoint reports whether any of the given polylines holds a point
@@ -262,7 +437,7 @@ func TestWriteCreateFails(t *testing.T) {
 
 			var stdout bytes.Buffer
 
-			err := write(path, nil, &stdout)
+			err := write(job{path: path, noun: nounLines, pack: shore.Encode}, nil, &stdout)
 			if err == nil {
 				t.Fatalf("write(%q) error = nil, want non-nil", path)
 			}
@@ -283,11 +458,13 @@ func TestWriteCreateFails(t *testing.T) {
 const (
 	placeholderCoastline = "coast.geojson"
 	placeholderLakes     = "lakes.geojson"
+	placeholderLand      = "land.geojson"
 	placeholderOut       = "out.bin.gz"
+	placeholderLandOut   = "land-out.bin.gz"
 )
 
 // TestParseSuccess checks what parse hands back when there is nothing to
-// refuse: the three defaults with no flags, and all three overridden. A
+// refuse: the five defaults with no flags, and all five overridden. A
 // bytes.Buffer takes the place of the caller's output stream throughout, so a
 // bad flag's usage text never lands on this test's own output.
 func TestParseSuccess(t *testing.T) {
@@ -299,17 +476,25 @@ func TestParseSuccess(t *testing.T) {
 		wantPaths paths
 	}{
 		{
-			name:      "no flags at all keeps the three defaults",
-			wantPaths: paths{coastline: defaultCoastline, lakes: defaultLakes, output: defaultOutput},
+			name: "no flags at all keeps the five defaults",
+			wantPaths: paths{
+				coastline: defaultCoastline, lakes: defaultLakes, land: defaultLand,
+				output: defaultOutput, landOut: defaultLandOut,
+			},
 		},
 		{
-			name: "all three flags override their defaults",
+			name: "all five flags override their defaults",
 			args: []string{
 				flagCoastline, placeholderCoastline,
 				flagLakes, placeholderLakes,
+				flagLand, placeholderLand,
 				flagOut, placeholderOut,
+				flagLandOut, placeholderLandOut,
 			},
-			wantPaths: paths{coastline: placeholderCoastline, lakes: placeholderLakes, output: placeholderOut},
+			wantPaths: paths{
+				coastline: placeholderCoastline, lakes: placeholderLakes, land: placeholderLand,
+				output: placeholderOut, landOut: placeholderLandOut,
+			},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -330,7 +515,7 @@ func TestParseSuccess(t *testing.T) {
 }
 
 // TestParseErrors exercises every way parse can refuse its input: an unknown
-// flag, and check's three empty-path rejections.
+// flag, and check's five empty-path rejections.
 func TestParseErrors(t *testing.T) {
 	t.Parallel()
 
@@ -366,6 +551,16 @@ func TestParseErrors(t *testing.T) {
 			wantErrSubstr: flagLakes,
 		},
 		{
+			name: "an empty land path is refused and named",
+			args: []string{
+				flagCoastline, placeholderCoastline,
+				flagLakes, placeholderLakes,
+				flagLand, "",
+			},
+			wantErrIs:     errEmptyPath,
+			wantErrSubstr: flagLand,
+		},
+		{
 			name: "an empty output path is refused and named",
 			args: []string{
 				flagCoastline, placeholderCoastline,
@@ -374,6 +569,16 @@ func TestParseErrors(t *testing.T) {
 			},
 			wantErrIs:     errEmptyPath,
 			wantErrSubstr: flagOut,
+		},
+		{
+			name: "an empty land-out path is refused and named",
+			args: []string{
+				flagCoastline, placeholderCoastline,
+				flagLakes, placeholderLakes,
+				flagLandOut, "",
+			},
+			wantErrIs:     errEmptyPath,
+			wantErrSubstr: flagLandOut,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -449,7 +654,9 @@ func TestMainSubprocess(t *testing.T) {
 				return []string{
 					flagCoastline, coastlineFixture,
 					flagLakes, lakesFixture,
+					flagLand, landFixture,
 					flagOut, filepath.Join(t.TempDir(), "shore.bin.gz"),
+					flagLandOut, filepath.Join(t.TempDir(), "land.bin.gz"),
 				}
 			},
 			wantExit: exitOK,
@@ -542,7 +749,9 @@ func TestEncodeReportsASinkThatFails(t *testing.T) {
 
 			lines := []shore.Polyline{{{Lat: 52, Lon: 4}, {Lat: 52.1, Lon: 4.1}}}
 
-			err := encode(testCase.sink, placeholderOut, lines, &stdout)
+			target := job{path: placeholderOut, noun: nounLines, pack: shore.Encode}
+
+			err := encode(testCase.sink, target, lines, &stdout)
 			if !errors.Is(err, errSinkFailed) {
 				t.Fatalf("encode(a sink that fails) error = %v, want errSinkFailed wrapped in it", err)
 			}

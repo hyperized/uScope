@@ -219,8 +219,27 @@ type Scene struct {
 	// shoreOn is whether the coastline is drawn, which the m key toggles, and
 	// shoreSet is the data behind it. A nil set draws nothing whatever the
 	// toggle says, which is the state on a run that was never handed the data.
+	//
+	// The toggle covers the water tint and the land fill as well as the
+	// outlines. They are one picture rather than two overlays: a coastline
+	// with no fill behind it says where a line is, and the fill is what says
+	// which side of it is sea.
 	shoreOn  bool
 	shoreSet *shore.Set
+
+	// The scratch the land fill projects into, all of it reused between
+	// layer rebuilds so a fill costs no allocation once the buffers have
+	// grown.
+	//
+	// The points of every ring in view go into one slice and each ring is
+	// recorded as a span on it, because a span cannot be turned into a slice
+	// while the slice it points into is still growing: a reallocation would
+	// move the array out from under the earlier rings. landRings is resolved
+	// from the spans once the last ring is in, which is the same two-step
+	// pkg/shore's decoder uses for the same reason.
+	landPoints []image.Point
+	landSpans  []landSpan
+	landRings  [][]image.Point
 
 	// shown is which of the four views is on screen, which the v key cycles
 	// and --view picks the start of. The minimal, perspective and bare helpers
