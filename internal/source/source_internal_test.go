@@ -1148,7 +1148,40 @@ func TestCoverageCacheObserve(t *testing.T) {
 			if snapshot := cache.tracker.Snapshot(); snapshot != (coverage.Snapshot{}) {
 				t.Errorf("Snapshot() = %+v, want the zero value (fix dropped)", snapshot)
 			}
+
+			if sum := sumGridCells(cache.grid); sum != 0 {
+				t.Errorf("sum of grid cells = %d, want 0 (fix dropped)", sum)
+			}
 		})
+	}
+}
+
+// TestCoverageCacheObserveFillsGrid checks that an ordinary fix lands in the
+// grid as well as the tracker, in a test function of its own rather than a
+// subtest of TestCoverageCacheObserve, which is already at the cognitive
+// complexity limit revive enforces for one function.
+func TestCoverageCacheObserveFillsGrid(t *testing.T) {
+	t.Parallel()
+
+	const (
+		receiverLat = 52.0
+		receiverLon = 4.0
+		aircraftLat = 52.5
+		aircraftLon = 4.5
+		altitudeFt  = 10000.0
+
+		wantCount = 1
+	)
+
+	cache := newCoverage()
+	cache.observe(receiverLat, receiverLon, aircraftLat, aircraftLon, altitudeFt)
+
+	distanceNm := airplanes.HaversineDistance(receiverLat, receiverLon, aircraftLat, aircraftLon)
+	bearingDeg := bearingOf(receiverLat, receiverLon, aircraftLat, aircraftLon)
+	wantSector, wantBand, wantBin := bearingSector(bearingDeg), altitudeBand(altitudeFt), distanceBin(distanceNm)
+
+	if got := cache.grid.Cells[wantSector][wantBand][wantBin]; got != wantCount {
+		t.Errorf("grid.Cells[%d][%d][%d] = %d, want %d", wantSector, wantBand, wantBin, got, wantCount)
 	}
 }
 
@@ -1174,22 +1207,222 @@ func TestCoverageCacheSnapshot(t *testing.T) {
 	cache := newCoverage()
 	cache.observe(receiverLat, receiverLon, firstLat, firstLon, altitudeFt)
 
-	first := cache.snapshot(zero)
+	first, _ := cache.snapshot(zero)
 	if first.MaxRangeNm <= 0 {
 		t.Fatalf("first snapshot() at the zero time returned MaxRangeNm = %v, want > 0", first.MaxRangeNm)
 	}
 
 	cache.observe(receiverLat, receiverLon, secondLat, secondLon, altitudeFt)
 
-	stillWithin := cache.snapshot(zero.Add(coverageInterval - time.Nanosecond))
+	stillWithin, _ := cache.snapshot(zero.Add(coverageInterval - time.Nanosecond))
 	if stillWithin != first {
 		t.Errorf("snapshot() inside coverageInterval = %+v, want the cached %+v", stillWithin, first)
 	}
 
-	pastInterval := cache.snapshot(zero.Add(coverageInterval))
+	pastInterval, _ := cache.snapshot(zero.Add(coverageInterval))
 	if pastInterval == first {
 		t.Error("snapshot() at coverageInterval returned the stale copy, want the refreshed one")
 	}
+}
+
+// TestCoverageCacheSnapshotThrottlesGrid checks that the grid half of
+// snapshot's return is throttled by the same coverageInterval as the
+// tracker's Snapshot, rather than being refreshed on every call regardless of
+// the clock.
+func TestCoverageCacheSnapshotThrottlesGrid(t *testing.T) {
+	t.Parallel()
+
+	const (
+		receiverLat = 52.0
+		receiverLon = 4.0
+		firstLat    = 52.5
+		firstLon    = 4.5
+		secondLat   = 53.5
+		secondLon   = 5.5
+		altitudeFt  = 10000.0
+
+		wantAfterFirst = 1
+		wantAfterBoth  = 2
+	)
+
+	var zero time.Time
+
+	cache := newCoverage()
+	cache.observe(receiverLat, receiverLon, firstLat, firstLon, altitudeFt)
+
+	_, firstGrid := cache.snapshot(zero)
+	if sum := sumGridCells(firstGrid); sum != wantAfterFirst {
+		t.Fatalf("first snapshot() grid sum = %d, want %d", sum, wantAfterFirst)
+	}
+
+	cache.observe(receiverLat, receiverLon, secondLat, secondLon, altitudeFt)
+
+	_, stillWithin := cache.snapshot(zero.Add(coverageInterval - time.Nanosecond))
+	if sum := sumGridCells(stillWithin); sum != wantAfterFirst {
+		t.Errorf("snapshot() grid sum inside coverageInterval = %d, want the cached %d", sum, wantAfterFirst)
+	}
+
+	_, pastInterval := cache.snapshot(zero.Add(coverageInterval))
+	if sum := sumGridCells(pastInterval); sum != wantAfterBoth {
+		t.Errorf("snapshot() grid sum at coverageInterval = %d, want the refreshed %d", sum, wantAfterBoth)
+	}
+}
+
+// TestBearingSector checks bearingSector's bin boundaries, plus the one
+// clamp case bearingOf can actually produce: a bearing of exactly 360
+// degrees, which is what a value a hair under zero rounds up to once the
+// circle is added back in.
+func TestBearingSector(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		bearingDeg float64
+		want       int
+	}{
+		{name: "0 degrees is sector 0", bearingDeg: 0.0, want: 0},
+		{name: "just under the sector width stays in sector 0", bearingDeg: 22.4, want: 0},
+		{name: "at the sector width moves into sector 1", bearingDeg: 22.5, want: 1},
+		{name: "just under a full circle is the last sector", bearingDeg: 359.9, want: 15},
+		{name: "a full circle clamps into the last sector", bearingDeg: 360.0, want: 15},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := bearingSector(testCase.bearingDeg); got != testCase.want {
+				t.Errorf("bearingSector(%v) = %d, want %d", testCase.bearingDeg, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestAltitudeBand checks altitudeBand's bin boundaries, and that anything at
+// or above the top of the grid clamps into the last band instead of indexing
+// past it.
+func TestAltitudeBand(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		altitudeFt float64
+		want       int
+	}{
+		{name: "1 foot is band 0", altitudeFt: 1.0, want: 0},
+		{name: "just under the band width stays in band 0", altitudeFt: 4999.0, want: 0},
+		{name: "at the band width moves into band 1", altitudeFt: 5000.0, want: 1},
+		{name: "just under the top of the grid is the last band", altitudeFt: 49999.0, want: 9},
+		{name: "the top of the grid clamps into the last band", altitudeFt: 50000.0, want: 9},
+		{name: "well past the top of the grid clamps the same way", altitudeFt: 250000.0, want: 9},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := altitudeBand(testCase.altitudeFt); got != testCase.want {
+				t.Errorf("altitudeBand(%v) = %d, want %d", testCase.altitudeFt, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestDistanceBin checks distanceBin's bin boundaries, and that anything at
+// or beyond the outer edge of the grid clamps into the last bin instead of
+// indexing past it.
+func TestDistanceBin(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		distanceNm float64
+		want       int
+	}{
+		{name: "0 nm is bin 0", distanceNm: 0.0, want: 0},
+		{name: "just under the bin width stays in bin 0", distanceNm: 9.9, want: 0},
+		{name: "at the bin width moves into bin 1", distanceNm: 10.0, want: 1},
+		{name: "just under the outer edge is the last bin", distanceNm: 249.9, want: 24},
+		{name: "the outer edge clamps into the last bin", distanceNm: 250.0, want: 24},
+		{name: "well past the outer edge clamps the same way", distanceNm: 5000.0, want: 24},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := distanceBin(testCase.distanceNm); got != testCase.want {
+				t.Errorf("distanceBin(%v) = %d, want %d", testCase.distanceNm, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestSaturatingInc checks the counter's two states: an ordinary count still
+// has room to grow, and one already at math.MaxUint32 must not wrap back to
+// zero, which is the one thing that would erase the strongest evidence a
+// cell holds after a session left running long enough to reach it.
+func TestSaturatingInc(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		counter uint32
+		want    uint32
+	}{
+		{name: "below the ceiling increments", counter: 41, want: 42},
+		{name: "at the ceiling stays put", counter: math.MaxUint32, want: math.MaxUint32},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			counter := testCase.counter
+			saturatingInc(&counter)
+
+			if counter != testCase.want {
+				t.Errorf("saturatingInc() = %d, want %d", counter, testCase.want)
+			}
+		})
+	}
+}
+
+// TestCoverageGridObserve checks that one fix lands in exactly the cell its
+// three indices name, with every other cell in the grid left at zero: a
+// bearing sector, altitude band and distance bin the fix did not fall into
+// must not gain a count from it.
+func TestCoverageGridObserve(t *testing.T) {
+	t.Parallel()
+
+	const (
+		distanceNm = 15.0
+		bearingDeg = 40.0
+		altitudeFt = 12000.0
+
+		wantCount = 1
+	)
+
+	var grid CoverageGrid
+	grid.observe(distanceNm, bearingDeg, altitudeFt)
+
+	wantSector, wantBand, wantBin := bearingSector(bearingDeg), altitudeBand(altitudeFt), distanceBin(distanceNm)
+
+	if got := grid.Cells[wantSector][wantBand][wantBin]; got != wantCount {
+		t.Errorf("Cells[%d][%d][%d] = %d, want %d", wantSector, wantBand, wantBin, got, wantCount)
+	}
+
+	if sum := sumGridCells(grid); sum != wantCount {
+		t.Errorf("sum of every cell = %d, want %d (only the named cell should hold a count)", sum, wantCount)
+	}
+}
+
+// sumGridCells adds every count held by a grid, so a test can check "nothing
+// anywhere else" as one comparison instead of a triple loop over Cells.
+func sumGridCells(grid CoverageGrid) uint64 {
+	var sum uint64
+
+	for _, sectors := range grid.Cells {
+		for _, bands := range sectors {
+			for _, count := range bands {
+				sum += uint64(count)
+			}
+		}
+	}
+
+	return sum
 }
 
 // TestLivePositionObserver checks positionObserver's two halves. With no

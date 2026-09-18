@@ -37,26 +37,25 @@ func view3DSettings() radar.Settings {
 	return radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm}
 }
 
-// covered adds a synthetic coverage snapshot to a frame: one altitude band
-// heard twenty nautical miles out in every bearing sector.
+// covered adds a synthetic coverage grid to a frame: one altitude band heard
+// twenty nautical miles out in every bearing sector.
 //
-// It is the smallest snapshot that draws a complete measured envelope, which
-// is what the cases below need to see whether the envelope was drawn at all.
+// It is the smallest grid that draws a complete measured envelope, which is
+// what the cases below need to see whether the envelope was drawn at all.
 func covered(frame source.Frame) source.Frame {
 	const (
-		band    = 2
-		bin     = 1
-		heardNm = 20.0
-		// observations is comfortably over bandReachNm's own floor (16 at the
-		// time of writing), so the one bin counts as filled rather than too
-		// little data to draw.
-		observations = 20
+		// Band 2 is 10,000 to 15,000 feet and bin 1 ends twenty nautical
+		// miles out.
+		band = 2
+		bin  = 1
+
+		// fixes is comfortably over the per-bin floor internal/radar draws a
+		// vertex at, which is three at the time of writing.
+		fixes = 20
 	)
 
-	frame.Coverage.Cells[band][bin] = observations
-
 	for sector := range coverage.BearingSectorCount {
-		frame.Coverage.Sectors[sector] = heardNm
+		frame.Grid.Cells[sector][band][bin] = fixes
 	}
 
 	return frame

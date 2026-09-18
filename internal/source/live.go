@@ -354,6 +354,7 @@ func (l *Live) Frame() Frame {
 	now := l.now()
 
 	supported, enabled := l.in.BiasTeeState()
+	snapshot, grid := l.coverage.snapshot(now)
 
 	return Frame{
 		Planes:   planes,
@@ -364,7 +365,8 @@ func (l *Live) Frame() Frame {
 		Now:      now,
 		BiasTee:  BiasTeeState{Supported: supported, Enabled: enabled},
 		Sweeping: l.in.Sweeping(),
-		Coverage: l.coverage.snapshot(now),
+		Coverage: snapshot,
+		Grid:     grid,
 	}
 }
 

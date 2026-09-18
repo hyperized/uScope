@@ -237,11 +237,20 @@ type Demo struct {
 	// what a lost contact looks like on a live feed.
 	ghosts ghosts
 
-	// coverage accumulates where the invented fleet has been heard, so the 3D
-	// view's measured envelope has a shape to draw without a receiver. The
-	// fleet flies within about forty nautical miles, so it comes out as a
-	// small bowl; --demo-sector crowds it into one quadrant and the bowl comes
-	// out lopsided, which is what a directional antenna looks like.
+	// coverage accumulates where the invented fleet has been heard, which is
+	// what the 3D view's measured envelope is drawn from with no receiver
+	// attached.
+	//
+	// Twelve aircraft at twelve fixed altitudes do not paint an envelope. The
+	// grid is 16 bearing sectors by 10 altitude bands and the fleet reaches
+	// about two dozen of those cells, so the default --demo draws a scatter of
+	// short arcs rather than a bowl. That is what twelve contacts honestly
+	// come to: the bowl the demo used to draw was an artefact of crossing two
+	// projections of one run, which filled every altitude band against every
+	// bearing whether or not anything had flown there. --demo-sector is the
+	// one worth looking at, because crowding the fleet into a single quadrant
+	// puts its aircraft in adjacent sectors and the arcs join up, lopsided,
+	// which is what a directional antenna looks like.
 	coverage *coverageCache
 }
 
@@ -319,6 +328,7 @@ func (d *Demo) Frame() Frame {
 	d.ticks++
 
 	planes := d.snapshot(now)
+	snapshot, grid := d.coverage.snapshot(now)
 
 	return Frame{
 		Planes: planes,
@@ -330,7 +340,8 @@ func (d *Demo) Frame() Frame {
 		Source:   adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
 		Stats:    d.stats(),
 		Now:      now,
-		Coverage: d.coverage.snapshot(now),
+		Coverage: snapshot,
+		Grid:     grid,
 	}
 }
 
@@ -416,6 +427,7 @@ func (d *Demo) advance(now time.Time) {
 	if d.last.IsZero() {
 		d.last, d.start = now, now
 		d.seedFixTimes(now)
+		d.observeTrails()
 		d.observeFleet()
 
 		return
@@ -460,6 +472,26 @@ func (d *Demo) observeFleet() {
 
 		d.coverage.observe(d.lat, d.lon,
 			d.fleet[index].latitude, d.fleet[index].longitude, d.fleet[index].spec.altitude)
+	}
+}
+
+// observeTrails folds every back-propagated trail fix into the coverage state,
+// once, on the first frame.
+//
+// observeFleet alone puts one count per aircraft per frame into one cell, and
+// a cell needs a few before the envelope will reach out to its bin, so a demo
+// would open with no envelope and grow one several frames in. The first frame
+// is the frame --png captures.
+//
+// Each aircraft already carries demoSeedFixes of track walked backwards along
+// its own course, which is a real spread of positions across the bins behind
+// it rather than a number invented to clear a threshold. Folding those in is
+// the same thing a receiver does over its first few minutes, done at once.
+func (d *Demo) observeTrails() {
+	for index := range d.fleet {
+		for _, fix := range d.fleet[index].history {
+			d.coverage.observe(d.lat, d.lon, fix.Latitude, fix.Longitude, fix.Altitude)
+		}
 	}
 }
 

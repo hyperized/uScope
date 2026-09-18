@@ -272,7 +272,7 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 
 	if s.envelopeDrawn() {
 		s.drawBowl3(window, view)
-		s.drawMeasured3(window, view, frame.Coverage)
+		s.drawMeasured3(window, view, &frame.Grid)
 	}
 
 	if view.plottable {

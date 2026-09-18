@@ -181,33 +181,31 @@ func ghostFleet(count, history int) []source.Trail {
 	return list
 }
 
-// benchCoverage is the coverage snapshot the 3D cases draw their measured
-// envelope from: every altitude band heard out to a different distance in
-// every bearing sector, which is the busiest wireframe the tracker can
-// produce and so the most expensive one to draw.
-func benchCoverage() coverage.Snapshot {
-	// benchObservations is comfortably over bandReachNm's own floor (16 at
-	// the time of writing), so every band below counts as filled.
-	const benchObservations = 20
+// benchGrid is the coverage grid the 3D cases draw their measured envelope
+// from: every bearing sector heard out to a different distance at every
+// altitude band, which is the busiest wireframe a grid can produce and so the
+// most expensive one to draw. Every vertex exists, so no edge is skipped.
+func benchGrid() source.CoverageGrid {
+	// benchFixes is comfortably over the per-bin floor internal/radar draws a
+	// vertex at, which is three at the time of writing.
+	const benchFixes = 20
 
-	var snapshot coverage.Snapshot
-
-	for band := range coverage.AltitudeBandCount {
-		snapshot.Cells[band][band%coverage.DistanceBinCount] = benchObservations
-	}
+	var grid source.CoverageGrid
 
 	for sector := range coverage.BearingSectorCount {
-		snapshot.Sectors[sector] = float64(sector%6+1) * coverage.DistanceBinNm
+		for band := range coverage.AltitudeBandCount {
+			grid.Cells[sector][band][(sector+band)%coverage.DistanceBinCount] = benchFixes
+		}
 	}
 
-	return snapshot
+	return grid
 }
 
 // benchFrame is the frame the benchmark and the allocation test draw.
 func benchFrame() source.Frame {
 	return source.Frame{
-		Planes:   fleet(benchPlanes, benchHistory),
-		Coverage: benchCoverage(),
+		Planes: fleet(benchPlanes, benchHistory),
+		Grid:   benchGrid(),
 		Receiver: source.Receiver{
 			Latitude:  receiverLat,
 			Longitude: receiverLon,

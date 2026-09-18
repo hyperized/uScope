@@ -1532,6 +1532,45 @@ func TestDemoFrameCoverageSurvivesPastQuiet(t *testing.T) {
 	}
 }
 
+// TestDemoFrameGridOnFirstFrame checks that observeTrails' backfill leaves the
+// very first demo frame's Grid non-empty, with its busiest cell already at
+// three counts. Three is the floor internal/radar requires before it will draw
+// an envelope vertex for a cell, so a first frame stuck below it would open
+// with no envelope at all, and the first frame is the one --png captures.
+func TestDemoFrameGridOnFirstFrame(t *testing.T) {
+	t.Parallel()
+
+	const wantAtLeast = 3
+
+	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	demo, err := source.NewDemo(source.WithDemoClock(func() time.Time { return fixed }))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	if got := busiestGridCell(demo.Frame().Grid); got < wantAtLeast {
+		t.Errorf("first Frame().Grid's busiest cell = %d, want at least %d", got, wantAtLeast)
+	}
+}
+
+// busiestGridCell returns the largest count held by any cell in the grid.
+func busiestGridCell(grid source.CoverageGrid) uint32 {
+	var busiest uint32
+
+	for _, sectors := range grid.Cells {
+		for _, bands := range sectors {
+			for _, count := range bands {
+				if count > busiest {
+					busiest = count
+				}
+			}
+		}
+	}
+
+	return busiest
+}
+
 // TestDemoSectorCoverageIsLopsided checks that WithDemoSector's crowded fleet
 // fills fewer of the sixteen bearing sectors than the default scattered
 // fleet does, which is the shape a directional antenna's coverage picture is
@@ -1573,6 +1612,77 @@ func countFilledSectors(sectors [coverage.BearingSectorCount]float64) int {
 	}
 
 	return count
+}
+
+// TestDemoSectorGridIsLopsided checks the grid axis of the same shape
+// TestDemoSectorCoverageIsLopsided checks on Coverage.Sectors: WithDemoSector's
+// crowded fleet must fill fewer of the sixteen bearing sectors in the grid
+// too, since the grid and the tracker's Sectors projection are fed the same
+// fixes from the same fleet.
+func TestDemoSectorGridIsLopsided(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return fixed }
+
+	sector, err := source.NewDemo(source.WithDemoSector(), source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	scattered, err := source.NewDemo(source.WithDemoClock(clock))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	sectorFilled := countFilledGridSectors(sector.Frame().Grid)
+	scatteredFilled := countFilledGridSectors(scattered.Frame().Grid)
+
+	if sectorFilled >= scatteredFilled {
+		t.Errorf("WithDemoSector filled %d of the sixteen bearing sectors in the grid, want fewer than the scattered "+
+			"fleet's %d", sectorFilled, scatteredFilled)
+	}
+}
+
+// countFilledGridSectors counts how many of the grid's sixteen bearing
+// sectors have seen at least one fix in any of their cells. It is the grid
+// equivalent of countFilledSectors, which counts the same thing over
+// Coverage.Sectors instead.
+func countFilledGridSectors(grid source.CoverageGrid) int {
+	count := 0
+
+	for _, sector := range grid.Cells {
+		filled := false
+
+		for _, bands := range sector {
+			for _, cell := range bands {
+				if cell > 0 {
+					filled = true
+
+					break
+				}
+			}
+		}
+
+		if filled {
+			count++
+		}
+	}
+
+	return count
+}
+
+// TestEmptyFrameGridIsZero checks that a Source with nothing behind it hands
+// back a Frame whose Grid is the zero value too, the same contract Empty
+// already gives Coverage.
+func TestEmptyFrameGridIsZero(t *testing.T) {
+	t.Parallel()
+
+	var empty source.Empty
+
+	if got := empty.Frame().Grid; got != (source.CoverageGrid{}) {
+		t.Error("Frame().Grid is not the zero value, want an empty grid")
+	}
 }
 
 // TestEmptyBiasTee checks that a Source with nothing behind it reports no

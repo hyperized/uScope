@@ -471,17 +471,33 @@ the bowl has nothing left to say. Open the range past a hundred and the curve
 appears on its own.
 
 The second is the measured one: where the antenna has actually heard
-something. uScope runs uAirwaves' coverage tracker behind every
-source, binning each decoded fix by distance, altitude band and bearing sector,
-and the wireframe is a ring through the sixteen sectors at each altitude band
-with vertical edges joining the bands. Each band's edge is the 98th percentile
-of what has actually been observed in it rather than the single farthest bin
-ever touched, so one stray mis-decoded position at long range does not drag
-the whole band out to it. A sector nothing has ever
-been heard in is skipped, so a directional antenna, or one with a chimney on
-one side of it, comes out lopsided rather than round. `--demo-sector` shows what
-that looks like without a receiver: the invented fleet sits in one quadrant and
-so does its envelope.
+something. uScope counts every decoded fix into a grid of its own, sixteen
+bearing sectors by ten five-thousand-foot altitude bands by twenty-five
+ten-mile distance bins, and the wireframe is a ring through the sixteen sectors
+at each altitude band with vertical edges joining the bands. Every vertex is
+one cell of that grid, drawn at the outer edge of the farthest distance bin in
+the cell holding at least three fixes. Three is the floor because a mis-decoded
+position lands one fix, sometimes two, in a bin nothing else ever touches,
+while an aircraft genuinely tracked out there is heard every few seconds for as
+long as it is in view. Everything nearer than the vertex is inside the mesh
+whether or not it was busy, so an aircraft the receiver really heard is never
+left flying outside its own envelope.
+
+A sector nothing has been heard in has no vertex, so the ring skips it and no
+vertical edge is drawn up it either. A directional antenna, or one with a
+chimney on one side of it, comes out lopsided rather than round, and a sector
+that hears far at low level and nothing higher up comes out that shape too,
+which is what an obstruction on one bearing actually does to a receiver.
+`--demo-sector` shows the lopsided case without one: the invented fleet sits in
+one quadrant and so does its envelope.
+
+Plain `--demo` draws very little of a measured envelope, and that is honest
+rather than broken. Twelve invented aircraft at twelve fixed altitudes reach
+about two dozen cells of a grid that has a hundred and sixty, so the mesh comes
+out as a scatter of short arcs with few of them joined. The bowl the demo used
+to draw came from crossing two projections of one run, which filled every
+altitude band against every bearing whether or not anything had ever flown
+there.
 
 Two bands with an empty one between them are not bridged. An edge drawn through
 a band nothing was heard in would be claiming reception the tracker never saw.

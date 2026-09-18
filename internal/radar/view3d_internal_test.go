@@ -385,171 +385,184 @@ func TestBowlRadiusClampsToTheRange(t *testing.T) {
 	}
 }
 
-// TestBandReachNm checks how far one altitude band of a coverage snapshot is
-// read as reaching: the outer edge of the bin at which reachPercentile of its
-// observations have accumulated, and nothing at all for a band with fewer
-// than minBandObservations in total.
-func TestBandReachNm(t *testing.T) {
-	t.Parallel()
-
-	const band = 3
-
-	t.Run("an empty band reaches nothing", func(t *testing.T) {
-		t.Parallel()
-
-		var snapshot coverage.Snapshot
-
-		if got := bandReachNm(snapshot, band); got != 0 {
-			t.Errorf("bandReachNm on an empty band = %g, want 0", got)
-		}
-	})
-
-	t.Run("below the minimum reaches nothing", func(t *testing.T) {
-		t.Parallel()
-
-		var snapshot coverage.Snapshot
-
-		snapshot.Cells[band][0] = minBandObservations - 1
-
-		if got := bandReachNm(snapshot, band); got != 0 {
-			t.Errorf("bandReachNm below minBandObservations = %g, want 0", got)
-		}
-	})
-
-	t.Run("one stray count in a far bin does not drag the reach out to it", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			nearTopBin = 5
-			farBin     = 20
-		)
-
-		var snapshot coverage.Snapshot
-
-		// A hundred observations settle into the near bins, most of them by
-		// bin 5, and one lone count lands at bin 20: the mis-decode that used
-		// to pin the whole band's reach out there.
-		copy(snapshot.Cells[band][:nearTopBin+1], []uint32{17, 17, 17, 17, 16, 16})
-		snapshot.Cells[band][farBin] = 1
-
-		want := float64(nearTopBin+1) * coverage.DistanceBinNm
-		if got := bandReachNm(snapshot, band); got != want {
-			t.Errorf("bandReachNm with one stray count at bin %d = %g, want the edge of bin %d (%g)",
-				farBin, got, nearTopBin, want)
-		}
-	})
-
-	t.Run("an even spread needs every one of its bins to clear the percentile", func(t *testing.T) {
-		t.Parallel()
-
-		const lastBin = 9
-
-		var snapshot coverage.Snapshot
-
-		for bin := 0; bin <= lastBin; bin++ {
-			snapshot.Cells[band][bin] = 10
-		}
-
-		want := float64(lastBin+1) * coverage.DistanceBinNm
-		if got := bandReachNm(snapshot, band); got != want {
-			t.Errorf("bandReachNm spread evenly over bins 0-%d = %g, want the edge of bin %d (%g)",
-				lastBin, got, lastBin, want)
-		}
-	})
-
-	t.Run("counts near saturation still sum without overflowing", func(t *testing.T) {
-		t.Parallel()
-
-		var snapshot coverage.Snapshot
-
-		for bin := range snapshot.Cells[band] {
-			snapshot.Cells[band][bin] = math.MaxUint32
-		}
-
-		want := float64(coverage.DistanceBinCount) * coverage.DistanceBinNm
-		if got := bandReachNm(snapshot, band); got != want {
-			t.Errorf("bandReachNm saturated across every bin = %g, want the far edge (%g)", got, want)
-		}
-	})
-}
-
-// TestSectorReach checks the measured envelope's one piece of arithmetic: a
-// vertex is the nearer of what the band reached and what the sector reached,
-// clamped to the range, and a sector with nothing in it produces no vertex at
-// all. The last part is what makes a directional antenna draw lopsided.
-func TestSectorReach(t *testing.T) {
+// TestCellReachNm checks the one number the measured envelope is built from:
+// how far one bearing sector reaches at one altitude band.
+//
+// The floor is a count of fixes per distance bin rather than a percentile of
+// the cell, and the two middle cases are why. A percentile leaves a share of
+// every cell's fixes outside the mesh by construction, which on a busy field
+// is aircraft visibly flying outside their own envelope. A count floor keeps
+// the whole tail and drops only the one or two fixes a mis-decode drops into a
+// bin nothing else ever touched.
+func TestCellReachNm(t *testing.T) {
 	t.Parallel()
 
 	const (
-		band       = 2
-		farBin     = 5
-		heardNm    = 25.0
-		distantNm  = 500.0
-		emptySect  = 4
-		heardSect  = 0
-		cappedSect = 9
+		sector = 3
+		band   = 6
+
+		// nearTop is where the bulk of the fixes sit, farBin where the stray
+		// one lands, and quietBin a bin between two busy ones that nothing
+		// happened to fly through.
+		nearTop  = 5
+		quietBin = 7
+		farBin   = 20
+
+		// busy is a cell's worth of real traffic, comfortably over the floor.
+		busy = 40
+
+		lastBin = coverage.DistanceBinCount - 1
 	)
 
-	view := scene3{scopeNm: cameraRangeNm, reachNm: cameraRangeNm}
+	for _, testCase := range []struct {
+		name string
+		bins map[int]uint32
+		want float64
+	}{
+		{
+			name: "an empty cell reaches nothing",
+			want: 0,
+		},
+		{
+			name: "a bin under the floor reaches nothing",
+			bins: map[int]uint32{nearTop: minBinObservations - 1},
+			want: 0,
+		},
+		{
+			name: "one stray fix in a far bin is left outside",
+			bins: map[int]uint32{0: busy, 1: busy, 2: busy, 3: busy, nearTop: busy, farBin: 1},
+			want: float64(nearTop+1) * coverage.DistanceBinNm,
+		},
+		{
+			name: "three fixes in the same far bin are an aircraft rather than a mis-decode",
+			bins: map[int]uint32{0: busy, 1: busy, 2: busy, 3: busy, nearTop: busy, farBin: minBinObservations},
+			want: float64(farBin+1) * coverage.DistanceBinNm,
+		},
+		{
+			name: "a quiet bin between two busy ones is inside the reach",
+			bins: map[int]uint32{0: busy, quietBin: busy},
+			want: float64(quietBin+1) * coverage.DistanceBinNm,
+		},
+		{
+			name: "a saturated far bin still counts",
+			bins: map[int]uint32{lastBin: math.MaxUint32},
+			want: float64(lastBin+1) * coverage.DistanceBinNm,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Run("an empty band draws nothing", func(t *testing.T) {
+			var grid source.CoverageGrid
+
+			for bin, count := range testCase.bins {
+				grid.Cells[sector][band][bin] = count
+			}
+
+			if got := cellReachNm(&grid, sector, band); got != testCase.want {
+				t.Errorf("cellReachNm = %g, want %g", got, testCase.want)
+			}
+
+			// Nothing was written to either neighbour, so the indexing is
+			// wrong if anything comes back out of one.
+			if got := cellReachNm(&grid, sector+1, band); got != 0 {
+				t.Errorf("the next bearing sector reaches %g, want 0", got)
+			}
+
+			if got := cellReachNm(&grid, sector, band+1); got != 0 {
+				t.Errorf("the next altitude band reaches %g, want 0", got)
+			}
+		})
+	}
+}
+
+// TestBandReach checks that the envelope is read per bearing sector and per
+// altitude band rather than from one figure per band: the same sector reaches
+// a different distance at two heights, and a sector nothing was ever heard in
+// has no vertex at either.
+//
+// That pair is what a chimney on one side of a rooftop antenna looks like, and
+// it is the thing the two projections uAirwaves' tracker keeps cannot describe
+// between them. Cells was altitude by distance over every bearing and Sectors
+// one farthest distance per bearing over every altitude, so a vertex taken as
+// the nearer of the two could be lopsided in outline or shrink with altitude
+// and never both at once.
+func TestBandReach(t *testing.T) {
+	t.Parallel()
+
+	const (
+		heardSector = 3
+		deafSector  = 11
+
+		// The two cells: bin 11 ends at 120 nautical miles and bin 2 at 30, so
+		// the same sector reaches four times as far up high as it does low
+		// down.
+		highBand = 6
+		highBin  = 11
+		highNm   = 120.0
+		lowBand  = 1
+		lowBin   = 2
+		lowNm    = 30.0
+
+		// wideScopeNm is well past the far cell, so the clamp is out of the
+		// way in every case but the one that is about it.
+		wideScopeNm = 300.0
+	)
+
+	var grid source.CoverageGrid
+
+	grid.Cells[heardSector][highBand][highBin] = minBinObservations
+	grid.Cells[heardSector][lowBand][lowBin] = minBinObservations
+
+	wide := scene3{scopeNm: wideScopeNm, reachNm: wideScopeNm}
+
+	for _, testCase := range []struct {
+		name string
+		band int
+		want float64
+	}{
+		{name: "the high band reaches its own bin", band: highBand, want: highNm},
+		{name: "the low band reaches a nearer one", band: lowBand, want: lowNm},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			reach, filled := bandReach(wide, &grid, testCase.band)
+			if !filled {
+				t.Fatalf("band %d came back empty, want a vertex in sector %d", testCase.band, heardSector)
+			}
+
+			if reach[heardSector] != testCase.want {
+				t.Errorf("sector %d at band %d reaches %g, want %g",
+					heardSector, testCase.band, reach[heardSector], testCase.want)
+			}
+
+			if reach[deafSector] != 0 {
+				t.Errorf("sector %d reaches %g, want 0 so the ring skips it", deafSector, reach[deafSector])
+			}
+		})
+	}
+
+	t.Run("a band nothing was heard in draws nothing", func(t *testing.T) {
 		t.Parallel()
 
-		var snapshot coverage.Snapshot
-
-		snapshot.Sectors[heardSect] = heardNm
-
-		if _, filled := sectorReach(view, snapshot, band); filled {
-			t.Error("sectorReach reported a band with no cells as filled, want empty")
+		if _, filled := bandReach(wide, &grid, highBand+1); filled {
+			t.Error("a band with no cell over the floor came back filled, want empty")
 		}
 	})
 
-	t.Run("a heard sector takes the nearer of the two reaches", func(t *testing.T) {
+	t.Run("a reach past the scope range is clamped to it", func(t *testing.T) {
 		t.Parallel()
 
-		var snapshot coverage.Snapshot
+		near := scene3{scopeNm: cameraRangeNm, reachNm: cameraRangeNm}
 
-		snapshot.Cells[band][farBin] = minBandObservations
-		snapshot.Sectors[heardSect] = heardNm
-		snapshot.Sectors[cappedSect] = distantNm
-
-		reach, filled := sectorReach(view, snapshot, band)
+		reach, filled := bandReach(near, &grid, highBand)
 		if !filled {
-			t.Fatal("sectorReach reported a populated band as empty")
+			t.Fatal("the populated band came back empty")
 		}
 
-		if reach[heardSect] != heardNm {
-			t.Errorf("a sector heard at %g nm reaches %g, want the sector's own figure", heardNm, reach[heardSect])
-		}
-
-		if reach[cappedSect] != cameraRangeNm {
-			t.Errorf("a sector heard at %g nm reaches %g, want it clamped to the %g nm range",
-				distantNm, reach[cappedSect], cameraRangeNm)
-		}
-
-		if reach[emptySect] != 0 {
-			t.Errorf("a sector nothing was heard in reaches %g, want 0", reach[emptySect])
-		}
-	})
-
-	t.Run("the band caps a sector that reached further", func(t *testing.T) {
-		t.Parallel()
-
-		var snapshot coverage.Snapshot
-
-		// One occupied bin, comfortably over minBandObservations, so the band
-		// reaches ten nautical miles: less than the sector's own twenty-five,
-		// and less than the range.
-		snapshot.Cells[band][0] = minBandObservations
-		snapshot.Sectors[heardSect] = heardNm
-
-		reach, filled := sectorReach(view, snapshot, band)
-		if !filled {
-			t.Fatal("sectorReach reported a populated band as empty")
-		}
-
-		if reach[heardSect] != coverage.DistanceBinNm {
-			t.Errorf("the vertex reaches %g, want the band's own %g", reach[heardSect], coverage.DistanceBinNm)
+		if reach[heardSector] != cameraRangeNm {
+			t.Errorf("a %g nm reach on a %g nm scope draws at %g, want the range",
+				highNm, cameraRangeNm, reach[heardSector])
 		}
 	})
 }
@@ -662,16 +675,15 @@ func view3DScene(tb testing.TB, frame source.Frame) (*Scene, *canvas.Canvas) {
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var view3DPicture = image.Rect(0, 0, 620, layerCanvasHeight)
 
-// coveredFrame is a frame carrying a synthetic coverage snapshot: the altitude
+// coveredFrame is a frame carrying a synthetic coverage grid: the altitude
 // bands named, heard in every bearing sector except gapSector.
 //
 // Both knobs are the point of the fixture. A missing sector is what a
 // directional antenna looks like and is the case the wireframe has to leave an
-// edge out of; the band list is how a stack with a hole in it gets built.
-// A gapSector of -1 is a sector nothing matches, so the envelope closes all
-// the way round. Each named band carries minBandObservations counts in its
-// one bin, clearing bandReachNm's floor, so every band in the list comes back
-// filled rather than read as too little data to draw.
+// edge out of; the band list is how a stack with a hole in it gets built. A
+// gapSector of -1 is a sector nothing matches, so the envelope closes all the
+// way round. Every cell named carries minBinObservations in one bin, which is
+// exactly the floor cellReachNm draws a vertex at.
 func coveredFrame(gapSector int, bands ...int) source.Frame {
 	frame := source.Frame{
 		Receiver: source.Receiver{
@@ -680,21 +692,18 @@ func coveredFrame(gapSector int, bands ...int) source.Frame {
 		Now: time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC),
 	}
 
-	const (
-		bin     = 1
-		heardNm = 20.0
-	)
+	// Bin 1 ends twenty nautical miles out, which is half the fixture's range
+	// and so a shape with room around it in the picture.
+	const bin = 1
 
 	for _, band := range bands {
-		frame.Coverage.Cells[band][bin] = minBandObservations
-	}
+		for sector := range coverage.BearingSectorCount {
+			if sector == gapSector {
+				continue
+			}
 
-	for sector := range coverage.BearingSectorCount {
-		if sector == gapSector {
-			continue
+			frame.Grid.Cells[sector][band][bin] = minBinObservations
 		}
-
-		frame.Coverage.Sectors[sector] = heardNm
 	}
 
 	return frame
@@ -728,6 +737,73 @@ func TestMeasuredEnvelopeSkipsAnEmptySector(t *testing.T) {
 	if gappedInk >= fullInk {
 		t.Errorf("the gapped envelope drew %d pixels against the full one's %d, want fewer",
 			gappedInk, fullInk)
+	}
+}
+
+// TestMeasuredEnvelopeIsNotRoundWhenTheGridIsNot checks the property the whole
+// grid exists for: an antenna that hears one half of the sky four times as far
+// as the other draws a mesh that is further out on that half.
+//
+// The reach used to be one figure per altitude band crossed with one per
+// bearing sector, and once the band figure became the smaller of the two it
+// decided every vertex, so the mesh came out round however lopsided the
+// antenna was. Reading a bearing by altitude by distance cell puts the outline
+// back.
+func TestMeasuredEnvelopeIsNotRoundWhenTheGridIsNot(t *testing.T) {
+	t.Parallel()
+
+	const (
+		band    = 1
+		nearBin = 0
+		farBin  = 3
+
+		// eastSectors is the half of the compass the camera at azimuth zero
+		// shows to the right of the receiver: bearings 0 through 180.
+		eastSectors = coverage.BearingSectorCount / 2
+	)
+
+	scene, view := envelopeFixture()
+
+	var round, lopsided source.CoverageGrid
+
+	for sector := range coverage.BearingSectorCount {
+		round.Cells[sector][band][farBin] = minBinObservations
+
+		bin := nearBin
+		if sector < eastSectors {
+			bin = farBin
+		}
+
+		lopsided.Cells[sector][band][bin] = minBinObservations
+	}
+
+	roundCanvas, lopsidedCanvas := blankCanvas(t), blankCanvas(t)
+
+	scene.drawMeasured3(roundCanvas, view, &round)
+	scene.drawMeasured3(lopsidedCanvas, view, &lopsided)
+
+	if identicalPixels(roundCanvas, lopsidedCanvas) {
+		t.Fatal("a lopsided grid drew the same mesh as a round one")
+	}
+
+	// roundSlack is how far the two halves of a round mesh may differ and
+	// still be round: a ring is rasterised a pixel either way, not to the
+	// pixel.
+	const roundSlack = 4
+
+	roundWest, roundEast := meshSpread(roundCanvas)
+	if diff := roundWest - roundEast; diff > roundSlack || diff < -roundSlack {
+		t.Errorf("a round grid drew %d pixels west of the receiver and %d east, want the two within %d",
+			roundWest, roundEast, roundSlack)
+	}
+
+	// The east half of the lopsided grid reaches four bins, the west half one,
+	// so anything short of twice as far east is the outline being averaged
+	// away rather than drawn.
+	lopsidedWest, lopsidedEast := meshSpread(lopsidedCanvas)
+	if lopsidedEast <= 2*lopsidedWest {
+		t.Errorf("a lopsided grid drew %d pixels west of the receiver and %d east, want the east half much further out",
+			lopsidedWest, lopsidedEast)
 	}
 }
 
@@ -780,15 +856,15 @@ func TestMeasuredEnvelopeBreaksOverAnEmptyBand(t *testing.T) {
 			t.Parallel()
 
 			scene, view := envelopeFixture()
-			snapshot := coveredFrame(-1, lowBand, testCase.upper).Coverage
+			grid := coveredFrame(-1, lowBand, testCase.upper).Grid
 
 			whole := blankCanvas(t)
-			scene.drawMeasured3(whole, view, snapshot)
+			scene.drawMeasured3(whole, view, &grid)
 
 			ringsOnly := blankCanvas(t)
 
 			for _, band := range []int{lowBand, testCase.upper} {
-				reach, filled := sectorReach(view, snapshot, band)
+				reach, filled := bandReach(view, &grid, band)
 				if !filled {
 					t.Fatalf("band %d came back empty, so the fixture proves nothing", band)
 				}
@@ -891,6 +967,34 @@ func countInk(canv *canvas.Canvas, want color.RGBA) int {
 	}
 
 	return count
+}
+
+// meshSpread is how far left and right of the receiver a drawn shape reaches,
+// in pixels, which is how a test asks whether that shape is lopsided without
+// pinning a whole picture. The camera puts the receiver in the middle of its
+// square box.
+//
+// It counts any pixel that is not the field rather than the exact ink colour,
+// because LineAA blends a line's edges into the field and only the pixels at
+// full coverage come back as the ink itself. Those are a sparse sample of the
+// shape; its outline is not.
+//
+//nolint:nonamedreturns // (west, east) reads clearer named at this signature.
+func meshSpread(canv *canvas.Canvas) (west, east int) {
+	bounds := canv.Bounds().Intersect(view3DPicture)
+	middle := cameraSide / 2
+
+	// A pixel on the wrong side of the middle gives a negative distance, which
+	// max drops on the floor, so neither half needs a branch of its own.
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if canv.Image().RGBAAt(x, y) != theme.Night.Field {
+				west, east = max(west, middle-x), max(east, x-middle+1)
+			}
+		}
+	}
+
+	return west, east
 }
 
 // TestCameraKeysBelongToTheView checks that the camera keys are claimed by the

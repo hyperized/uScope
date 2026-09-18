@@ -178,16 +178,28 @@ type Frame struct {
 	// no explanation reads as a broken one.
 	Sweeping bool
 
-	// Coverage is where the antenna has actually heard an aircraft, binned by
-	// distance, altitude and bearing over the whole run. It is what the 3D
-	// view draws its measured envelope from.
+	// Coverage is uAirwaves' own view of the same run: altitude by distance
+	// over every bearing, one farthest distance per bearing over every
+	// altitude, and the longest range heard with the altitude it was heard at.
 	//
-	// It is a value rather than a pointer because coverage.Snapshot copies its
-	// grids: the frame carries its own bins and cannot be changed under the
-	// scene by the ingest goroutine. A source that keeps no tracker leaves it
-	// zero, which reads as an antenna that has heard nothing and draws no
-	// envelope.
+	// Nothing in uScope draws from it any more. The measured envelope moved to
+	// Grid, which can say what two projections of one run cannot, and the range
+	// figures are the part the tracker is still better at than a bin count. It
+	// is kept because tearing out a running tracker to save a kilobyte a second
+	// would be a poor trade the first time anything wants a range readout.
 	Coverage coverage.Snapshot
+
+	// Grid is where the antenna has actually heard an aircraft, counted by
+	// bearing sector, altitude band and distance bin over the whole run. It is
+	// what the 3D view draws its measured envelope from.
+	//
+	// It is a value rather than a pointer because a CoverageGrid copies its
+	// counts: the frame carries its own bins and cannot be changed under the
+	// scene by the ingest goroutine. That costs sixteen kilobytes of memmove
+	// per frame and no allocation at all. A source that counts nothing leaves
+	// it zero, which reads as an antenna that has heard nothing and draws no
+	// envelope.
+	Grid CoverageGrid
 }
 
 // Source hands out frames until it is closed.
