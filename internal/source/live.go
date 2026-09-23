@@ -595,6 +595,7 @@ func (l *Live) receiver() Receiver {
 		Latitude:     latitude,
 		Longitude:    longitude,
 		ConfidenceNm: l.loc.ConfidenceRadiusNm(),
+		SpreadNm:     l.loc.SpreadNm(),
 		Label:        LabelEstimate,
 		Mode:         FixEstimated,
 		Violated:     l.violatedCount(),
@@ -668,6 +669,7 @@ func (l *Live) applyEstimate() {
 	l.loc.Update(
 		location.WithSource(location.SourceInferred),
 		location.WithConfidenceRadiusNm(fix.ConfidenceRadiusNm),
+		location.WithSpreadNm(fix.SpreadNm),
 		location.WithLatitude(fix.Latitude),
 		location.WithLongitude(fix.Longitude),
 	)

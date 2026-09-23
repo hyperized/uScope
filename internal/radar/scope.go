@@ -633,7 +633,10 @@ func (*Scene) drawFixRing(dst *canvas.Canvas, x, y, doubt, plain int, col color.
 
 // doubtRadius is how far the receiver could be from the position the scope
 // puts it at, in pixels at scale pixels per nautical mile, or zero for any
-// position that is not an estimate.
+// position that is not an estimate. The distance is Receiver.DoubtNm: the
+// self-locator's measured spread where there is one, and its bound where
+// there is not, because the bound on a real feed is a hundred miles around a
+// dot that is within a dozen of the truth.
 //
 // The answer is held between floor and ceiling. Under the floor, which is the
 // marker's ordinary ring, the estimate would be a ring drawn on its own dot,
@@ -648,7 +651,7 @@ func doubtRadius(receiver source.Receiver, scale float64, floor, ceiling int) in
 		return 0
 	}
 
-	pixels := math.Round(receiver.ConfidenceNm * scale)
+	pixels := math.Round(receiver.DoubtNm() * scale)
 	if math.IsNaN(pixels) || pixels <= 0 {
 		return floor
 	}

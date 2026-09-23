@@ -64,6 +64,13 @@ const (
 	gpsNoFixText   = "GPS LOST"
 	unknownFixText = "???"
 
+	// boundPrefix opens the bound the self-locator guarantees, written after
+	// the spread it measured when the two differ: LOC EST ±4 NM / MAX 97 NM.
+	// The spread is the reading and takes the estimate's own colour; the bound
+	// follows in the band's quiet ink, because a number an order of magnitude
+	// wider set in the same colour would be the one the eye lands on.
+	boundPrefix = " / MAX "
+
 	// doubtMarker follows the estimate's radius when the self-locator's own
 	// observations disagree with the answer it produced. A question mark says
 	// that in one glyph, in a line that has no room for a sentence.
@@ -676,8 +683,9 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 	switch receiver.Label {
 	case source.LabelEstimate:
 		pen := text.Draw(lay.dst, face, left, top, estimatePrefix, ink)
-		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.ConfidenceNm), ink)
+		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.DoubtNm()), ink)
 		pen = text.Draw(lay.dst, face, pen, top, rangeUnit, ink)
+		pen = s.drawBound(lay.dst, face, pen, top, receiver)
 		s.drawDoubt(lay.dst, face, pen, top, receiver.Violated)
 	case source.LabelNone:
 		text.Draw(lay.dst, face, left, top, noFixText, ink)
@@ -687,6 +695,25 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.OnBand(s.pal.Data))
 		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.OnBand(s.pal.Data))
 	}
+}
+
+// drawBound writes the self-locator's bound after the spread when the two are
+// different numbers, and returns the pen either way.
+//
+// The bound is what the model guarantees and the spread is what the data
+// shows; see source.Receiver. While the locator has too few observations to
+// measure a spread the two are the same figure, and Receiver.BoundShown is
+// false, so the line stays EST ±97 NM rather than saying it twice.
+func (s *Scene) drawBound(dst *canvas.Canvas, face *psf.Font, pen, top int, receiver source.Receiver) int {
+	if !receiver.BoundShown() {
+		return pen
+	}
+
+	quiet := s.bandMuted()
+	pen = text.Draw(dst, face, pen, top, boundPrefix, quiet)
+	pen = drawBytes(dst, face, pen, top, s.whole(receiver.ConfidenceNm), quiet)
+
+	return text.Draw(dst, face, pen, top, rangeUnit, quiet)
 }
 
 // drawDoubt marks an estimate the self-locator does not fully believe.

@@ -129,6 +129,34 @@ type Receiver struct {
 	// It is zero for a GPS fix and for a position the operator typed in:
 	// neither is derived from anything that could disagree with it.
 	Violated int
+
+	// SpreadNm is the self-locator's precision figure beside ConfidenceNm's
+	// bound: how far the estimate moves when it is worked out from a fifth
+	// of the observations. It is what the data shows where ConfidenceNm is
+	// what the model guarantees, and on a real feed the two differ by an
+	// order of magnitude. Zero in every mode but FixEstimated, and zero on an
+	// estimate whose locator never measured one; DoubtNm is what reads it.
+	SpreadNm float64
+}
+
+// DoubtNm is the radius the scope draws around an estimate and the header
+// puts after EST: the spread when the self-locator measured one, and the
+// bound when it did not. A Receiver built with only ConfidenceNm on it still
+// draws, which is what keeps every fixture that predates the spread honest.
+func (r Receiver) DoubtNm() float64 {
+	if r.SpreadNm > 0 {
+		return r.SpreadNm
+	}
+
+	return r.ConfidenceNm
+}
+
+// BoundShown reports whether the header has a bound worth writing beside the
+// spread: the two are different numbers only when the locator measured a
+// spread and it came in under the bound. When they agree, one figure says
+// both and a second copy of it would be furniture.
+func (r Receiver) BoundShown() bool {
+	return r.SpreadNm > 0 && r.SpreadNm < r.ConfidenceNm
 }
 
 // BiasTeeState is the dongle's bias-tee as the ingest last saw it.

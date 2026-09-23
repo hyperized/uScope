@@ -88,11 +88,15 @@ the ring, so the two are one signal read twice rather than two facts to
 reconcile.
 
 An estimate's ring is the one that also has a size. The self-locator hands over
-a confidence radius with its answer, and the amber ring is drawn dashed at that
-radius in the scope's own scale: it is the area the antenna could be in, with
+two figures with its answer: a bound, which is the size of the region its
+horizon circles admit and on a real feed runs to a hundred nautical miles, and
+a spread, which is how far the answer moves when it is worked out from a fifth
+of the observations and is usually a few. The amber ring is drawn dashed at the
+spread in the scope's own scale: it is the area the antenna is likely in, with
 the dot at the best guess inside it. A tighter answer draws a smaller ring, and
 one wider than the scope sits on the outer range ring, which says the antenna
-could be anywhere in view. The tilted views draw the same ring on the ground,
+could be anywhere in view. Until the locator has enough traffic to measure a
+spread the ring is drawn at the bound. The tilted views draw the same ring on the ground,
 and the two bare views draw it around wherever the receiver's marker has
 landed. A guess and a stale fix share the same amber, because both
 are the same caution to the eye: the position under them might not be where
@@ -695,9 +699,12 @@ source is connected and a hollow one when it is not. The receiver's position
 under them, opening with `LOC`: `LOC GPS 3D 52.3100 N / 4.7700 E` for a fix,
 `LOC GPS 2D` for one with no altitude in it, `LOC GPS LOST` while the last fix
 is being held after the lock went, `LOC MANUAL` for coordinates you typed in,
-`LOC EST ±22 NM` when it was worked out from the aircraft, and `LOC NO FIX`
-when none of that has happened yet. An estimate the self-locator does not
-fully believe gets a `?` after the radius. Without the prefix the line was a
+`LOC EST ±4 NM / MAX 97 NM` when it was worked out from the aircraft, and
+`LOC NO FIX` when none of that has happened yet. The first figure is the
+spread the ring is drawn at and the second, in the band's quiet ink, is the
+bound the model guarantees; while the two are the same number only one is
+written. An estimate the self-locator does not fully believe gets a `?` after
+them. Without the prefix the line was a
 mode word and two numbers with nothing saying what they were of, and next to
 the aircraft's position on the selected strip it read as another aeroplane.
 `LOC` is drawn in the band's own ink whatever the fix mode is; only the mode
@@ -796,7 +803,7 @@ With no GPS at all, uScope works its position out from the aircraft it can hear
 by intersecting their radio horizons, which takes about thirty position reports
 and lands within tens of nautical miles. When those circles cannot all be true
 at once the answer is a compromise between them, and the header puts a `?`
-after the radius: `LOC EST ±22 NM ?`. The radius is widened to cover that
+after the radius: `LOC EST ±4 NM / MAX 97 NM ?`. The radius is widened to cover that
 disagreement already, but a wide radius on its own reads as an estimate that is
 merely vague, which is a different and more comfortable thing than an estimate
 its own observations argue with.

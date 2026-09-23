@@ -361,7 +361,7 @@ func (s *Scene) drawDoubt3(
 		return
 	}
 
-	s.drawCircle3(dst, view, centre, min(receiver.ConfidenceNm, ceilingNm), s.pal.Caution, doubtDash)
+	s.drawCircle3(dst, view, centre, min(receiver.DoubtNm(), ceilingNm), s.pal.Caution, doubtDash)
 }
 
 // drawReceiver3 marks the receiver's own position on the ground of a picture

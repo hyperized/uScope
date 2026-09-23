@@ -447,6 +447,16 @@ func TestLiveSelfLocateEstimate(t *testing.T) {
 		t.Error("Receiver.ConfidenceNm = 0, want > 0 for a self-locate estimate")
 	}
 
+	// Sixty observations is under the locator's five folds of thirty, so the
+	// spread it reports is the bound itself: present, and no tighter.
+	if receiver.SpreadNm <= 0 || receiver.SpreadNm > receiver.ConfidenceNm {
+		t.Errorf("Receiver.SpreadNm = %v, want in (0, %v]", receiver.SpreadNm, receiver.ConfidenceNm)
+	}
+
+	if got := live.loc.SpreadNm(); got != receiver.SpreadNm {
+		t.Errorf("loc.SpreadNm() = %v, want the %v the frame carries", got, receiver.SpreadNm)
+	}
+
 	if !almostEqual(receiver.Latitude, receiverLat, 1) || !almostEqual(receiver.Longitude, receiverLon, 1) {
 		t.Errorf("Receiver position = (%v, %v), want near (%v, %v)",
 			receiver.Latitude, receiver.Longitude, receiverLat, receiverLon)

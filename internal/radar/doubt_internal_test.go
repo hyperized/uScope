@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/theme"
+	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/text"
 )
 
 // TestDoubtRadius checks the rule that sizes the home marker's ring: nothing
@@ -36,6 +39,11 @@ func TestDoubtRadius(t *testing.T) {
 		{name: "NaN lands on the floor", receiver: estimate(math.NaN()), want: floor},
 		{name: "a confidence under the floor is lifted to it", receiver: estimate(0.2), want: floor},
 		{name: "an ordinary confidence scales", receiver: estimate(22), want: 99},
+		{
+			name:     "a measured spread is drawn over the bound",
+			receiver: source.Receiver{Mode: source.FixEstimated, ConfidenceNm: 97, SpreadNm: 4},
+			want:     18,
+		},
 		{name: "half a pixel rounds up", receiver: estimate(1), want: 5},
 		{name: "a confidence past the ceiling sits on it", receiver: estimate(100), want: ceiling},
 		{name: "infinity sits on the ceiling", receiver: estimate(math.Inf(1)), want: ceiling},
@@ -75,6 +83,86 @@ func TestDoubtNm(t *testing.T) {
 	if got := doubtNm(source.Receiver{Mode: source.FixGPS3D, ConfidenceNm: 22}); got != 0 {
 		t.Errorf("doubtNm of a GPS fix = %v, want 0", got)
 	}
+
+	if got := doubtNm(source.Receiver{Mode: source.FixEstimated, ConfidenceNm: 97, SpreadNm: 4}); got != 4 {
+		t.Errorf("doubtNm of an estimate with a spread = %v, want the spread, 4", got)
+	}
+}
+
+// TestReceiverLineWritesTheBoundBesideTheSpread checks the header's estimate
+// line when the self-locator has both figures: the spread after EST in the
+// estimate's colour, then the bound in the band's quiet ink, and nothing
+// after the spread while the two are the same number.
+func TestReceiverLineWritesTheBoundBesideTheSpread(t *testing.T) {
+	t.Parallel()
+
+	const (
+		top  = 8
+		left = 4
+	)
+
+	faces := Faces{Small: rowPlanSmall(t)}
+	scene := &Scene{faces: faces}
+	scene.SetPalette(theme.Night)
+
+	measured := source.Receiver{
+		Latitude: 52.31, Longitude: 4.77, ConfidenceNm: 97, SpreadNm: 4,
+		Label: source.LabelEstimate, Mode: source.FixEstimated,
+	}
+	unmeasured := measured
+	unmeasured.SpreadNm = 97
+
+	got := lineCanvas(t)
+	scene.drawReceiverLine(&layout{dst: got, left: left}, top, measured)
+
+	plain := lineCanvas(t)
+	scene.drawReceiverLine(&layout{dst: plain, left: left}, top, unmeasured)
+
+	// The reference is built from the same calls drawReceiverLine makes, so
+	// the test follows the layout rather than a pixel offset worked out by
+	// hand.
+	reference := lineCanvas(t)
+	ink := scene.fixColour(source.FixEstimated, theme.Night.BandInk)
+	quiet := scene.bandMuted()
+	pen := text.Draw(reference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
+	pen = text.Draw(reference, faces.Small, pen, top, estimatePrefix, ink)
+	pen = drawBytes(reference, faces.Small, pen, top, scene.whole(measured.SpreadNm), ink)
+	pen = text.Draw(reference, faces.Small, pen, top, rangeUnit, ink)
+	pen = text.Draw(reference, faces.Small, pen, top, boundPrefix, quiet)
+	pen = drawBytes(reference, faces.Small, pen, top, scene.whole(measured.ConfidenceNm), quiet)
+	text.Draw(reference, faces.Small, pen, top, rangeUnit, quiet)
+
+	if !samePixels(got, reference, reference.Bounds()) {
+		t.Error("the estimate line with a spread is not the spread, the unit and the bound in quiet ink")
+	}
+
+	plainReference := lineCanvas(t)
+	pen = text.Draw(plainReference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
+	pen = text.Draw(plainReference, faces.Small, pen, top, estimatePrefix, ink)
+	pen = drawBytes(plainReference, faces.Small, pen, top, scene.whole(unmeasured.ConfidenceNm), ink)
+	text.Draw(plainReference, faces.Small, pen, top, rangeUnit, ink)
+
+	if !samePixels(plain, plainReference, plainReference.Bounds()) {
+		t.Error("an estimate whose spread is the bound wrote something after the one figure")
+	}
+}
+
+// lineCanvasSide is the square the header line tests draw on, wide enough
+// for LOC EST ±4 NM / MAX 97 NM in the small face.
+const lineCanvasSide = 320
+
+// lineCanvas is a cleared square canvas for the header line tests.
+func lineCanvas(tb testing.TB) *canvas.Canvas {
+	tb.Helper()
+
+	canv, err := canvas.New(lineCanvasSide, lineCanvasSide)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	canv.Clear(theme.Night.Field)
+
+	return canv
 }
 
 // TestBackgroundLayerFollowsTheEstimateRadius checks that the layer, which

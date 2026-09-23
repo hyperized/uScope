@@ -68,6 +68,36 @@ func TestEstimateRingIsTheConfidenceRadius(t *testing.T) {
 	}
 }
 
+// TestEstimateRingFollowsTheSpreadNotTheBound checks which of the
+// self-locator's two figures the ring is drawn at: the measured spread, with
+// the bound left to the header. A ring at the bound was a hundred miles around
+// a dot within a dozen of the truth.
+func TestEstimateRingFollowsTheSpreadNotTheBound(t *testing.T) {
+	t.Parallel()
+
+	const (
+		spreadNm = 5
+		boundNm  = 1000
+	)
+
+	frame := estimateFrame(boundNm)
+	frame.Receiver.SpreadNm = spreadNm
+
+	scene, canv, ranges := sceneOn(t, panelWidth, panelHeight, frame)
+	scene.Draw(canv, 0)
+
+	radius := int(math.Round(spreadNm * homeRangeRadius / ranges.GetCurrent()))
+	centre := image.Pt(homeRingPixel.X-smallRingRadius, homeRingPixel.Y)
+
+	if got := canv.Image().RGBAAt(centre.X+radius, centre.Y); got != theme.Night.Caution {
+		t.Errorf("pixel at the spread's radius = %v, want the caution ring", got)
+	}
+
+	if got := canv.Image().RGBAAt(centre.X+homeRangeRadius, centre.Y); got == theme.Night.Caution {
+		t.Error("the outer ring is caution, want the ring at the spread rather than capped at the bound")
+	}
+}
+
 // TestEstimateRingStopsAtTheRange checks the ceiling: an estimate wider than
 // the scope draws its ring on the outer range ring rather than across the
 // column, and says the antenna could be anywhere in view.

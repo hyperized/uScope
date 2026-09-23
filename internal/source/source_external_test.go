@@ -1900,3 +1900,57 @@ func TestLiveWithGPSDEmptyStartsNoWatcher(t *testing.T) {
 		}
 	})
 }
+
+// TestReceiverDoubtNm checks the one rule for which of the estimate's two
+// figures the scope draws: the measured spread when there is one, and the
+// model's bound when there is not.
+func TestReceiverDoubtNm(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		receiver source.Receiver
+		want     float64
+	}{
+		{
+			name:     "the spread when the locator measured one",
+			receiver: source.Receiver{ConfidenceNm: 97, SpreadNm: 4},
+			want:     4,
+		},
+		{name: "the bound when it did not", receiver: source.Receiver{ConfidenceNm: 97}, want: 97},
+		{name: "nothing when the receiver has neither", receiver: source.Receiver{}, want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.receiver.DoubtNm(); got != testCase.want {
+				t.Errorf("DoubtNm() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestReceiverBoundShown checks when the header has a second figure to write:
+// only when the spread was measured and came in under the bound.
+func TestReceiverBoundShown(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		receiver source.Receiver
+		want     bool
+	}{
+		{name: "a spread under the bound", receiver: source.Receiver{ConfidenceNm: 97, SpreadNm: 4}, want: true},
+		{name: "a spread equal to the bound", receiver: source.Receiver{ConfidenceNm: 97, SpreadNm: 97}},
+		{name: "no spread measured", receiver: source.Receiver{ConfidenceNm: 97}},
+		{name: "a receiver with neither", receiver: source.Receiver{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.receiver.BoundShown(); got != testCase.want {
+				t.Errorf("BoundShown() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}

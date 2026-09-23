@@ -39,8 +39,8 @@ type layerKey struct {
 	airports bool
 	fix      source.FixMode
 
-	// doubtNm is the estimate's confidence radius, and zero in every other
-	// fix mode. It is in the key because the home marker's ring is drawn at
+	// doubtNm is the estimate's radius as the home marker draws it, and zero
+	// in every other fix mode. It is in the key because the home marker's ring is drawn at
 	// that radius while the position is an estimate, and the self-locator
 	// tightens or widens it as observations come in without the position
 	// itself moving off its snapped grid. Gated on the mode so a stale radius
@@ -183,14 +183,14 @@ func (s *Scene) renderLayer(dst *canvas.Canvas, key layerKey, frame source.Frame
 	s.layerRuns++
 }
 
-// doubtNm is the confidence radius the key carries: the receiver's own while
-// the position is an estimate, and zero otherwise.
+// doubtNm is the radius the key carries: the receiver's own DoubtNm while the
+// position is an estimate, and zero otherwise.
 func doubtNm(receiver source.Receiver) float64 {
 	if receiver.Mode != source.FixEstimated {
 		return 0
 	}
 
-	return receiver.ConfidenceNm
+	return receiver.DoubtNm()
 }
 
 // snap rounds a coordinate onto the grid the layer key compares on.

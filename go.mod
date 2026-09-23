@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/hyperized/rtl2832u v0.2.0
-	github.com/hyperized/uAirwaves v0.1.1-0.20260916150856-9f7dfee2f73e
+	github.com/hyperized/uAirwaves v0.1.1-0.20260923191002-99639a4ecd62
 )
 
 require (
