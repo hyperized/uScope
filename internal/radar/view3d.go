@@ -63,6 +63,7 @@ type dashPattern struct {
 var (
 	solidDash = dashPattern{on: 1, period: 1}
 	bowlDash  = dashPattern{on: bowlDashOn, period: bowlDashPeriod}
+	doubtDash = dashPattern{on: doubtDashOn, period: doubtDashOn + doubtDashOff}
 )
 
 // cardinals3 is where the four letters go on the ground, as multiples of the
@@ -340,6 +341,27 @@ func (s *Scene) drawGroundMarks3(lay *layout, view scene3, receiver source.Recei
 
 	s.drawRings3(lay.dst, view)
 	s.drawCardinals3(lay, view)
+	s.drawDoubt3(lay.dst, view, point3{}, receiver, view.scopeNm)
+}
+
+// drawDoubt3 draws the area a self-locate estimate could be in as a dashed
+// ring on the ground around centre, and nothing for any other fix mode.
+//
+// It is the flat scope's estimate ring in perspective. The radius is the
+// estimate's own confidence, capped at ceilingNm the way the flat ring is
+// capped at the range: past that it is a claim about ground the picture does
+// not show. There is no floor under it, because there is no ordinary ring
+// down here for a floor to be: the full view draws no home marker and the bare
+// one's receiver marker is a fixed few pixels of screen rather than a distance
+// on the ground.
+func (s *Scene) drawDoubt3(
+	dst *canvas.Canvas, view scene3, centre point3, receiver source.Receiver, ceilingNm float64,
+) {
+	if receiver.Mode != source.FixEstimated {
+		return
+	}
+
+	s.drawCircle3(dst, view, centre, min(receiver.ConfidenceNm, ceilingNm), s.pal.Caution, doubtDash)
 }
 
 // drawReceiver3 marks the receiver's own position on the ground of a picture
@@ -359,7 +381,11 @@ func (s *Scene) drawReceiver3(dst *canvas.Canvas, view scene3, receiver source.R
 		return
 	}
 
-	x, y, ok := view.cam.at(view.ground(receiver.Latitude, receiver.Longitude))
+	at := view.ground(receiver.Latitude, receiver.Longitude)
+
+	s.drawDoubt3(dst, view, at, receiver, view.reachNm)
+
+	x, y, ok := view.cam.at(at)
 	if !ok {
 		return
 	}
@@ -375,11 +401,11 @@ func (s *Scene) drawReceiver3(dst *canvas.Canvas, view scene3, receiver source.R
 func (s *Scene) drawRings3(dst *canvas.Canvas, view scene3) {
 	for ring := 1; ring <= ringCount; ring++ {
 		radius := view.scopeNm * float64(ring) / ringCount
-		s.drawCircle3(dst, view, radius, 0, s.pal.Rule, solidDash)
+		s.drawCircle3(dst, view, point3{}, radius, s.pal.Rule, solidDash)
 	}
 }
 
-// drawCircle3 draws a horizontal circle of radiusNm at heightNm, as
+// drawCircle3 draws a horizontal circle of radiusNm around centre, as
 // ringSegments straight pieces with dash applied along them.
 //
 // A segment with either end the camera cannot see is dropped rather than
@@ -389,7 +415,7 @@ func (s *Scene) drawRings3(dst *canvas.Canvas, view scene3) {
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (*Scene) drawCircle3(
-	dst *canvas.Canvas, view scene3, radiusNm, heightNm float64, col color.RGBA, dash dashPattern,
+	dst *canvas.Canvas, view scene3, centre point3, radiusNm float64, col color.RGBA, dash dashPattern,
 ) {
 	if radiusNm <= 0 {
 		return
@@ -400,7 +426,9 @@ func (*Scene) drawCircle3(
 	for step := 0; step <= ringSegments; step++ {
 		sin, cos := math.Sincos(2 * math.Pi * float64(step) / ringSegments)
 
-		x, y, ok := view.cam.at(point3{east: radiusNm * sin, north: radiusNm * cos, up: heightNm})
+		x, y, ok := view.cam.at(point3{
+			east: centre.east + radiusNm*sin, north: centre.north + radiusNm*cos, up: centre.up,
+		})
 
 		if ok && prevOK && (step-1)%dash.period < dash.on {
 			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), col)

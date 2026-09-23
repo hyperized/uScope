@@ -37,6 +37,13 @@ const (
 	// homeRadius is the little ring around the receiver's own position.
 	homeRadius = 4
 
+	// doubtDashOn and doubtDashOff are the estimate ring's dash, in the same
+	// samples the range rings' pattern is measured in. It is shorter than
+	// theirs so the two read as different things where an estimate happens to
+	// reach a range ring.
+	doubtDashOn  = 2
+	doubtDashOff = 3
+
 	// receiverRadius is the same marker in minimal mode, one pixel wider.
 	// The ordinary view puts the receiver dead centre where the eye already
 	// is; minimal mode following the traffic puts it wherever it happens to
@@ -390,7 +397,7 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 
 	s.drawRings(lay, view.geom, view.scopeNm)
 	s.drawCardinals(lay, view.geom)
-	s.drawHome(lay, view.geom, frame.Receiver.Mode)
+	s.drawHome(lay, view, frame.Receiver)
 
 	if s.airports && view.plottable {
 		s.drawAirports(lay, view.proj, airports.All())
@@ -469,15 +476,25 @@ func (s *Scene) drawReceiver(dst *canvas.Canvas, proj projector, receiver source
 	offX, offY := proj.offset(receiver.Latitude, receiver.Longitude)
 	x, y := int(math.Round(offX)), int(math.Round(offY))
 
+	// The estimate's ring is measured in the projection's own scale, floored
+	// at the marker's ordinary ring and capped at the canvas's own extent.
+	// Nothing on a bare field says how far a pixel is, so the cap is not a
+	// reading, only what stops a wild estimate costing a circle of samples the
+	// canvas rejects one at a time.
+	bounds := dst.Bounds()
+	radius := doubtRadius(receiver, proj.scale, receiverRadius, bounds.Dx()+bounds.Dy())
+
+	reach := max(radius, receiverRadius)
+
 	// The canvas clips a shape that runs off the edge, so this only has to
 	// catch the marker that is entirely outside it. Drawing one of those
 	// costs a few dozen rejected Set calls and says nothing.
-	marker := image.Rect(x-receiverRadius, y-receiverRadius, x+receiverRadius+1, y+receiverRadius+1)
-	if !marker.Overlaps(dst.Bounds()) {
+	marker := image.Rect(x-reach, y-reach, x+reach+1, y+reach+1)
+	if !marker.Overlaps(bounds) {
 		return
 	}
 
-	dst.Circle(x, y, receiverRadius, s.fixColour(receiver.Mode, s.pal.Muted))
+	s.drawFixRing(dst, x, y, radius, receiverRadius, s.fixColour(receiver.Mode, s.pal.Muted))
 	dst.FillCircle(x, y, 1, s.pal.Muted)
 }
 
@@ -576,16 +593,73 @@ func (s *Scene) drawCardinals(lay *layout, geom scopeGeometry) {
 }
 
 // drawHome marks the receiver's own position, with the ring coloured by where
-// that position came from.
+// that position came from and, for an estimate, sized by how far it could be
+// wrong.
 //
 // The ring carries the fix state and the centre dot stays ink, so the marker
-// is in the same place and the same size whatever is known: it is one glance
-// for "am I where I think I am", not a second thing to find on the field. The
-// header's mode word takes the same colour, so the two read as one signal
-// rather than as two facts to reconcile.
-func (s *Scene) drawHome(lay *layout, geom scopeGeometry, mode source.FixMode) {
-	lay.dst.Circle(geom.centerX, geom.centerY, homeRadius, s.fixColour(mode, s.pal.Ink))
+// is in the same place whatever is known: it is one glance for "am I where I
+// think I am", not a second thing to find on the field. The header's mode word
+// takes the same colour, so the two read as one signal rather than as two
+// facts to reconcile.
+//
+// A self-locate estimate is the one mode where the ring also has a size to
+// say. The self-locator hands over a confidence radius with its answer, and
+// the ring is drawn at that radius in the scope's own scale and dashed, so it
+// reads as the area the antenna could be in rather than as one more range
+// ring. The dot in the middle stays where the estimate put it, which is the
+// best guess inside that area.
+func (s *Scene) drawHome(lay *layout, view scopeFrame, receiver source.Receiver) {
+	geom := view.geom
+	radius := doubtRadius(receiver, view.proj.scale, homeRadius, geom.rangeR)
+
+	s.drawFixRing(lay.dst, geom.centerX, geom.centerY, radius, homeRadius, s.fixColour(receiver.Mode, s.pal.Ink))
 	lay.dst.FillCircle(geom.centerX, geom.centerY, 1, s.pal.Ink)
+}
+
+// drawFixRing draws the ring around the receiver's marker: dashed at the
+// estimate's own radius when doubt is above zero, and a solid ring at the
+// marker's ordinary radius otherwise.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (*Scene) drawFixRing(dst *canvas.Canvas, x, y, doubt, plain int, col color.RGBA) {
+	if doubt > 0 {
+		dst.DashedCircle(x, y, doubt, doubtDashOn, doubtDashOff, col)
+
+		return
+	}
+
+	dst.Circle(x, y, plain, col)
+}
+
+// doubtRadius is how far the receiver could be from the position the scope
+// puts it at, in pixels at scale pixels per nautical mile, or zero for any
+// position that is not an estimate.
+//
+// The answer is held between floor and ceiling. Under the floor, which is the
+// marker's ordinary ring, the estimate would be a ring drawn on its own dot,
+// and a confident estimate is still an estimate and still has to look like
+// one. Past the ceiling, which is the range on the full scope, it would be a
+// claim about ground the scope does not show, so the ring sits on the outer
+// range ring and says the antenna could be anywhere in view. A confidence the
+// self-locator never filled in, zero or not a number, lands on the floor for
+// the same reason.
+func doubtRadius(receiver source.Receiver, scale float64, floor, ceiling int) int {
+	if receiver.Mode != source.FixEstimated {
+		return 0
+	}
+
+	pixels := math.Round(receiver.ConfidenceNm * scale)
+	if math.IsNaN(pixels) || pixels <= 0 {
+		return floor
+	}
+
+	// Compared as a float before the conversion: a radius past the ceiling is
+	// answered without ever narrowing a value an int might not hold.
+	if pixels >= float64(ceiling) {
+		return max(floor, ceiling)
+	}
+
+	return max(floor, int(pixels))
 }
 
 // fixColour says how much the receiver's position is worth.

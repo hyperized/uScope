@@ -82,10 +82,19 @@ the fix state is one glance rather than a line to read:
 | green | a GPS fix, with or without altitude |
 | amber | a self-locate estimate, or a GPS fix that has gone with its last position still on screen |
 
-The centre dot stays ink whatever the ring is doing, so the marker is the same
-size and in the same place at any fix state. The header's mode word takes the
-same colour as the ring, so the two are one signal read twice rather than two
-facts to reconcile. A guess and a stale fix share the same amber, because both
+The centre dot stays ink whatever the ring is doing, so the marker is in the
+same place at any fix state. The header's mode word takes the same colour as
+the ring, so the two are one signal read twice rather than two facts to
+reconcile.
+
+An estimate's ring is the one that also has a size. The self-locator hands over
+a confidence radius with its answer, and the amber ring is drawn dashed at that
+radius in the scope's own scale: it is the area the antenna could be in, with
+the dot at the best guess inside it. A tighter answer draws a smaller ring, and
+one wider than the scope sits on the outer range ring, which says the antenna
+could be anywhere in view. The tilted views draw the same ring on the ground,
+and the two bare views draw it around wherever the receiver's marker has
+landed. A guess and a stale fix share the same amber, because both
 are the same caution to the eye: the position under them might not be where
 the receiver actually is right now. Red is kept for `EMERGENCY` alone, so a
 squawk in anger is the one thing on the whole scope that reads as a fault.
@@ -346,8 +355,10 @@ anyone comparing two renders wants. The flag takes that `0` or anything from
 Because the picture is no longer centred on the antenna, minimal mode marks
 where the antenna actually is: a small ring with a dot in it, in the quietest
 colour the palette has so it does not read as a contact. The ring carries the
-fix state the same way the full scope's home marker does. Following the traffic
-can push it off the canvas, and then nothing is drawn for it.
+fix state the same way the full scope's home marker does, and on an estimate
+it is the same dashed ring at the confidence radius. Following the traffic can
+push the marker off the canvas, and then nothing is drawn for it beyond
+whatever arc of that ring still crosses the picture.
 
 #### The two overlays
 

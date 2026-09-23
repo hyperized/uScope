@@ -116,7 +116,7 @@ func (s *Scene) drawBowl3(dst *canvas.Canvas, view scene3) {
 		altitudeFt := float64(band) * bowlStepFt
 
 		s.drawCircle3(dst, view,
-			bowlRadiusNm(altitudeFt, view.scopeNm), view.height(altitudeFt), ink, bowlDash)
+			point3{up: view.height(altitudeFt)}, bowlRadiusNm(altitudeFt, view.scopeNm), ink, bowlDash)
 	}
 
 	s.drawMeridians3(dst, view, ink)

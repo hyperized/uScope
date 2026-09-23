@@ -1228,8 +1228,8 @@ func TestView3DGuards(t *testing.T) {
 		canv := blankCanvas(t)
 		blank := blankCanvas(t)
 
-		scene.drawCircle3(canv, view, 0, 0, theme.Night.Rule, solidDash)
-		scene.drawCircle3(canv, view, -10, 0, theme.Night.Rule, solidDash)
+		scene.drawCircle3(canv, view, point3{}, 0, theme.Night.Rule, solidDash)
+		scene.drawCircle3(canv, view, point3{}, -10, theme.Night.Rule, solidDash)
 
 		if !identicalPixels(canv, blank) {
 			t.Error("a circle of no radius drew something, want nothing")
