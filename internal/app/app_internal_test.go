@@ -952,35 +952,58 @@ func (*themedMarker) Draw(*canvas.Canvas, time.Duration) {}
 
 func (m *themedMarker) SetPalette(pal theme.Palette) { m.palettes = append(m.palettes, pal) }
 
+// sunThemedMarker is a themedMarker that also implements SunThemed,
+// recording every auto switch it is handed, so the l key's third step can be
+// checked the way the first two are.
+type sunThemedMarker struct {
+	themedMarker
+
+	autos []bool
+}
+
+func (m *sunThemedMarker) SetAutoTheme(on bool) { m.autos = append(m.autos, on) }
+
 // TestSessionCycleTheme checks the l key's fan-out directly: every scene that
-// implements Themed gets the new palette, a plain Drawer is left alone, and
-// two cycles land back where they started.
+// implements Themed gets the new palette, a scene that implements SunThemed is
+// told whether the sun is picking, a plain Drawer is left alone, and three
+// cycles land back where they started. Auto hands over the night palette,
+// because the scene, not the session, knows where the receiver is.
 func TestSessionCycleTheme(t *testing.T) {
 	t.Parallel()
 
+	sunThemed := &sunThemedMarker{}
 	themed := &themedMarker{}
 	plain := &markerDrawer{name: plainSceneName}
 
-	ses := &session{scenes: []Drawer{themed, plain}, themeKind: theme.KindNight}
+	ses := &session{scenes: []Drawer{sunThemed, themed, plain}, themeKind: theme.KindNight}
 
-	ses.cycleTheme()
+	for step, want := range []struct {
+		kind theme.Kind
+		pal  theme.Palette
+		auto bool
+	}{
+		{kind: theme.KindDay, pal: theme.Day},
+		{kind: theme.KindAuto, pal: theme.Night, auto: true},
+		{kind: theme.KindNight, pal: theme.Night},
+	} {
+		ses.cycleTheme()
 
-	if ses.themeKind != theme.KindDay {
-		t.Errorf("themeKind after one cycle = %v, want %v", ses.themeKind, theme.KindDay)
-	}
+		if ses.themeKind != want.kind {
+			t.Errorf("themeKind after %d cycles = %v, want %v", step+1, ses.themeKind, want.kind)
+		}
 
-	if len(themed.palettes) != 1 || themed.palettes[0] != theme.Day {
-		t.Errorf("SetPalette calls = %v, want exactly one call with theme.Day", themed.palettes)
-	}
+		for name, got := range map[string][]theme.Palette{
+			"sun themed": sunThemed.palettes,
+			"themed":     themed.palettes,
+		} {
+			if len(got) != step+1 || got[step] != want.pal {
+				t.Errorf("%s scene SetPalette calls = %v, want call %d with %v", name, got, step+1, want.pal)
+			}
+		}
 
-	ses.cycleTheme()
-
-	if ses.themeKind != theme.KindNight {
-		t.Errorf("themeKind after two cycles = %v, want %v", ses.themeKind, theme.KindNight)
-	}
-
-	if len(themed.palettes) != 2 || themed.palettes[1] != theme.Night {
-		t.Errorf("SetPalette calls = %v, want a second call with theme.Night", themed.palettes)
+		if len(sunThemed.autos) != step+1 || sunThemed.autos[step] != want.auto {
+			t.Errorf("SetAutoTheme calls = %v, want call %d with %v", sunThemed.autos, step+1, want.auto)
+		}
 	}
 }
 
@@ -1189,7 +1212,7 @@ func (*configuredMarker) Draw(*canvas.Canvas, time.Duration) {}
 func (m *configuredMarker) Apply(set radar.Settings) { m.settings = append(m.settings, set) }
 
 // TestApplySettings checks applySettings' fan-out directly, the same
-// property TestSessionCycleTheme pins for applyPalette: every scene that
+// property TestSessionCycleTheme pins for applyTheme: every scene that
 // implements Configured gets the settings block it was called with, and a
 // plain Drawer, such as the orientation pattern, is left alone.
 func TestApplySettings(t *testing.T) {

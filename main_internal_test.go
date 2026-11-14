@@ -78,6 +78,7 @@ const (
 	flagBattery    = "--battery"
 	flagAirports   = "--airports"
 	flagShore      = "--shore"
+	flagStars      = "--stars"
 	flagRange      = "--range"
 	flagMinimal    = "--minimal"
 	flagRecenter   = "--recenter"
@@ -94,10 +95,11 @@ const (
 	patternValue  = "pattern"
 	specimenValue = "specimen"
 
-	// dayValue is the one non-default --theme spelling. phosphorValue and
-	// monoValue are --look's two non-default spellings. airlineValue is the
-	// one non-default --colour spelling, offValue the one non-default
-	// --airports spelling.
+	// nightValue and dayValue are --theme's two non-default spellings.
+	// phosphorValue and monoValue are --look's two non-default spellings.
+	// airlineValue is the one non-default --colour spelling, offValue the one
+	// non-default --airports spelling.
+	nightValue    = "night"
 	dayValue      = "day"
 	phosphorValue = "phosphor"
 	monoValue     = "mono"
@@ -166,11 +168,12 @@ func defaultConfig() config {
 		autoRotate: true,
 		fps:        defaultFPS,
 		size:       image.Pt(widthLandscape, heightLandscape),
-		theme:      theme.KindNight,
+		theme:      theme.KindAuto,
 		look:       theme.LookGlass,
 		colour:     radar.ColourAltitude,
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
+		stars:      radar.ToggleOn,
 		recentre:   radar.DefaultRecentre,
 		view:       radar.ViewScope,
 		exaggerate: radar.DefaultExaggerate,
@@ -1124,10 +1127,20 @@ func TestParseFlagsTheme(t *testing.T) {
 		name string
 		args []string
 		want theme.Kind
+
+		// look is set only by the case that gives --look as well, to pin
+		// that auto does not touch the other axis.
+		look theme.Look
 	}{
-		{name: caseDefault, args: nil, want: theme.KindNight},
-		{name: "night explicit", args: []string{flagTheme, defaultTheme}, want: theme.KindNight},
+		{name: caseDefault, args: nil, want: theme.KindAuto},
+		{name: "auto explicit", args: []string{flagTheme, defaultTheme}, want: theme.KindAuto},
+		{name: nightValue, args: []string{flagTheme, nightValue}, want: theme.KindNight},
 		{name: dayValue, args: []string{flagTheme, dayValue}, want: theme.KindDay},
+		{
+			name: "auto beside a look",
+			args: []string{flagTheme, defaultTheme, flagLook, monoValue},
+			want: theme.KindAuto, look: theme.LookMono,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -1139,6 +1152,10 @@ func TestParseFlagsTheme(t *testing.T) {
 
 			want := defaultConfig()
 			want.theme = testCase.want
+
+			if testCase.look != "" {
+				want.look = testCase.look
+			}
 
 			checkConfig(t, got, want)
 		})
@@ -2465,6 +2482,47 @@ func TestParseFlagsShore(t *testing.T) {
 
 			want := defaultConfig()
 			want.shore = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsStars covers --stars: on by default, because the stars are
+// what show the orbit turning, and the same on/off allow list as the rest.
+func TestParseFlagsStars(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		want    radar.Toggle
+		wantErr error
+	}{
+		{name: caseDefault, want: radar.ToggleOn},
+		{name: "on", args: []string{flagStars, defaultOn}, want: radar.ToggleOn},
+		{name: offValue, args: []string{flagStars, offValue}, want: radar.ToggleOff},
+		{name: caseWrongCase, args: []string{flagStars, "On"}, wantErr: errStars},
+		{name: "empty", args: []string{flagStars, ""}, wantErr: errStars},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("parseFlags(%v) error = %v, want %v", testCase.args, err, testCase.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.stars = testCase.want
 
 			checkConfig(t, got, want)
 		})

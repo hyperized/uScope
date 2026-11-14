@@ -1694,8 +1694,11 @@ func TestHeaderClocks(t *testing.T) {
 		zoneB := time.FixedZone("B", -5*60*60)
 		instant := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
 
+		// No position, so no sun block: its sunrise and sunset are local
+		// times too, and it sits left of the UTC clock inside utcClockBox.
 		frameA := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
 		frameA.Now = instant.In(zoneA)
+		frameA.Receiver = source.Receiver{}
 
 		frameB := frameA
 		frameB.Now = instant.In(zoneB)

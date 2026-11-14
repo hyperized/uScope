@@ -270,6 +270,27 @@ func envelopeFraming3(box image.Rectangle, framing framing3, sinEl, cosEl float6
 	return max(far, near)
 }
 
+// horizonRow is the first row of box that newCamera3, framing box at this
+// elevation, puts the floor of the world on: the row a point on the ground at
+// infinite distance projects to, and the line between the sky and the ground.
+//
+// The camera is never rolled, so the horizon is one row across the whole
+// picture. Any level direction resolves onto the camera's up and forward axes
+// as the sine and the cosine of the elevation times the same factor, which
+// cancels, so every point on the ground infinitely far away lands focal times
+// the tangent of the elevation above the middle of the box. A ground point at
+// any finite distance lands below that, and a point higher than the eye
+// above it. The rounding is at's, so nothing at projects on the ground lands
+// above the row this answers.
+//
+// At a shallow tilt such as ten degrees it is a fifth of the way down the
+// picture; past about sixteen degrees on a 16:9 box it is above the top.
+func horizonRow(box image.Rectangle, elevation float64) int {
+	rise := float64(box.Dx()) * math.Tan(elevation*math.Pi/halfCircle)
+
+	return box.Min.Y + box.Dy()/2 - int(math.Round(rise))
+}
+
 // at projects a world point onto the canvas, reporting false when the camera
 // cannot see it.
 //

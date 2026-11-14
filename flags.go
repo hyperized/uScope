@@ -31,7 +31,7 @@ const (
 	defaultSize     = "1280x720"
 	defaultBackend  = "auto"
 	defaultScene    = "radar"
-	defaultTheme    = "night"
+	defaultTheme    = "auto"
 	defaultLook     = "glass"
 	defaultColour   = "altitude"
 	defaultOn       = "on"
@@ -103,11 +103,12 @@ var (
 	errFrames     = errors.New(appName + ": --frames out of range")
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
 	errScene      = errors.New(appName + ": --scene must be radar or pattern")
-	errTheme      = errors.New(appName + ": --theme must be night or day")
+	errTheme      = errors.New(appName + ": --theme must be night, day or auto")
 	errLook       = errors.New(appName + ": --look must be glass, phosphor or mono")
 	errColour     = errors.New(appName + ": --colour must be altitude or airline")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
+	errStars      = errors.New(appName + ": --stars must be on or off")
 	errRange      = errors.New(appName + ": --range must be auto or a range the scope can show")
 	errBattery    = errors.New(appName + ": --battery must not be empty")
 	errLatitude   = errors.New(appName + ": --lat out of range")
@@ -140,6 +141,7 @@ type config struct {
 	colour      radar.ColourMode
 	airports    radar.Toggle
 	shore       radar.Toggle
+	stars       radar.Toggle
 	rangeNm     float64
 	recentre    time.Duration
 	view        radar.View
@@ -193,6 +195,7 @@ type rawFlags struct {
 	colour      string
 	airports    string
 	shore       string
+	stars       string
 	scopeRange  string
 	battery     string
 	beast       string
@@ -251,7 +254,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.scene, "scene", defaultScene,
 		"what to draw: radar or pattern. pattern is a flags-only diagnostic with no key back to it")
 	set.StringVar(&raw.theme, "theme", defaultTheme,
-		"colour theme: night or day. l cycles them while it runs")
+		"colour theme: night, day or auto. auto follows the sun at the receiver, night with no position. "+
+			"l cycles them while it runs")
 	set.StringVar(&raw.look, "look", defaultLook,
 		"which palette to wear: glass, phosphor or mono. k cycles them while it runs")
 	set.StringVar(&raw.colour, "colour", defaultColour,
@@ -260,6 +264,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"draw the airfield markers on the scope: on or off")
 	set.StringVar(&raw.shore, "shore", defaultOn,
 		"draw the coastline and the water fill under the scope: on or off")
+	set.StringVar(&raw.stars, "stars", defaultOn,
+		"draw stars in the night sky of the 3d views: on or off. z flips it while it runs")
 	set.StringVar(&raw.scopeRange, "range", defaultRange,
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
 	// The flag is spelled the American way and the Go identifiers behind it
@@ -355,12 +361,7 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
-	airports, err := parseAirports(raw.airports)
-	if err != nil {
-		return display{}, err
-	}
-
-	shoreToggle, err := parseShore(raw.shore)
+	overlays, err := raw.overlays()
 	if err != nil {
 		return display{}, err
 	}
@@ -394,8 +395,9 @@ func (raw rawFlags) display() (display, error) {
 		look:       look,
 		radar: radar.Settings{
 			Colour:   colour,
-			Airports: airports,
-			Shore:    shoreToggle,
+			Airports: overlays.Airports,
+			Shore:    overlays.Shore,
+			Stars:    overlays.Stars,
 			RangeNm:  rangeNm,
 			Recentre: recentre,
 
@@ -465,6 +467,7 @@ func (raw rawFlags) validated() (config, error) {
 		colour:      show.radar.Colour,
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
+		stars:       show.radar.Stars,
 		rangeNm:     show.radar.RangeNm,
 		recentre:    show.radar.Recentre,
 		view:        show.radar.View,
@@ -681,6 +684,29 @@ func parseShore(text string) (radar.Toggle, error) {
 	}
 
 	return toggle, nil
+}
+
+// overlays parses the three on/off switches, the scope's airfields and shore
+// and the 3D views' stars, into the Settings fields they fill. They are one
+// helper so display stays a flat list of parses rather than growing past
+// funlen.
+func (raw rawFlags) overlays() (radar.Settings, error) {
+	airports, err := parseAirports(raw.airports)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	shoreToggle, err := parseShore(raw.shore)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	stars, err := radar.ParseToggle(raw.stars)
+	if err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errStars, err)
+	}
+
+	return radar.Settings{Airports: airports, Shore: shoreToggle, Stars: stars}, nil
 }
 
 // parseRange reads --range against internal/radar's allow list, which takes

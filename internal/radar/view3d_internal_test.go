@@ -1031,7 +1031,7 @@ func TestHandle3DRuneIgnoresTheRest(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{shown: View3D}
-	if scene.handleRune('z') {
+	if scene.handleRune('y') {
 		t.Error("an unbound key was taken in the 3D view, want it to fall through")
 	}
 }

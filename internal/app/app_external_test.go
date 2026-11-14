@@ -1693,6 +1693,72 @@ func TestRunAppliesTheLookAndTheme(t *testing.T) {
 	}
 }
 
+// sunThemedNamedDrawer is a themedNamedDrawer that also implements
+// app.SunThemed, reporting every auto switch on a channel of its own.
+type sunThemedNamedDrawer struct {
+	*themedNamedDrawer
+
+	autos chan bool
+}
+
+func (d *sunThemedNamedDrawer) SetAutoTheme(on bool) {
+	d.autos <- on
+}
+
+// TestRunHandsAutoToTheScene checks that --theme auto reaches a scene that can
+// resolve it, before the first frame and on every path, since Run applies it
+// before the still and the live paths split. The palette that goes with it is
+// the look's night one: the scene replaces it with the sun's answer itself.
+func TestRunHandsAutoToTheScene(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		cfg      app.Config
+		wantPal  theme.Palette
+		wantAuto bool
+	}{
+		{
+			name:    "auto hands over night and switches the sun on",
+			cfg:     app.Config{Look: theme.LookPhosphor, Theme: theme.KindAuto},
+			wantPal: theme.PhosphorNight, wantAuto: true,
+		},
+		{
+			name:    "day switches the sun off",
+			cfg:     app.Config{Look: theme.LookPhosphor, Theme: theme.KindDay},
+			wantPal: theme.PhosphorDay,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			calls := make(chan string, 1)
+			palettes := make(chan theme.Palette, 1)
+			autos := make(chan bool, 1)
+
+			cfg := testCase.cfg
+			cfg.PNG = filepath.Join(t.TempDir(), "out.png")
+			cfg.Size = image.Pt(16, 16)
+
+			scene := &sunThemedNamedDrawer{newThemedNamedDrawer("radar", calls, palettes), autos}
+
+			if err := app.Run(t.Context(), cfg, io.Discard, app.WithScenes(scene)); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			if got := recvOrTimeout(t, palettes, testTimeout, "the starting palette"); got != testCase.wantPal {
+				t.Errorf("starting palette = %v, want %v", got, testCase.wantPal)
+			}
+
+			if got := recvOrTimeout(t, autos, testTimeout, "the auto switch"); got != testCase.wantAuto {
+				t.Errorf("SetAutoTheme(%v), want SetAutoTheme(%v)", got, testCase.wantAuto)
+			}
+
+			recvOrTimeout(t, calls, testTimeout, "a Draw call")
+		})
+	}
+}
+
 // configuredNamedDrawer is a namedDrawer that also implements app.Configured,
 // reporting every settings block it is handed on its own channel. It stands
 // in for the radar scene, the only one with settings of its own, the same

@@ -578,19 +578,26 @@ func (p Palette) OnBand(col color.RGBA) color.RGBA {
 	return p.BandInk
 }
 
-// Kind names one of the two themes a look carries. It is what --theme parses
-// into and what Config holds as the theme to start on.
+// Kind names a theme: one of the two a look carries, or Auto, which picks
+// between them from the sun. It is what --theme parses into and what Config
+// holds as the theme to start on.
 type Kind string
 
-// The two spellings --theme accepts. Named KindNight and KindDay rather than
+// The three spellings --theme accepts. Named KindNight and KindDay rather than
 // Night and Day so they do not collide with the Palette variables above, which
 // are what a Kind resolves to under the Glass look.
 const (
 	KindNight Kind = "night"
 	KindDay   Kind = "day"
+
+	// KindAuto is night or day by the sun at the receiver, decided by the
+	// scene that knows where the receiver is. Everything in this package
+	// that has to turn it into colours without that knowledge treats it as
+	// night, so Look.Palette(KindAuto) is the night palette.
+	KindAuto Kind = "auto"
 )
 
-// ErrUnknown is returned for a --theme value that is neither spelling.
+// ErrUnknown is returned for a --theme value that is none of the spellings.
 var ErrUnknown = errors.New("theme: unknown theme")
 
 // ErrUnknownLook is the same for a --look value that names none of the three.
@@ -607,20 +614,27 @@ func Parse(text string) (Kind, error) {
 		return KindNight, nil
 	case KindDay:
 		return KindDay, nil
+	case KindAuto:
+		return KindAuto, nil
 	default:
 		return KindNight, fmt.Errorf("%w: %q", ErrUnknown, text)
 	}
 }
 
-// Next cycles to the other theme. Anything that is not KindDay is treated as
-// night and moves to day, so the zero value cycles the same way KindNight
-// does.
+// Next cycles night to day to auto and back to night, which is what the l
+// key is bound to. Anything that is none of the three is treated as night and
+// moves to day, so the zero value cycles the same way KindNight does.
 func (k Kind) Next() Kind {
-	if k == KindDay {
+	switch k {
+	case KindDay:
+		return KindAuto
+	case KindAuto:
 		return KindNight
+	case KindNight:
+		fallthrough
+	default:
+		return KindDay
 	}
-
-	return KindDay
 }
 
 // Look names one of the three palettes uScope can wear. It is what --look
