@@ -77,7 +77,7 @@ const (
 	seenJustNow = 5 * time.Second
 	seenQuarter = 15 * time.Second
 	seenHalf    = 30 * time.Second
-	seenMinute  = time.Minute
+	seenFresh   = time.Minute
 )
 
 // The words those buckets read as.
@@ -249,7 +249,7 @@ func seenBucket(age time.Duration) string {
 		return seenQuarterText
 	case age < seenHalf:
 		return seenHalfText
-	case age < seenMinute:
+	case age < seenFresh:
 		return seenMinuteText
 	default:
 		return seenStaleText

@@ -185,9 +185,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Warnings go to stderr because a terminal backend is busy writing
 	// frames to stdout, and a warning in the middle of a frame is a mess on
 	// screen and an unparseable stream in a pipe.
-	if err := app.Run(ctx, settings, stdout,
+	err = app.Run(ctx, settings, stdout,
 		app.WithStderr(stderr), app.WithSource(src), app.WithBattery(status),
-		app.WithShore(coast)); err != nil {
+		app.WithShore(coast))
+	if err != nil {
 		_, _ = fmt.Fprintln(stderr, explain(err, cfg))
 
 		return exitFailure
