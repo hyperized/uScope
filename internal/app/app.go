@@ -106,13 +106,34 @@ type Themed interface {
 	SetPalette(pal theme.Palette)
 }
 
-// applyPalette hands the palette to every scene that implements Themed. A
-// scene without one, such as the orientation pattern, is left exactly as it
-// was built.
-func applyPalette(scenes []Drawer, pal theme.Palette) {
+// SunThemed is the optional third part of the colour contract, for a scene
+// that can resolve theme.KindAuto itself. Only a scene that knows where the
+// receiver is can ask the sun, so the choice is handed down rather than made
+// here; a Themed scene without it shows auto as night, which is what
+// theme.Look.Palette answers for it.
+type SunThemed interface {
+	SetAutoTheme(on bool)
+}
+
+// applyTheme hands the palette a look and a theme name to every scene that
+// implements Themed, and tells every scene that implements SunThemed whether
+// the sun is picking. A scene with neither, such as the orientation pattern,
+// is left exactly as it was built.
+//
+// The palette goes first. Under auto it is the look's night palette, and
+// SetAutoTheme then makes the scene replace it with the sun's answer before it
+// draws again, so the two calls together are one change of colours.
+func applyTheme(scenes []Drawer, look theme.Look, kind theme.Kind) {
+	pal := look.Palette(kind)
+	auto := kind == theme.KindAuto
+
 	for _, scene := range scenes {
 		if themed, ok := scene.(Themed); ok {
 			themed.SetPalette(pal)
+		}
+
+		if sunThemed, ok := scene.(SunThemed); ok {
+			sunThemed.SetAutoTheme(auto)
 		}
 	}
 }
@@ -154,7 +175,8 @@ type Config struct {
 	Scene       SceneKind
 
 	// Theme is the colour theme to start on. The zero value reads as
-	// theme.KindNight, which is the default on a backlit handheld.
+	// theme.KindNight, the safe answer on a backlit handheld; the --theme flag
+	// defaults to theme.KindAuto rather than relying on it.
 	Theme theme.Kind
 
 	// Look is the palette look to start on, the other half of the pair Theme
@@ -180,8 +202,9 @@ type session struct {
 	active int
 
 	// themeKind and look are the two halves of the palette currently applied:
-	// l cycles night and day, k cycles glass, phosphor and mono, and the pair
-	// names one of the six. Both start at whatever the flags asked for.
+	// l cycles night, day and auto, k cycles glass, phosphor and mono, and the
+	// pair names one of the six, with auto leaving night or day to the scene.
+	// Both start at whatever the flags asked for.
 	themeKind theme.Kind
 	look      theme.Look
 
@@ -208,7 +231,7 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 		return err
 	}
 
-	applyPalette(scenes, cfg.Look.Palette(cfg.Theme))
+	applyTheme(scenes, cfg.Look, cfg.Theme)
 	applySettings(scenes, cfg.Radar)
 
 	active := int(cfg.Scene)
@@ -228,8 +251,8 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 //nolint:ireturn // a scene is a Drawer; that is the whole point of the seam.
 func (s *session) scene() Drawer { return s.scenes[s.active] }
 
-// cycleTheme steps to the other colour theme, which is what the l key is bound
-// to. The look it is worn in does not move.
+// cycleTheme steps night to day to auto and back, which is what the l key is
+// bound to. The look it is worn in does not move.
 func (s *session) cycleTheme() {
 	s.themeKind = s.themeKind.Next()
 	s.repaint()
@@ -247,7 +270,7 @@ func (s *session) cycleLook() {
 // one, not only the one on screen, so switching scenes later still shows the
 // colours that were picked.
 func (s *session) repaint() {
-	applyPalette(s.scenes, s.look.Palette(s.themeKind))
+	applyTheme(s.scenes, s.look, s.themeKind)
 }
 
 // sayf writes a line to the console.

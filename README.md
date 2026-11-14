@@ -38,6 +38,15 @@ aircraft. `n`, `p` and the arrow keys pin it, and Esc lets go again. A squawk
 of 7500, 7600 or 7700 puts `EMERGENCY` on the panel and on the row in red,
 which is the one red thing on the whole screen.
 
+The band across the top has the source and the receiver's position on the
+left, and the UTC and local clocks on the right. Once the position is known,
+the sun's state sits left of the clocks: `DAY`, `CIVIL TWILIGHT`,
+`NAUTICAL TWILIGHT`, `ASTRONOMICAL TWILIGHT` or `NIGHT`, then today's sunrise
+and sunset in local time, as in `DAY ↑ 08:09 ↓ 18:42`. The times
+use the almanac's definition, the upper limb on the horizon, so they agree
+with published tables to the minute. When the band is too narrow to fit it
+beside the source label, the block is left out.
+
 Colour means altitude by default: green under 10,000 ft, white to 25,000,
 orange above. `c` switches to colouring by airline, read off the callsign
 prefix, and the legend lists the four busiest operators in view. `f` filters
@@ -53,6 +62,20 @@ once every two minutes. `e` draws the receiving envelope: the theoretical
 radio horizon as a dashed bowl, and the measured one as a mesh built from
 where the antenna has actually heard something, which is what shows a
 directional antenna or a chimney in the way.
+
+Once the receiver's position is known, the sky above the horizon follows the
+sun there: black at night, a band of deep blue in nautical twilight, an orange
+horizon under a dark zenith around sunrise and sunset, gold with the sun low,
+and pale blue by day. Dawn and dusk look the same. Phosphor paints the sky
+green, mono paints it grey, and the night palettes keep it dark. At the
+default tilt the horizon is above the top of the picture; `[` brings the
+camera down until the sky comes into view.
+
+At night the sky carries a fixed field of stars, so you can see the slow orbit
+turning even when there is no traffic to watch. They turn with the ground at
+the ground's own rate. They are fully on once the sun is six degrees down and
+fade out by sunrise, and they keep to the same brightness ceiling and the same
+hue as the sky behind them. `z` or `--stars off` turns them off.
 
 ![The 3D view with the envelope on](docs/3d.png)
 
@@ -72,8 +95,14 @@ coast back if you want them. There is a bare 3D view as well, fourth on the
 
 There are three looks, each with a night and a day palette. Glass is the
 default, phosphor is a green CRT, and mono is black and white with the
-altitude bands told apart by brightness. `k` cycles the look and `l` flips
-night and day.
+altitude bands told apart by brightness. `k` cycles the look and `l` steps
+through night, day and auto.
+
+Auto is the default. It picks day while the sun at the receiver is above the
+horizon, and night otherwise, so the sky's dusk colours play on the dark
+palette. It checks every ten seconds, and at once when the receiver moves.
+With no position for the receiver yet it stays on night. The `L` cap reads
+`AUTO·DAY` or `AUTO·NIGHT` so you can see what it picked.
 
 | | |
 |---|---|
@@ -208,7 +237,7 @@ true at once and the answer is a compromise.
 | `m` | coastline and water on or off |
 | `c` | colour by altitude or by airline |
 | `f` | filter to one entry of the legend, then back to all |
-| `l` | night or day |
+| `l` | night, day or auto by the sun |
 | `k` | glass, phosphor or mono |
 | `w` | hide the right column and give the picture the whole width |
 | `b` | bias-tee on or off, when the source has one |
@@ -216,10 +245,12 @@ true at once and the answer is a compromise.
 | `o` | 3D views: the camera orbit on or off |
 | Left, Right | 3D views: turn the camera 15 degrees and stop the orbit |
 | `[`, `]` | 3D views: tilt the camera |
+| `z` | 3D views: the stars in the night sky on or off |
 
 Shifted letters do the same as unshifted, because caps lock is easy to hit on
 the uConsole's keyboard. The key bar along the bottom shows every key that
-does something in the view on screen, with its current state.
+does something in the view on screen, with its current state, except `z`,
+which there is no room for.
 
 ## Flags
 
@@ -236,10 +267,11 @@ does something in the view on screen, with its current state.
 | `--view` | `scope` | `scope`, `3d`, `minimal` or `minimal3d` |
 | `--range` | `auto` | range in nautical miles, or `auto` to fit the traffic |
 | `--colour` | `altitude` | `altitude` or `airline` |
-| `--theme` | `night` | `night` or `day` |
+| `--theme` | `auto` | `night`, `day`, or `auto` to follow the sun at the receiver |
 | `--look` | `glass` | `glass`, `phosphor` or `mono` |
 | `--airports` | `on` | airfield markers |
 | `--shore` | `on` | coastline and water |
+| `--stars` | `on` | stars in the 3D views' night sky; `z` flips them |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` |
 | `--backend` | `auto` | `fb`, `kitty`, `blocks` or `png`; `auto` picks the first that works |

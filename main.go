@@ -175,6 +175,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			Colour:     cfg.colour,
 			Airports:   cfg.airports,
 			Shore:      cfg.shore,
+			Stars:      cfg.stars,
 			RangeNm:    cfg.rangeNm,
 			Recentre:   cfg.recentre,
 			View:       cfg.view,

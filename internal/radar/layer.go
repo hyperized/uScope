@@ -90,7 +90,11 @@ type layerKey struct {
 func (s *Scene) paintBackground(dst *canvas.Canvas, frame source.Frame) {
 	if s.layerless() {
 		s.layer = nil
-		dst.Clear(s.pal.Field)
+
+		// The bare tilted view's sky is its clear; see skyClears.
+		if !s.skyClears() {
+			dst.Clear(s.pal.Field)
+		}
 
 		return
 	}

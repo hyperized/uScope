@@ -194,6 +194,14 @@ type Scene struct {
 	icon       *sprite.Bitmap
 	now        func() time.Time
 
+	// sunTheme is the auto theme: on when --theme auto or the l key asked the
+	// sun to pick night or day. See autotheme.go.
+	sunTheme autoTheme
+
+	// daylight is the sun block's condition and times, shown in the header.
+	// See sunblock.go.
+	daylight daylight
+
 	// trail is how much of each aircraft's track is drawn, which the t key
 	// cycles, and autoRange is what the r key toggles.
 	trail     trailMode
@@ -240,6 +248,10 @@ type Scene struct {
 	landPoints []image.Point
 	landSpans  []landSpan
 	landRings  [][]image.Point
+
+	// sky is the tilted views' sky: the sun it was last worked out from and
+	// the colours and rows that came to. See sky3d.go.
+	sky sky3
 
 	// shown is which of the four views is on screen, which the v key cycles
 	// and --view picks the start of. The minimal, perspective and bare helpers
@@ -343,6 +355,11 @@ type Scene struct {
 	azimuthAt time.Duration
 	elapsed   time.Duration
 	orbiting  bool
+
+	// stars is whether the tilted views' night sky carries its star field,
+	// which the z key toggles. It starts on: the field is what lets a camera
+	// that turns once every two minutes be seen to turn at all.
+	stars bool
 
 	// envelope is whether the receiving envelope is drawn, which the e key
 	// toggles. It starts on: the envelope is most of the reason the view
@@ -535,6 +552,7 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		elevation:  defaultElevation,
 		orbiting:   true,
 		envelope:   true,
+		stars:      true,
 		exaggerate: DefaultExaggerate,
 	}
 
@@ -588,6 +606,12 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	if frame.Now.IsZero() {
 		frame.Now = s.now()
 	}
+
+	// First, so a palette the sun changes is the one every layer below is
+	// keyed and drawn on, the key cap included.
+	s.resolveTheme(frame)
+	s.resolveSky(frame)
+	s.resolveDaylight(frame)
 
 	// Kept for the camera keys, which arrive between two frames and have to
 	// know where the orbit had got to when the last one was drawn.

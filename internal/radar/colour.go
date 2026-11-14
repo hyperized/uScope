@@ -178,6 +178,11 @@ type Settings struct {
 	// Scene gets the plain projection until it asks for the other one, and the
 	// command line asks on its behalf.
 	Recentre time.Duration
+
+	// Stars is whether the tilted views' night sky carries its stars. Zero
+	// reads as on, the way Airports does, because the stars are what show
+	// the 3D view's orbit turning.
+	Stars Toggle
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
@@ -196,6 +201,7 @@ func (s *Scene) Apply(set Settings) {
 	s.applyRange(set.RangeNm)
 	s.applyRecentre(set.Recentre)
 	s.applyExaggerate(set.Exaggerate)
+	s.stars = set.Stars.On()
 }
 
 // applyExaggerate sets how far the 3D view stretches altitude.

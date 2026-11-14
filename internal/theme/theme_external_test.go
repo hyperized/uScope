@@ -715,12 +715,14 @@ func TestParse(t *testing.T) {
 	}{
 		{name: "night", text: "night", want: theme.KindNight},
 		{name: "day", text: "day", want: theme.KindDay},
+		{name: "auto", text: "auto", want: theme.KindAuto},
 		{name: "empty string is rejected", text: "", wantErr: true},
 		{
 			// --theme is an allow list, not free text, so the exact spelling
 			// is what is accepted rather than a case-insensitive match of it.
 			name: "wrong case is rejected", text: "Night", wantErr: true,
 		},
+		{name: "auto in the wrong case is rejected too", text: "Auto", wantErr: true},
 		{name: "unknown value is rejected", text: "sepia", wantErr: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -793,6 +795,12 @@ func TestLookPalette(t *testing.T) {
 			look: theme.Look("sepia"), kind: theme.KindDay, want: theme.Day,
 		},
 		{
+			// Auto is the scene's to resolve, since only the scene knows where
+			// the receiver is. Anything asked without that answer gets night.
+			name: "auto resolves to night without a receiver to ask",
+			look: theme.LookMono, kind: theme.KindAuto, want: theme.MonoNight,
+		},
+		{
 			name: "an unknown kind falls back to night",
 			look: theme.LookPhosphor, kind: theme.Kind("dusk"), want: theme.PhosphorNight,
 		},
@@ -807,32 +815,30 @@ func TestLookPalette(t *testing.T) {
 	}
 }
 
+// TestKindNext pins the l key's order. Auto comes last so the two fixed
+// themes stay one press apart, the way they were before auto existed.
 func TestKindNext(t *testing.T) {
 	t.Parallel()
 
-	t.Run("night moves to day", func(t *testing.T) {
-		t.Parallel()
+	for _, testCase := range []struct {
+		name string
+		from theme.Kind
+		want theme.Kind
+	}{
+		{name: "night moves to day", from: theme.KindNight, want: theme.KindDay},
+		{name: "day moves to auto", from: theme.KindDay, want: theme.KindAuto},
+		{name: "auto moves back to night, completing the cycle", from: theme.KindAuto, want: theme.KindNight},
+		{name: "the zero value cycles the same way night does", from: theme.Kind(""), want: theme.KindDay},
+		{name: "an unknown kind cycles the same way night does", from: theme.Kind("dusk"), want: theme.KindDay},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 
-		if got := theme.KindNight.Next(); got != theme.KindDay {
-			t.Errorf("KindNight.Next() = %v, want %v", got, theme.KindDay)
-		}
-	})
-
-	t.Run("day moves back to night, completing the cycle", func(t *testing.T) {
-		t.Parallel()
-
-		if got := theme.KindDay.Next(); got != theme.KindNight {
-			t.Errorf("KindDay.Next() = %v, want %v", got, theme.KindNight)
-		}
-	})
-
-	t.Run("the zero value cycles the same way night does", func(t *testing.T) {
-		t.Parallel()
-
-		if got := theme.Kind("").Next(); got != theme.KindDay {
-			t.Errorf(`Kind("").Next() = %v, want %v`, got, theme.KindDay)
-		}
-	})
+			if got := testCase.from.Next(); got != testCase.want {
+				t.Errorf("%q.Next() = %v, want %v", testCase.from, got, testCase.want)
+			}
+		})
+	}
 }
 
 // TestParseLook checks --look's allow list the same way TestParse checks

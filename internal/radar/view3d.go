@@ -250,23 +250,28 @@ func (s *Scene) envelopeDrawn() bool {
 // behind it, so sorting several thousand segments per frame would buy a
 // picture nobody could tell from this one.
 func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
-	view, drawable := s.measure3D(lay, frame, elapsed)
-	if !drawable {
-		return
-	}
-
 	// Everything below draws through a window onto the scope box rather than
 	// onto the whole frame. The picture is framed so the outer range ring fills
 	// most of the box, and the envelope around it is taller than the range is
 	// wide, so a good part of the scene genuinely falls outside: unclipped, the
 	// bowl's meridians run straight across the flight list.
-	clipped := *lay
-
 	window, room := s.window(lay.dst, lay.scope)
 	if !room {
 		return
 	}
 
+	// The sky goes down before the camera is measured, because in the bare
+	// view it is the frame's only clear and a frame with no camera to draw
+	// still has to be cleared.
+	s.paintSky(window, lay.scope)
+	s.drawStars(window, lay.scope)
+
+	view, drawable := s.measure3D(lay, frame, elapsed)
+	if !drawable {
+		return
+	}
+
+	clipped := *lay
 	clipped.dst = window
 
 	s.drawGround3(&clipped, view, frame.Receiver)

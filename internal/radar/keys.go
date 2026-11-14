@@ -158,7 +158,7 @@ func (s *Scene) toggleBiasTee() bool {
 
 // handle3DRune maps the camera keys, which only the two 3D views bind.
 //
-// They belong to the picture rather than to the scene, so e, o and the
+// They belong to the picture rather than to the scene, so e, o, z and the
 // brackets fall through to the run loop in the flat views, where there is no
 // camera to move and no envelope to toggle. A key that quietly changed state
 // nothing on screen could show would be a key whose effect turned up as a
@@ -174,6 +174,8 @@ func (s *Scene) handle3DRune(value rune) bool {
 		return s.toggleEnvelope()
 	case 'o', 'O':
 		s.toggleOrbit()
+	case 'z', 'Z':
+		s.stars = !s.stars
 	case '[':
 		s.tilt(-tiltStep)
 	case ']':

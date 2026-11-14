@@ -3755,8 +3755,9 @@ func TestNewStartsOnGlassNightWithoutAPalette(t *testing.T) {
 
 // TestDrawCapsFitsAtItsWidestState measures the bar the way the scene itself
 // draws it, at the widest state it ever reaches: the 3D view, a dongle with a
-// bias-tee, airline colour, the short trail, the mid-band filter and the
-// phosphor look, the longest of the three look words.
+// bias-tee, airline colour, the short trail, the mid-band filter, the
+// phosphor look, the longest of the three look words, and the auto theme at
+// night, whose AUTO·NIGHT is the longest word any cap carries.
 //
 // drawCaps stops after the cap that reaches the right margin rather than
 // wrapping or eliding one, so a bar that had grown past its budget would lose
@@ -3770,7 +3771,7 @@ func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
 	// widestBarLastCapEnd is where the tilt cap, the last one in the bar,
 	// ends at exactly this state. It is named so a change to any cap's word
 	// shows up here rather than as a number nobody can place.
-	const widestBarLastCapEnd = 1195
+	const widestBarLastCapEnd = 1235
 
 	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
 	if err != nil {
@@ -3784,6 +3785,7 @@ func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
 		colour:        ColourAirline,
 		trail:         trailShort,
 		filter:        filterState{kind: filterBand, band: bandMid},
+		sunTheme:      autoTheme{on: true},
 	}
 	scene.SetPalette(theme.PhosphorNight)
 

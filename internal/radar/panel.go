@@ -3,7 +3,6 @@ package radar
 import (
 	"image"
 	"image/color"
-	"time"
 	"unicode/utf8"
 
 	"github.com/hyperized/uScope/internal/source"
@@ -142,9 +141,16 @@ const (
 	labelAirline  = "AIRLINE"
 	labelNight    = "NIGHT"
 	labelDay      = "DAY"
-	labelGlass    = "GLASS"
-	labelPhosphor = "PHOSPHOR"
-	labelMono     = "MONO"
+
+	// labelAutoNight and labelAutoDay are the L cap under the auto theme. Both
+	// words are on it, because AUTO alone would leave the operator to guess
+	// which of the two the sun picked, and the guess is the thing auto is for.
+	// The middle dot is the separator the card and the strips already use.
+	labelAutoNight = "AUTO·NIGHT"
+	labelAutoDay   = "AUTO·DAY"
+	labelGlass     = "GLASS"
+	labelPhosphor  = "PHOSPHOR"
+	labelMono      = "MONO"
 
 	// trailBarLabel is what the trail cap falls back to. It is never drawn:
 	// capLabel answers capTrails from the mode itself, and every mode has a
@@ -170,9 +176,10 @@ type keyCap struct {
 // leaving, then moving through the list, then the five things that change what
 // is on the field, then the three that change how it looks.
 //
-// Thirteen softkeys come to 841 pixels of the 1248 the panel leaves between
+// Thirteen softkeys come to 876 pixels of the 1248 the panel leaves between
 // its margins, measured with every cycling key on its longest word: AIRLINE,
-// SHORT, 10-25K and PHOSPHOR. Nothing here has to be shortened to fit. See
+// SHORT, 10-25K, AUTO·NIGHT and PHOSPHOR. Nothing here has to be shortened to
+// fit. See
 // drawSoftkey for how one box is measured and view3DCaps for the widest the
 // bar ever gets.
 //
@@ -180,9 +187,9 @@ type keyCap struct {
 // the colour mode's own legend with one entry picked out of it and the two
 // keys are reached for together.
 //
-// K sits next to L for the same reason. L picks night or day and K picks the
-// palette it is worn in, so the two are one choice about how the panel looks
-// made in two presses.
+// K sits next to L for the same reason. L picks night, day or auto and K
+// picks the palette it is worn in, so the two are one choice about how the
+// panel looks made in two presses.
 //
 // The select cap is drawn as the two arrow glyphs rather than as N/P. Both are
 // bound, but the arrows are what a hand reaches for first, and all four
@@ -223,12 +230,18 @@ var keyCaps = [...]keyCap{
 // That was checked before this was written rather than assumed, the same way
 // the up and down pair was.
 //
-// Seventeen softkeys and the bias-tee key come to 1179 pixels of the 1248 the
+// Seventeen softkeys and the bias-tee key come to 1214 pixels of the 1248 the
 // panel leaves between its margins, which is the whole bar at its longest: the
 // 3D view, on a dongle that has a bias-tee, with every cycling cap on its
-// longest word. Nothing here has to be shortened either, and ENVELOPE,
-// AIRPORTS and PHOSPHOR all fit at full length with 69 pixels to spare. See
-// the note on keyCaps.
+// longest word, the auto theme's AUTO·NIGHT included. The last box ends at
+// x=1230, 34 pixels inside the right margin. TestDrawCapsFitsAtItsWidestState
+// and TestAutoThemeKeyBarFitsAtPanelWidth are the guards. See the note on
+// keyCaps.
+//
+// z, which turns the stars on and off, has no cap here. Z STARS would take
+// the widest bar to x=1290, past the margin, and at the view's default tilt
+// the full view shows no sky for stars to be in anyway. The key still works
+// in both 3D views.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
@@ -430,11 +443,7 @@ func (s *Scene) capLabel(entry keyCap) string {
 
 		return labelAltitude
 	case capTheme:
-		if s.light {
-			return labelDay
-		}
-
-		return labelNight
+		return s.themeLabel()
 	case capLook:
 		return lookLabel(s.look)
 	case capTrails:
@@ -445,6 +454,21 @@ func (s *Scene) capLabel(entry keyCap) string {
 		fallthrough
 	default:
 		return entry.label
+	}
+}
+
+// themeLabel is the word the L cap carries, read off the palette on screen for
+// the reason capLabel gives, with AUTO in front of it while the sun is picking.
+func (s *Scene) themeLabel() string {
+	switch {
+	case s.sunTheme.on && s.light:
+		return labelAutoDay
+	case s.sunTheme.on:
+		return labelAutoNight
+	case s.light:
+		return labelDay
+	default:
+		return labelNight
 	}
 }
 
@@ -533,10 +557,14 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	//
 	// It is centred on the same middle the type is, which is the middle of
 	// what the fill covers.
-	edge := s.drawHeaderRight(lay, (bounds.Min.Y+rule)/2, frame.Now)
+	//
+	// The receiver line goes down before it, because the sun block on the
+	// right sits across both lines of the left-hand stack and has to stop
+	// short of whichever of the two reaches further.
+	reach := s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
+	edge := s.drawHeaderRight(lay, (bounds.Min.Y+rule)/2, frame, reach)
 
 	s.drawWordmark(lay, top, frame, edge-sourceLabelGap)
-	s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
 
 	lay.dst.FillRect(image.Rect(bounds.Min.X, rule, bounds.Max.X, rule+ruleHeight), s.pal.Rule)
 
@@ -673,9 +701,12 @@ func cutMarker(face *psf.Font) string {
 // the machine: they are the same two numbers whatever produced them, and it is
 // the mode word in front of them that says what they are worth.
 //
+// It returns the x the line ends at, which is how far the sun block on the
+// right of the band may reach.
+//
 // The face is known to be present for the same reason drawWordmark's is:
 // drawHeader drops the band rather than half of it.
-func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver) {
+func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver) int {
 	face := s.faces.Small
 	ink := s.pal.OnBand(s.fixColour(receiver.Mode, s.pal.BandInk))
 	left := text.Draw(lay.dst, face, lay.left, top, locPrefix, s.pal.BandInk)
@@ -686,14 +717,16 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.DoubtNm()), ink)
 		pen = text.Draw(lay.dst, face, pen, top, rangeUnit, ink)
 		pen = s.drawBound(lay.dst, face, pen, top, receiver)
-		s.drawDoubt(lay.dst, face, pen, top, receiver.Violated)
+
+		return s.drawDoubt(lay.dst, face, pen, top, receiver.Violated)
 	case source.LabelNone:
-		text.Draw(lay.dst, face, left, top, noFixText, ink)
+		return text.Draw(lay.dst, face, left, top, noFixText, ink)
 	default:
 		pen := text.Draw(lay.dst, face, left, top, modeWord(receiver.Mode), ink) + modeGap
 		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.OnBand(s.pal.Data))
 		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.OnBand(s.pal.Data))
-		drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.OnBand(s.pal.Data))
+
+		return drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.OnBand(s.pal.Data))
 	}
 }
 
@@ -727,13 +760,14 @@ func (s *Scene) drawBound(dst *canvas.Canvas, face *psf.Font, pen, top int, rece
 //
 // It is drawn in the caution colour, which is what the whole estimate line
 // already carries, so it reads as part of the same doubt rather than as a
-// second thing to decode.
-func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated int) {
+// second thing to decode. It returns the pen past the marker, or where it
+// would have gone when there is none.
+func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated int) int {
 	if violated == 0 {
-		return
+		return pen
 	}
 
-	text.Draw(dst, face, pen, top, doubtMarker, s.pal.OnBand(s.pal.Caution))
+	return text.Draw(dst, face, pen, top, doubtMarker, s.pal.OnBand(s.pal.Caution))
 }
 
 // modeWord opens the receiver line when there are coordinates after it.
@@ -855,26 +889,33 @@ func (s *Scene) bandMuted() color.RGBA {
 }
 
 // drawHeaderRight fills the right of the band: the battery, then the local
-// clock, then UTC beside it.
+// clock, then UTC beside it, then the sun block when there is room for it.
 //
 // It is laid out right to left because the right edge is the only fixed point
 // there. The battery's width depends on whether there is a battery at all, and
 // the clocks are set in two different faces, so anything measured from the
 // left would have to be measured twice.
 // It returns the x the whole block starts at, which is where the source label
-// on the other side of the band has to stop.
-func (s *Scene) drawHeaderRight(lay *layout, middle int, now time.Time) int {
+// on the other side of the band has to stop. reach is where the receiver line
+// under the wordmark ended, the other thing the sun block must not run into.
+func (s *Scene) drawHeaderRight(lay *layout, middle int, frame source.Frame, reach int) int {
 	pen := lay.right
 	if left, drawn := s.drawBattery(lay, pen, middle); drawn {
 		pen = left - clockGap
 	}
 
-	local := now.AppendFormat(s.clock[:0], clockFormat)
+	local := frame.Now.AppendFormat(s.clock[:0], clockFormat)
 	pen = s.drawClock(lay, pen, middle, labelLocal, s.faces.Large, local) - clockGap
 
-	utc := append(now.UTC().AppendFormat(s.clock[:0], clockFormat), utcSuffix)
+	utc := append(frame.Now.UTC().AppendFormat(s.clock[:0], clockFormat), utcSuffix)
+	pen = s.drawClock(lay, pen, middle, labelUTC, s.faces.Body, utc)
 
-	return s.drawClock(lay, pen, middle, labelUTC, s.faces.Body, utc)
+	limit := max(lay.left+s.wordmarkWidth(frame), reach+sourceLabelGap)
+	if left, drawn := s.drawSunBlock(lay, pen-clockGap, middle, limit); drawn {
+		pen = left
+	}
+
+	return pen
 }
 
 // drawClock sets one labelled clock ending at rightX and returns the x its
