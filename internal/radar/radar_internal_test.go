@@ -4201,11 +4201,12 @@ func TestFollowAllocations(t *testing.T) {
 
 	// Every call steps the frame clock a whole minute, so the cadence is due
 	// on each one and the expensive half of follow runs every time.
-	if got := testing.AllocsPerRun(50, func() {
+	got := testing.AllocsPerRun(50, func() {
 		tick++
 		frame.Now = base.Add(time.Duration(tick) * time.Minute)
 		scene.follow(frame, time.Duration(tick)*time.Second)
-	}); got != 0 {
+	})
+	if got != 0 {
 		t.Errorf("follow allocated %.1f times per frame, want 0", got)
 	}
 }

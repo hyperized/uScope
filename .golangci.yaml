@@ -37,6 +37,12 @@ linters:
           arguments: [ 20 ]
         - name: cyclomatic
           arguments: [ 15 ]
+        - name: unhandled-error
+          # bytes.Buffer and strings.Builder document that their Write
+          # methods never return an error, so checking it is noise.
+          arguments:
+            - "bytes\\.Buffer\\.Write.*"
+            - "strings\\.Builder\\.Write.*"
         - name: max-public-structs
           # pkg/canvas exposes the drawing surface plus its palette, and
           # pkg/fbdev the device plus its options; the default of 5 forces
