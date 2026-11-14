@@ -78,12 +78,12 @@ func TestPlanBoardKeepsTheStripRatherThanAnEmptyMarkLine(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t)}
-	height := scene.halfStripHeight()
+	height := scene.halfStripHeight(design())
 
 	// One strip's worth of room and two aircraft: the unmarked window already
 	// gives up the second one, so trying a below line at all costs the only
 	// strip the room has left.
-	board := scene.planBoard(height, 2, 0)
+	board := scene.planBoard(design(), height, 2, 0)
 
 	if board.count != 1 || board.above != 0 || board.below != 1 {
 		t.Errorf("planBoard(%d, 2, 0) = %+v, want one strip and a below line, not an empty board", height, board)
@@ -99,7 +99,7 @@ func TestPlanBoardAccountsForEveryAircraft(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t)}
-	height := scene.halfStripHeight()
+	height := scene.halfStripHeight(design())
 
 	const (
 		wholeFleet = 8
@@ -139,7 +139,7 @@ func TestPlanBoardAccountsForEveryAircraft(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			board := scene.planBoard(testCase.room, testCase.total, testCase.sel)
+			board := scene.planBoard(design(), testCase.room, testCase.total, testCase.sel)
 
 			if got := board.above + board.count + board.below; got != testCase.total {
 				t.Errorf("above(%d) + count(%d) + below(%d) = %d, want %d",
@@ -164,7 +164,7 @@ func TestDrawBoardHeadSkipsFieldsThePlanDropped(t *testing.T) {
 	)
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
-	height := scene.boardHeadHeight()
+	height := scene.boardHeadHeight(design())
 
 	draw := func(speedOn bool) int {
 		canv, err := canvas.New(headCanvasWidth, height)
@@ -211,7 +211,7 @@ func TestDrawBoardDrawsTheAboveLine(t *testing.T) {
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
 
-	plan, ok := scene.planStrips(0, boardCanvasWidth)
+	plan, ok := scene.planStrips(design(), 0, boardCanvasWidth)
 	if !ok {
 		t.Fatal("planStrips refused a generous width")
 	}
@@ -224,7 +224,7 @@ func TestDrawBoardDrawsTheAboveLine(t *testing.T) {
 	}
 
 	frame := source.Frame{Planes: planes}
-	height := scene.halfStripHeight()
+	height := scene.halfStripHeight(design())
 	canvasHeight := height * (visibleCount + 1)
 
 	canv, err := canvas.New(boardCanvasWidth, canvasHeight)
@@ -268,7 +268,7 @@ func TestDrawBoardStripsStopsAtTheWindowsEnd(t *testing.T) {
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night, filter: filterState{kind: filterBand, band: bandLow}}
 
-	plan, ok := scene.planStrips(0, canvasWidth)
+	plan, ok := scene.planStrips(design(), 0, canvasWidth)
 	if !ok {
 		t.Fatal("planStrips refused a generous width")
 	}
@@ -282,7 +282,7 @@ func TestDrawBoardStripsStopsAtTheWindowsEnd(t *testing.T) {
 	}
 
 	frame := source.Frame{Planes: planes}
-	height := scene.halfStripHeight()
+	height := scene.halfStripHeight(design())
 
 	canv, err := canvas.New(canvasWidth, height*(windowCount+extra))
 	if err != nil {
@@ -352,7 +352,7 @@ func TestDrawCardPlainRefusesWhenTheLevelClauseWillNotFit(t *testing.T) {
 	frame := source.Frame{Now: time.Now()}
 
 	left := cardRule + cardPadX
-	tooNarrow := left + measure(scene.faces.Small, widestPlainLevel) - 1
+	tooNarrow := left + design().measure(scene.faces.Small, widestPlainLevel) - 1
 
 	canv, err := canvas.New(tooNarrow+1, tooNarrow+1)
 	if err != nil {
@@ -401,8 +401,8 @@ func TestDrawCardPlainStopsAfterAClauseThatWillNotFit(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	pen := scene.drawPlainLevel(scratch, left, 0, plane)
-	right := pen + measure(face, widestPlainPlace) - 1
+	pen := scene.drawPlainLevel(&layout{dst: scratch}, left, 0, plane)
+	right := pen + design().measure(face, widestPlainPlace) - 1
 
 	canv, err := canvas.New(canvasSize, canvasSize)
 	if err != nil {
@@ -456,7 +456,7 @@ func TestDrawPlainPlaceBranches(t *testing.T) {
 
 		canv := newCanv(t)
 
-		pen, drawn := scene.drawPlainPlace(canv, left, top, canvasSize, airplane.Snapshot{})
+		pen, drawn := scene.drawPlainPlace(&layout{dst: canv}, left, top, canvasSize, airplane.Snapshot{})
 		if pen != left || !drawn {
 			t.Errorf("drawPlainPlace on an undecoded position = (%d, %v), want (%d, true)", pen, drawn, left)
 		}
@@ -471,9 +471,9 @@ func TestDrawPlainPlaceBranches(t *testing.T) {
 
 		canv := newCanv(t)
 		plane := airplane.Snapshot{Latitude: coordinateSampleLat, Longitude: coordinateSampleLat}
-		right := left + measure(face, widestPlainPlace) - 1
+		right := left + design().measure(face, widestPlainPlace) - 1
 
-		pen, drawn := scene.drawPlainPlace(canv, left, top, right, plane)
+		pen, drawn := scene.drawPlainPlace(&layout{dst: canv}, left, top, right, plane)
 		if pen != left || drawn {
 			t.Errorf("drawPlainPlace with no room = (%d, %v), want (%d, false)", pen, drawn, left)
 		}
@@ -506,10 +506,10 @@ func TestDrawPlainSeenRefusesWhenTooNarrow(t *testing.T) {
 
 	canv.Clear(theme.Night.Field)
 
-	right := left + measure(face, widestPlainSeen) - 1
+	right := left + design().measure(face, widestPlainSeen) - 1
 	plane := airplane.Snapshot{LastUpdate: time.Now()}
 
-	scene.drawPlainSeen(canv, left, top, right, time.Now(), plane)
+	scene.drawPlainSeen(&layout{dst: canv}, left, top, right, time.Now(), plane)
 
 	if got := filterPainted(canv); got != 0 {
 		t.Errorf("painted %d pixels when the seen clause could not fit, want none", got)
@@ -530,10 +530,10 @@ func TestStatusWidthCountsTheFilteredTag(t *testing.T) {
 		total = 9
 	)
 
-	plain := scene.statusWidth(selection{found: true}, shown, total)
-	hidden := scene.statusWidth(selection{found: true, hidden: true}, shown, total)
+	plain := scene.statusWidth(design(), selection{found: true}, shown, total)
+	hidden := scene.statusWidth(design(), selection{found: true, hidden: true}, shown, total)
 
-	want := measureTracked(scene.faces.Small, selFilteredTag)
+	want := design().measureTracked(scene.faces.Small, selFilteredTag)
 	if got := hidden - plain; got != want {
 		t.Errorf("statusWidth grew by %d pixels for the filtered tag, want %d", got, want)
 	}

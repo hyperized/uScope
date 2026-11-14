@@ -258,7 +258,7 @@ type scopeGeometry struct {
 // It is passed in rather than worked out here, because the scene decides
 // whether there are labels at all and this only has to know how much space
 // they take.
-func geometry(box image.Rectangle, inset int) (scopeGeometry, bool) {
+func geometry(box image.Rectangle, inset, gap int) (scopeGeometry, bool) {
 	side := min(box.Dx(), box.Dy())
 	if side <= 0 {
 		return scopeGeometry{}, false
@@ -269,7 +269,7 @@ func geometry(box image.Rectangle, inset int) (scopeGeometry, bool) {
 		centerY: box.Min.Y + box.Dy()/2,
 		outer:   side/2 - inset,
 	}
-	geom.rangeR = geom.outer - ringInset
+	geom.rangeR = geom.outer - gap
 
 	return geom, geom.rangeR > 0
 }
@@ -306,12 +306,12 @@ func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame,
 
 	// The boundary ring has to leave room outside itself for the N E S W
 	// letters, or they would be drawn off the edge of the frame.
-	inset := cardinalGap
+	inset := lay.px(cardinalGap)
 	if lay.labels {
-		inset += lineHeight(s.faces.Body)
+		inset += lay.lineHeight(s.faces.Body)
 	}
 
-	geom, drawable := geometry(lay.scope, inset)
+	geom, drawable := geometry(lay.scope, inset, lay.px(ringInset))
 	if !drawable {
 		return scopeFrame{}, false
 	}
@@ -392,7 +392,7 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 	}
 
 	if s.shoreOn && view.plottable {
-		s.drawShore(lay.dst, view)
+		s.drawShore(lay.dst, view, lay.unit())
 	}
 
 	s.drawRings(lay, view.geom, view.scopeNm)
@@ -422,7 +422,7 @@ func (s *Scene) drawMinimalField(lay *layout, view scopeFrame) {
 	s.rangeLabelCount = 0
 
 	if s.minimalShore {
-		s.drawShore(lay.dst, view)
+		s.drawShore(lay.dst, view, lay.unit())
 	}
 
 	if s.minimalAirports {
@@ -444,7 +444,7 @@ func (s *Scene) drawTraffic(lay *layout, frame source.Frame) {
 	}
 
 	if s.minimal() {
-		s.drawReceiver(lay.dst, view.proj, frame.Receiver)
+		s.drawReceiver(lay, view.proj, frame.Receiver)
 	}
 
 	s.drawAircraft(lay, view.proj, frame)
@@ -465,7 +465,7 @@ func (s *Scene) drawTraffic(lay *layout, frame source.Frame) {
 // there is nothing to draw and nothing wrong.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawReceiver(dst *canvas.Canvas, proj projector, receiver source.Receiver) {
+func (s *Scene) drawReceiver(lay *layout, proj projector, receiver source.Receiver) {
 	if !positioned(receiver.Latitude, receiver.Longitude) {
 		return
 	}
@@ -481,10 +481,11 @@ func (s *Scene) drawReceiver(dst *canvas.Canvas, proj projector, receiver source
 	// Nothing on a bare field says how far a pixel is, so the cap is not a
 	// reading, only what stops a wild estimate costing a circle of samples the
 	// canvas rejects one at a time.
-	bounds := dst.Bounds()
-	radius := doubtRadius(receiver, proj.scale, receiverRadius, bounds.Dx()+bounds.Dy())
+	bounds := lay.dst.Bounds()
+	plain := lay.px(receiverRadius)
+	radius := doubtRadius(receiver, proj.scale, plain, bounds.Dx()+bounds.Dy())
 
-	reach := max(radius, receiverRadius)
+	reach := max(radius, plain)
 
 	// The canvas clips a shape that runs off the edge, so this only has to
 	// catch the marker that is entirely outside it. Drawing one of those
@@ -494,14 +495,15 @@ func (s *Scene) drawReceiver(dst *canvas.Canvas, proj projector, receiver source
 		return
 	}
 
-	s.drawFixRing(dst, x, y, radius, receiverRadius, s.fixColour(receiver.Mode, s.pal.Muted))
-	dst.FillCircle(x, y, 1, s.pal.Muted)
+	s.drawFixRing(lay, x, y, radius, plain, s.fixColour(receiver.Mode, s.pal.Muted))
+	lay.dst.FillCircle(x, y, lay.unit(), s.pal.Muted)
 }
 
 // drawRings draws the boundary and the range rings, with the range written on
 // each one.
 func (s *Scene) drawRings(lay *layout, geom scopeGeometry, scopeNm float64) {
-	lay.dst.Circle(geom.centerX, geom.centerY, geom.outer, s.pal.Rule)
+	weight := lay.unit()
+	lay.dst.StrokeCircle(geom.centerX, geom.centerY, geom.outer, weight, s.pal.Rule)
 
 	// Reset here rather than after the loop: drawRangeLabel below fills the
 	// array back in as it goes, and a label dropped for want of room simply
@@ -512,7 +514,8 @@ func (s *Scene) drawRings(lay *layout, geom scopeGeometry, scopeNm float64) {
 
 	for ring := 1; ring <= ringCount; ring++ {
 		radius := geom.rangeR * ring / ringCount
-		lay.dst.DashedCircle(geom.centerX, geom.centerY, radius, dashOn, dashOff, s.pal.Rule)
+		lay.dst.StrokeDashedCircle(geom.centerX, geom.centerY, radius, lay.px(dashOn), lay.px(dashOff), weight,
+			s.pal.Rule)
 
 		// Only the outer ring carries the AUTO word. It is the one that says
 		// how far the scope reaches, so it is the one the mode belongs to, and
@@ -542,22 +545,21 @@ func (s *Scene) drawRangeLabel(
 	}
 
 	value := s.whole(valueNm)
-	unit, _ := text.Measure(face, rangeUnit)
-	lead, _ := text.Measure(face, prefix)
-	width := lead + measureBytes(face, value) + unit
+	gap, height := lay.px(rangeLabelGap), lay.lineHeight(face)
+	width := lay.measure(face, prefix) + lay.measureBytes(face, value) + lay.measure(face, rangeUnit)
 
-	if width+2*rangeLabelGap > spacing {
+	if width+2*gap > spacing {
 		return
 	}
 
-	left := geom.centerX + radius - rangeLabelGap - width
-	top := geom.centerY - face.Height() - rangeLabelGap
+	left := geom.centerX + radius - gap - width
+	top := geom.centerY - height - gap
 
-	pen := text.Draw(lay.dst, face, left, top, prefix, s.pal.Muted)
-	pen = drawBytes(lay.dst, face, pen, top, value, s.pal.Muted)
-	text.Draw(lay.dst, face, pen, top, rangeUnit, s.pal.Muted)
+	pen := lay.text(face, left, top, prefix, s.pal.Muted)
+	pen = lay.drawBytes(face, pen, top, value, s.pal.Muted)
+	lay.text(face, pen, top, rangeUnit, s.pal.Muted)
 
-	s.recordRangeLabel(image.Rect(left, top, left+width, top+face.Height()))
+	s.recordRangeLabel(image.Rect(left, top, left+width, top+height))
 }
 
 // recordRangeLabel keeps a range label's box so drawAirports can drop a
@@ -583,13 +585,13 @@ func (s *Scene) drawCardinals(lay *layout, geom scopeGeometry) {
 		return
 	}
 
-	height := face.Height()
-	edge := geom.outer + cardinalGap
+	height := lay.lineHeight(face)
+	edge := geom.outer + lay.px(cardinalGap)
 
-	text.DrawCentered(lay.dst, face, geom.centerX, geom.centerY-edge-height, "N", s.pal.Muted)
-	text.DrawCentered(lay.dst, face, geom.centerX, geom.centerY+edge, "S", s.pal.Muted)
-	text.Draw(lay.dst, face, geom.centerX+edge, geom.centerY-height/2, "E", s.pal.Muted)
-	text.DrawRight(lay.dst, face, geom.centerX-edge, geom.centerY-height/2, "W", s.pal.Muted)
+	text.DrawCentered(lay.dst, face, geom.centerX, geom.centerY-edge-height, "N", s.pal.Muted, lay.glyphs())
+	text.DrawCentered(lay.dst, face, geom.centerX, geom.centerY+edge, "S", s.pal.Muted, lay.glyphs())
+	lay.text(face, geom.centerX+edge, geom.centerY-height/2, "E", s.pal.Muted)
+	text.DrawRight(lay.dst, face, geom.centerX-edge, geom.centerY-height/2, "W", s.pal.Muted, lay.glyphs())
 }
 
 // drawHome marks the receiver's own position, with the ring coloured by where
@@ -610,10 +612,11 @@ func (s *Scene) drawCardinals(lay *layout, geom scopeGeometry) {
 // best guess inside that area.
 func (s *Scene) drawHome(lay *layout, view scopeFrame, receiver source.Receiver) {
 	geom := view.geom
-	radius := doubtRadius(receiver, view.proj.scale, homeRadius, geom.rangeR)
+	plain := lay.px(homeRadius)
+	radius := doubtRadius(receiver, view.proj.scale, plain, geom.rangeR)
 
-	s.drawFixRing(lay.dst, geom.centerX, geom.centerY, radius, homeRadius, s.fixColour(receiver.Mode, s.pal.Ink))
-	lay.dst.FillCircle(geom.centerX, geom.centerY, 1, s.pal.Ink)
+	s.drawFixRing(lay, geom.centerX, geom.centerY, radius, plain, s.fixColour(receiver.Mode, s.pal.Ink))
+	lay.dst.FillCircle(geom.centerX, geom.centerY, lay.unit(), s.pal.Ink)
 }
 
 // drawFixRing draws the ring around the receiver's marker: dashed at the
@@ -621,14 +624,14 @@ func (s *Scene) drawHome(lay *layout, view scopeFrame, receiver source.Receiver)
 // marker's ordinary radius otherwise.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (*Scene) drawFixRing(dst *canvas.Canvas, x, y, doubt, plain int, col color.RGBA) {
+func (*Scene) drawFixRing(lay *layout, x, y, doubt, plain int, col color.RGBA) {
 	if doubt > 0 {
-		dst.DashedCircle(x, y, doubt, doubtDashOn, doubtDashOff, col)
+		lay.dst.StrokeDashedCircle(x, y, doubt, lay.px(doubtDashOn), lay.px(doubtDashOff), lay.unit(), col)
 
 		return
 	}
 
-	dst.Circle(x, y, plain, col)
+	lay.dst.StrokeCircle(x, y, plain, lay.unit(), col)
 }
 
 // doubtRadius is how far the receiver could be from the position the scope
@@ -723,16 +726,12 @@ func (s *Scene) drawAirports(lay *layout, proj projector, fields []airports.Airp
 			continue
 		}
 
-		box := s.airportBox(x, y, lay.labels, face, field.ICAO)
+		box := s.airportBox(lay, x, y, face, field.ICAO)
 		if s.overlapsRangeLabel(box) {
 			continue
 		}
 
-		lay.dst.Rect(image.Rect(x-airportHalf, y-airportHalf, x+airportHalf+1, y+airportHalf+1), s.pal.Rule)
-
-		if lay.labels && face != nil {
-			text.Draw(lay.dst, face, x+airportLabelGap, y-face.Height()/2, field.ICAO, s.pal.Muted)
-		}
+		s.drawAirportMark(lay, x, y, face, field.ICAO)
 	}
 }
 
@@ -741,18 +740,45 @@ func (s *Scene) drawAirports(lay *layout, proj projector, fields []airports.Airp
 // checked against the range labels, so an airport is only dropped when the
 // part of it that would actually collide is under threat.
 //
-//nolint:varnamelen,revive // x, y is uScope's pixel idiom; labels picks which of two boxes to measure, not a mode.
-func (s *Scene) airportBox(x, y int, labels bool, face *psf.Font, icao string) image.Rectangle {
-	box := image.Rect(x-airportHalf, y-airportHalf, x+airportHalf+1, y+airportHalf+1)
-	if !labels || face == nil {
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (*Scene) airportBox(lay *layout, x, y int, face *psf.Font, icao string) image.Rectangle {
+	box := airportMarker(lay, x, y)
+	if !lay.labels || face == nil {
 		return box
 	}
 
-	width, height := text.Measure(face, icao)
-	top := y - face.Height()/2
-	label := image.Rect(x+airportLabelGap, top, x+airportLabelGap+width, top+height)
+	width, height := text.Measure(face, icao, lay.glyphs())
+	top := y - height/2
+	left := x + lay.px(airportLabelGap)
+	label := image.Rect(left, top, left+width, top+height)
 
 	return box.Union(label)
+}
+
+// airportMarker is the square an airfield is drawn as, centred on its pixel.
+//
+// At a larger scale the square grows by whole design pixels on every side, so
+// it is the panel's five-pixel box enlarged rather than a box five pixels plus
+// some fraction of a margin.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func airportMarker(lay *layout, x, y int) image.Rectangle {
+	half := lay.px(airportHalf)
+
+	return image.Rect(x-half, y-half, x+half+lay.unit(), y+half+lay.unit())
+}
+
+// drawAirportMark draws one airfield: its square and, when the layout has
+// room for labels, its ICAO code beside it. The flat scope and the 3D view
+// both mark an airfield this way.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawAirportMark(lay *layout, x, y int, face *psf.Font, icao string) {
+	lay.dst.StrokeRect(airportMarker(lay, x, y), lay.unit(), s.pal.Rule)
+
+	if lay.labels && face != nil {
+		lay.text(face, x+lay.px(airportLabelGap), y-lay.lineHeight(face)/2, icao, s.pal.Muted)
+	}
 }
 
 // overlapsRangeLabel reports whether box lands on one of the range labels
@@ -780,7 +806,7 @@ func (s *Scene) overlapsRangeLabel(box image.Rectangle) bool {
 func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 	if s.trail.ghostsDrawn() {
 		for _, ghost := range frame.Ghosts {
-			s.drawGhost(lay.dst, proj, ghost)
+			s.drawGhost(lay, proj, ghost)
 		}
 	}
 
@@ -789,7 +815,7 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 			continue
 		}
 
-		s.drawTrail(lay.dst, proj, plane)
+		s.drawTrail(lay, proj, plane)
 	}
 
 	for _, plane := range frame.Planes {
@@ -802,7 +828,7 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 			continue
 		}
 
-		s.drawContact(lay.dst, x, y, plane)
+		s.drawContact(lay, x, y, plane)
 
 		// Minimal is the traffic and nothing else, the selection included.
 		// The ring used to survive so n and p could show they had done
@@ -816,13 +842,13 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 
 // drawTrail draws one aircraft's history as a polyline, or nothing at all
 // when the mode on screen has no trail for it.
-func (s *Scene) drawTrail(dst *canvas.Canvas, proj projector, plane airplane.Snapshot) {
+func (s *Scene) drawTrail(lay *layout, proj projector, plane airplane.Snapshot) {
 	plan, drawn := s.trail.plan(len(plane.PositionHistory))
 	if !drawn {
 		return
 	}
 
-	s.drawPath(dst, proj, plane.PositionHistory, s.aircraftColour(plane), plan)
+	s.drawPath(lay, proj, plane.PositionHistory, s.aircraftColour(plane), plan)
 }
 
 // drawGhost draws the track of an aircraft that has stopped transmitting.
@@ -837,13 +863,13 @@ func (s *Scene) drawTrail(dst *canvas.Canvas, proj projector, plane airplane.Sna
 // ghost at all, and trailAll's floor is full strength. A track with no
 // aeroplane on it has no head for a fade to point at, and under trailAll
 // nothing fades anyway.
-func (s *Scene) drawGhost(dst *canvas.Canvas, proj projector, ghost source.Trail) {
+func (s *Scene) drawGhost(lay *layout, proj projector, ghost source.Trail) {
 	plan, drawn := s.trail.plan(len(ghost.Points))
 	if !drawn {
 		return
 	}
 
-	s.drawPath(dst, proj, ghost.Points, s.ghostColour(ghost), plan)
+	s.drawPath(lay, proj, ghost.Points, s.ghostColour(ghost), plan)
 }
 
 // drawPath draws the part of a run of fixes the plan asks for, oldest to
@@ -857,7 +883,7 @@ func (s *Scene) drawGhost(dst *canvas.Canvas, proj projector, ghost source.Trail
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawPath(
-	dst *canvas.Canvas, proj projector, fixes []airplane.PositionEntry, col color.RGBA, plan trailPlan,
+	lay *layout, proj projector, fixes []airplane.PositionEntry, col color.RGBA, plan trailPlan,
 ) {
 	// plan reported the run drawable, which means at least two fixes survive
 	// the cut, so there is nothing to check here that it has not checked.
@@ -870,7 +896,7 @@ func (s *Scene) drawPath(
 		x, y, inside := proj.at(fixes[index].Latitude, fixes[index].Longitude)
 
 		if inside && prevInside {
-			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y),
+			lay.dst.StrokeLineAA(float64(prevX), float64(prevY), float64(x), float64(y), lay.unit(),
 				s.fade(col, segmentAlpha(plan.floor, index, span)))
 		}
 
@@ -893,16 +919,16 @@ func segmentAlpha(floor float64, index int, span float64) float64 {
 // north and gets a silhouette pointing up the screen. An aircraft without a
 // heading is a bare circle, because a silhouette would be claiming to know
 // which way it is pointing.
-func (s *Scene) drawContact(dst *canvas.Canvas, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
+func (s *Scene) drawContact(lay *layout, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
 	col := s.aircraftColour(plane)
 
 	if !knownHeading(plane.Heading) {
-		dst.Circle(x, y, noHeadingRadius, col)
+		lay.dst.StrokeCircle(x, y, lay.px(noHeadingRadius), lay.unit(), col)
 
 		return
 	}
 
-	s.icon.Draw(dst, x, y, plane.Heading, 1, col)
+	s.icon.Draw(lay.dst, x, y, plane.Heading, lay.unit(), col)
 }
 
 // knownHeading reports whether a heading was decoded.
@@ -929,17 +955,18 @@ func knownHeading(heading float64) bool {
 func (s *Scene) drawSelection(
 	lay *layout, x, y int, plane airplane.Snapshot, receiver source.Receiver,
 ) {
-	dst := lay.dst
-	dst.Circle(x, y, selectionRadius, s.pal.Accent)
+	weight := lay.unit()
+	lay.dst.StrokeCircle(x, y, lay.px(selectionRadius), weight, s.pal.Accent)
 
-	endX, endY := x+leaderRun, y-leaderRun
-	dst.Line(x+leaderFoot, y-leaderFoot, endX, endY, s.pal.Accent)
+	foot, run := lay.px(leaderFoot), lay.px(leaderRun)
+	endX, endY := x+run, y-run
+	lay.dst.StrokeLine(x+foot, y-foot, endX, endY, weight, s.pal.Accent)
 
 	if !lay.labels || s.faces.Body == nil {
 		return
 	}
 
-	s.drawTag(dst, endX+labelTracking, endY, plane, receiver)
+	s.drawTag(lay, endX+lay.px(labelTracking), endY, plane, receiver)
 }
 
 // drawTag writes the selected aircraft's data block on the end of the leader.
@@ -957,14 +984,15 @@ func (s *Scene) drawSelection(
 // the right of the contact, clear of the ring, whatever the traffic underneath
 // is doing.
 func (s *Scene) drawTag(
-	dst *canvas.Canvas, left, bottom int, plane airplane.Snapshot, receiver source.Receiver,
+	lay *layout, left, bottom int, plane airplane.Snapshot, receiver source.Receiver,
 ) {
-	top := bottom - tagLines*tagLead
+	lead := lay.px(tagLead)
+	top := bottom - tagLines*lead
 
-	text.Draw(dst, s.faces.BodyBold, left, top, clip(callsignOf(plane), maxCallsign), s.pal.Accent)
+	lay.text(s.faces.BodyBold, left, top, clip(callsignOf(plane), maxCallsign), s.pal.Accent)
 
-	s.drawTagState(dst, left, top+tagLead, plane)
-	s.drawTagWhere(dst, left, top+2*tagLead, plane, receiver)
+	s.drawTagState(lay, left, top+lead, plane)
+	s.drawTagWhere(lay, left, top+2*lead, plane, receiver)
 }
 
 // drawTagState is the tag's middle line: the level in hundreds of feet with the
@@ -973,14 +1001,14 @@ func (s *Scene) drawTag(
 // The two figures are formatted one at a time and drawn as they go, because
 // both come out of the same scratch buffer and formatting the second would
 // overwrite the first.
-func (s *Scene) drawTagState(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+func (s *Scene) drawTagState(lay *layout, left, top int, plane airplane.Snapshot) {
 	face := s.faces.Body
 
-	pen := drawBytes(dst, face, left, top, s.flightLevel(plane.Altitude), s.pal.Ink)
-	pen = s.drawTrend(dst, face, pen, top, plane.VertRate, s.pal.Ink)
-	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Ink)
+	pen := lay.drawBytes(face, left, top, s.flightLevel(plane.Altitude), s.pal.Ink)
+	pen = s.drawTrend(lay, face, pen, top, plane.VertRate, s.pal.Ink)
+	pen = lay.text(face, pen, top, tagGap, s.pal.Ink)
 
-	drawBytes(dst, face, pen, top, s.speed(plane.Velocity), s.pal.Ink)
+	lay.drawBytes(face, pen, top, s.speed(plane.Velocity), s.pal.Ink)
 }
 
 // drawTagWhere is the tag's bottom line: how far the aircraft is from the
@@ -991,23 +1019,23 @@ func (s *Scene) drawTagState(dst *canvas.Canvas, left, top int, plane airplane.S
 // pair of figures that places a contact against the antenna is the pair worth
 // having in both places.
 func (s *Scene) drawTagWhere(
-	dst *canvas.Canvas, left, top int, plane airplane.Snapshot, receiver source.Receiver,
+	lay *layout, left, top int, plane airplane.Snapshot, receiver source.Receiver,
 ) {
 	face := s.faces.Body
 
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 
-	pen := drawBytes(dst, face, left, top, s.distance(away), s.pal.Muted)
-	pen = text.Draw(dst, face, pen, top, tagGap, s.pal.Muted)
+	pen := lay.drawBytes(face, left, top, s.distance(away), s.pal.Muted)
+	pen = lay.text(face, pen, top, tagGap, s.pal.Muted)
 
 	bearing, known := bearingTo(receiver, plane)
 	if !known {
-		text.Draw(dst, face, pen, top, detailUnknown, s.pal.Muted)
+		lay.text(face, pen, top, detailUnknown, s.pal.Muted)
 
 		return
 	}
 
-	drawBytes(dst, face, pen, top, s.degrees(bearing), s.pal.Muted)
+	lay.drawBytes(face, pen, top, s.degrees(bearing), s.pal.Muted)
 }
 
 // callsignOf is the callsign, or the ICAO hex when no callsign has been

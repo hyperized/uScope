@@ -298,7 +298,7 @@ func TestDrawReceiver3(t *testing.T) {
 			scene.shown = ViewMinimal3D
 
 			canv := blankCanvas(t)
-			scene.drawReceiver3(canv, view, testCase.receiver)
+			scene.drawReceiver3(&layout{dst: canv}, view, testCase.receiver)
 
 			if drawn := filterPainted(canv) > 0; drawn != testCase.want {
 				t.Errorf("the receiver marker was drawn = %v, want %v", drawn, testCase.want)

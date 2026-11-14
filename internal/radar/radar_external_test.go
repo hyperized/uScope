@@ -250,6 +250,33 @@ func benchSceneWith(tb testing.TB, frame source.Frame) (*radar.Scene, *canvas.Ca
 	return scene, canv
 }
 
+// A 4K canvas, which draws every fixed size in the scene at twice its
+// design size.
+const (
+	uhdWidth  = 3840
+	uhdHeight = 2160
+)
+
+// sizedFor swaps the panel-sized canvas for a 3840x2160 one when uhd is set,
+// so the allocation test and the benchmark can price the scaled layout with
+// the same fixtures as the panel's.
+//
+//nolint:revive // flag-parameter: uhd picks which of two canvases to hand back, not a mode to branch deeper on.
+func sizedFor(tb testing.TB, panel *canvas.Canvas, uhd bool) *canvas.Canvas {
+	tb.Helper()
+
+	if !uhd {
+		return panel
+	}
+
+	canv, err := canvas.New(uhdWidth, uhdHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	return canv
+}
+
 // sceneFor is benchScene, or benchSceneWith a frame carrying the bench
 // ghosts when ghosts is true. Both the allocation test and the benchmark
 // pick their scene through it, so the ghosts fixture is built in one place.
@@ -304,6 +331,9 @@ func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
 // large, which is where a per-frame canvas allocation would show up if the
 // window were ever rebuilt on a frame that had not resized.
 //
+// The 3840x2160 cases draw the same frames at a scale of two, where every
+// glyph, stroke and sprite goes through the scaled paths.
+//
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range []struct {
@@ -312,6 +342,7 @@ func TestDrawAllocations(t *testing.T) {
 		presses int
 		ghosts  bool
 		wide    bool
+		uhd     bool
 	}{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
@@ -353,9 +384,26 @@ func TestDrawAllocations(t *testing.T) {
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
 			wide: true,
 		},
+		{name: "the scope at 3840x2160", set: radar.Settings{Colour: radar.ColourAltitude}, uhd: true},
+		{
+			name: "airline mode at 3840x2160",
+			set:  radar.Settings{Colour: radar.ColourAirline},
+			uhd:  true,
+		},
+		{
+			name: "the 3D view at 3840x2160",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			uhd:  true,
+		},
+		{
+			name: "the bare 3D view at 3840x2160",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			uhd:  true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := sceneFor(t, testCase.ghosts)
+			canv = sizedFor(t, canv, testCase.uhd)
 			scene.Apply(testCase.set)
 			pressTrails(t, scene, testCase.presses)
 			pressWide(t, scene, testCase.wide)
@@ -394,6 +442,9 @@ func TestDrawAllocations(t *testing.T) {
 // The last three price the views the four-way cycle added and the wider box
 // the w key gives the picture. Against their narrow twins, the two wide cases
 // are what a scope with the whole frame to itself costs.
+//
+// The two 3840x2160 cases are the 4K case: the same frames on a canvas nine
+// times the panel's area, drawn at a scale of two.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range []struct {
 		name    string
@@ -402,6 +453,7 @@ func BenchmarkDraw(b *testing.B) {
 		presses int
 		ghosts  bool
 		wide    bool
+		uhd     bool
 	}{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
 		{name: "altitude/day", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Day},
@@ -442,9 +494,23 @@ func BenchmarkDraw(b *testing.B) {
 			pal:  theme.Night,
 			wide: true,
 		},
+		{
+			name: "altitude/night/3840x2160",
+			set:  radar.Settings{Colour: radar.ColourAltitude},
+			pal:  theme.Night,
+			uhd:  true,
+		},
+		{
+			name: "3d/3840x2160",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			pal:  theme.Night,
+			uhd:  true,
+		},
 	} {
 		b.Run(testCase.name, func(b *testing.B) {
 			scene, canv := sceneFor(b, testCase.ghosts)
+			canv = sizedFor(b, canv, testCase.uhd)
+
 			scene.Apply(testCase.set)
 			scene.SetPalette(testCase.pal)
 			pressTrails(b, scene, testCase.presses)

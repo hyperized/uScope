@@ -140,7 +140,7 @@ func (*Scene) drawMeridians3(dst *canvas.Canvas, view scene3, ink color.RGBA) {
 			})
 
 			if ok && prevOK {
-				dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), ink)
+				dst.StrokeLineAA(float64(prevX), float64(prevY), float64(x), float64(y), view.weight, ink)
 			}
 
 			prevX, prevY, prevOK = x, y, ok
@@ -323,5 +323,5 @@ func (*Scene) drawEdge3(dst *canvas.Canvas, view scene3, ink color.RGBA, from, t
 		return
 	}
 
-	dst.LineAA(float64(fromX), float64(fromY), float64(toX), float64(toY), ink)
+	dst.StrokeLineAA(float64(fromX), float64(fromY), float64(toX), float64(toY), view.weight, ink)
 }

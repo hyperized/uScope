@@ -186,6 +186,12 @@ terminal on the far end there is no window size and no keyboard, so no `q`.
 
 renders one frame to a file, which is how every image on this page was made.
 
+The layout follows the canvas height. Up to 2159 pixels tall every size is
+the one the panel uses; at 2160 (4K) the type, the key bar, the column, the
+markers and the line widths are all drawn at twice that, at 4320 four times,
+so a large `--size` gives the same picture rather than a small one in a big
+frame.
+
 ## Where the aircraft come from
 
 | Flag | Source |
@@ -281,7 +287,8 @@ which there is no room for.
 | `--fps` | `30` | frames per second |
 | `--frames` | `0` | stop after this many frames |
 | `--png` | | render one frame to this file and exit |
-| `--size` | `1280x720` | canvas size for `--png` and the kitty backend |
+| `--size` | `1280x720` | canvas size for `--png` and the kitty backend; the layout scales with the height in whole steps of 1080 |
+
 | `--test-pattern` | off | draw one frame of the test pattern and exit |
 | `--scene` | `radar` | `radar`, or `pattern` for the rotation check |
 

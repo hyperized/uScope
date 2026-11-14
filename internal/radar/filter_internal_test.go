@@ -670,13 +670,13 @@ func TestMarkLegendEntryDrawsNothingUnmarked(t *testing.T) {
 	scene := &Scene{pal: theme.Night}
 	box := image.Rect(swatchSide, swatchSide, 2*swatchSide, 2*swatchSide)
 
-	scene.markLegendEntry(canv, box, false)
+	scene.markLegendEntry(&layout{dst: canv}, box, false)
 
 	if got := filterPainted(canv); got != 0 {
 		t.Fatalf("an unmarked entry painted %d pixels, want none", got)
 	}
 
-	scene.markLegendEntry(canv, box, true)
+	scene.markLegendEntry(&layout{dst: canv}, box, true)
 
 	if got := filterPainted(canv); got == 0 {
 		t.Error("a marked entry painted nothing, want a ring round the swatch")
@@ -699,7 +699,7 @@ func TestDrawCardLabelShowsTheFilteredTag(t *testing.T) {
 
 	draw := func(sel selection) (int, int) {
 		canv.Clear(theme.Night.Field)
-		scene.drawCardLabel(canv, 0, 0, sel)
+		scene.drawCardLabel(&layout{dst: canv}, 0, 0, sel)
 
 		return filterPainted(canv), colourCount(canv, canv.Bounds(), theme.Night.Caution)
 	}

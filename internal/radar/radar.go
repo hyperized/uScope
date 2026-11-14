@@ -45,7 +45,9 @@
 // neighbour, so the same scene renders at 1280x720 on the panel and on a canvas
 // of a few dozen pixels. A strip gives its fields up one at a time as the column
 // narrows, in the order strips.go sets out. Below 640 pixels wide the right
-// column goes altogether; below 320 pixels tall the labels go. The w key takes
+// column goes altogether; below 320 pixels tall the labels go. A canvas 2160
+// pixels tall or more draws every fixed size, the type and the thresholds at a
+// whole multiple of the design size, which scale.go works out. The w key takes
 // the column away at any width, which gives the scope and the 3D view the whole
 // frame between the header and the softkeys.
 //
@@ -69,8 +71,9 @@ import (
 	"github.com/hyperized/uScope/pkg/sprite"
 )
 
-// Spacing, in pixels at the panel's resolution. These are the only fixed
-// numbers in the scene; everything else comes from a font metric.
+// Spacing, in pixels at the design size. These are the only fixed numbers in
+// the scene; everything else comes from a font metric. Every one of them is
+// multiplied by the layout's scale before it is drawn; see uiScale.
 const (
 	baseMargin    = 16
 	marginDivisor = 8
@@ -118,6 +121,10 @@ const (
 
 	// minLabelHeight is the canvas height below which every small label goes:
 	// the cardinal letters, the range numbers, the airport names.
+	//
+	// Both are logical pixels, multiplied by the layout's scale before they are
+	// compared, so a canvas twice the size in both directions makes the decision
+	// the smaller one makes.
 	minLabelHeight = 320
 )
 
@@ -592,6 +599,12 @@ type layout struct {
 	// through the same function, which is what keeps the rings it draws under
 	// the aircraft Draw puts on top of them.
 	wide bool
+
+	// scale is how many canvas pixels one of the layout's own pixels is, which
+	// uiScale works out from the canvas. Every fixed size in the scene is
+	// multiplied by it through unit and px, and so is every glyph. Zero reads
+	// as one, so a layout written out as a literal draws at the design size.
+	scale int
 }
 
 // Draw paints one frame.
@@ -685,13 +698,14 @@ func (s *Scene) drawScope(lay *layout, frame source.Frame, elapsed time.Duration
 
 // newLayout measures the frame and takes the margin out of it.
 //
-// The margin is an eighth of the short edge up to 16 pixels, so a small canvas
-// is not all border. Taking an eighth also means two margins can never take
+// The margin is an eighth of the short edge up to 16 design pixels, so a small
+// canvas is not all border. Taking an eighth also means two margins can never take
 // more than a quarter of the width, so the box left over is always at least a
 // pixel wide and there is nothing to guard against.
 func (s *Scene) newLayout(dst *canvas.Canvas) layout {
 	bounds := dst.Bounds()
-	margin := min(baseMargin, min(bounds.Dx(), bounds.Dy())/marginDivisor)
+	scale := uiScale(bounds)
+	margin := min(baseMargin*scale, min(bounds.Dx(), bounds.Dy())/marginDivisor)
 
 	return layout{
 		dst:    dst,
@@ -699,8 +713,9 @@ func (s *Scene) newLayout(dst *canvas.Canvas) layout {
 		right:  bounds.Max.X - margin,
 		top:    bounds.Min.Y + margin,
 		bottom: bounds.Max.Y - margin,
-		labels: bounds.Dy() >= minLabelHeight,
+		labels: bounds.Dy() >= minLabelHeight*scale,
 		wide:   s.wide,
+		scale:  scale,
 	}
 }
 
@@ -739,7 +754,7 @@ func (l *layout) split() {
 	// worse than one that works. With nothing beside it the scope is centred
 	// in what is left, because a square pinned to the left edge of a wide box
 	// reads as a mistake.
-	if l.dst.Bounds().Dx() < minColumnWidth {
+	if l.dst.Bounds().Dx() < l.px(minColumnWidth) {
 		left := l.left + (width-side)/2
 		l.scope = image.Rect(left, l.top, left+side, l.top+side)
 
@@ -747,7 +762,7 @@ func (l *layout) split() {
 	}
 
 	l.scope = image.Rect(l.left, l.top, l.left+side, l.top+side)
-	l.column = image.Rect(l.scope.Max.X+blockGap, l.top, l.right, l.bottom)
+	l.column = image.Rect(l.scope.Max.X+l.px(blockGap), l.top, l.right, l.bottom)
 
 	if l.column.Dx() <= 0 {
 		l.column = image.Rectangle{}
@@ -756,26 +771,6 @@ func (l *layout) split() {
 
 // fits reports whether a block of this height still has room at the top.
 func (l *layout) fits(height int) bool { return l.top+height <= l.bottom }
-
-// lineHeight is how tall one line of a face is, or zero when the face is
-// missing, which is how a block decides it has nothing to draw with.
-func lineHeight(face *psf.Font) int {
-	if face == nil {
-		return 0
-	}
-
-	return face.Height()
-}
-
-// glyphWidth is how wide one glyph of a face is, or zero when the face is
-// missing. The flight strips size their fields from it.
-func glyphWidth(face *psf.Font) int {
-	if face == nil {
-		return 0
-	}
-
-	return face.Width()
-}
 
 // bandColour picks an aircraft's colour from its altitude.
 //
