@@ -1,7 +1,10 @@
 package sprite_test
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"image"
 	"image/color"
 	"math"
 	"strings"
@@ -243,7 +246,7 @@ func TestDrawHeadingZeroIsIdentity(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	bmp.Draw(canv, half, half, 0, canvas.White)
+	bmp.Draw(canv, half, half, 0, 1, canvas.White)
 
 	got := canvasGrid(canv, side, canvas.White)
 	want := mappedBitmapGrid(bmp, side, func(x, y int) (int, int) { return x, y })
@@ -267,7 +270,7 @@ func TestDrawHeading180(t *testing.T) {
 
 	const heading180 = 180.0
 
-	bmp.Draw(canv, half, half, heading180, canvas.White)
+	bmp.Draw(canv, half, half, heading180, 1, canvas.White)
 
 	got := canvasGrid(canv, side, canvas.White)
 	want := mappedBitmapGrid(bmp, side, func(x, y int) (int, int) { return side - 1 - x, side - 1 - y })
@@ -306,7 +309,7 @@ func TestDrawHeading90MatchesHandRotatedCopy(t *testing.T) {
 
 	const heading90 = 90.0
 
-	bmp.Draw(canv, half, half, heading90, canvas.White)
+	bmp.Draw(canv, half, half, heading90, 1, canvas.White)
 
 	got := canvasGrid(canv, side, canvas.White)
 	want := mappedBitmapGrid(bmp, side, func(x, y int) (int, int) { return side - 1 - y, x })
@@ -357,7 +360,7 @@ func TestDrawHeading90FrontGoesRightRearGoesLeft(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	bmp.Draw(canv, centre, centre, heading90, canvas.White)
+	bmp.Draw(canv, centre, centre, heading90, 1, canvas.White)
 
 	frontDestX := centre + (side - 1 - frontRow) - half
 	frontDestY := centre + frontCol - half
@@ -409,7 +412,7 @@ func TestDrawOutOfBoundsCentres(t *testing.T) {
 				t.Fatalf("canvas.New: %v", err)
 			}
 
-			sprite.Airplane().Draw(canv, testCase.cx, testCase.cy, 0, canvas.White)
+			sprite.Airplane().Draw(canv, testCase.cx, testCase.cy, 0, 1, canvas.White)
 
 			got := countPixels(canv, canvas.White) > 0
 			if got != testCase.wantPainted {
@@ -446,7 +449,7 @@ func TestDrawNaNAndInfHeadingActLikeZero(t *testing.T) {
 				t.Fatalf("canvas.New: %v", err)
 			}
 
-			bmp.Draw(canv, half, half, testCase.heading, canvas.White)
+			bmp.Draw(canv, half, half, testCase.heading, 1, canvas.White)
 
 			assertGridsEqual(t, canvasGrid(canv, side, canvas.White), want)
 		})
@@ -474,7 +477,7 @@ func TestDrawNilSafety(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			testCase.bmp.Draw(testCase.dst, 0, 0, 0, canvas.White)
+			testCase.bmp.Draw(testCase.dst, 0, 0, 0, 1, canvas.White)
 		})
 	}
 }
@@ -503,7 +506,7 @@ func TestDrawAllocations(t *testing.T) {
 	)
 
 	allocs := testing.AllocsPerRun(runs, func() {
-		bmp.Draw(canv, centre, centre, heading, canvas.White)
+		bmp.Draw(canv, centre, centre, heading, 1, canvas.White)
 	})
 
 	if allocs != 0 {
@@ -530,6 +533,193 @@ func BenchmarkDraw(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		bmp.Draw(canv, centre, centre, heading, canvas.White)
+		bmp.Draw(canv, centre, centre, heading, 1, canvas.White)
+	}
+}
+
+// drawnAt draws bmp on a fresh side by side canvas centred at (centre, centre).
+func drawnAt(t *testing.T, bmp *sprite.Bitmap, side, centre int, heading float64, scale int) *canvas.Canvas {
+	t.Helper()
+
+	canv, err := canvas.New(side, side)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	bmp.Draw(canv, centre, centre, heading, scale, canvas.White)
+
+	return canv
+}
+
+// countWhite counts the white pixels of a side by side canvas.
+func countWhite(canv *canvas.Canvas, side int) int {
+	count := 0
+
+	for _, row := range canvasGrid(canv, side, canvas.White) {
+		for _, set := range row {
+			if set {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+// assertEnlarged fails the test unless big is small with every set pixel
+// blown up to a scale by scale block, and nothing else set.
+func assertEnlarged(t *testing.T, small, big *canvas.Canvas, smallSide, smallCentre, bigSide, bigCentre, scale int) {
+	t.Helper()
+
+	blocks := 0
+
+	for row := range smallSide {
+		for col := range smallSide {
+			if small.Image().RGBAAt(col, row) != canvas.White {
+				continue
+			}
+
+			blocks++
+
+			block := image.Rect(0, 0, scale, scale).Add(image.Pt(
+				bigCentre+(col-smallCentre)*scale,
+				bigCentre+(row-smallCentre)*scale,
+			))
+
+			for point := block.Min; point.Y < block.Max.Y; point.Y++ {
+				for point.X = block.Min.X; point.X < block.Max.X; point.X++ {
+					if got := big.Image().RGBAAt(point.X, point.Y); got != canvas.White {
+						t.Fatalf("block of (%d, %d): pixel %v = %v, want white", col, row, point, got)
+					}
+				}
+			}
+		}
+	}
+
+	if blocks == 0 {
+		t.Fatal("the scale one drawing is empty")
+	}
+
+	if got, want := countWhite(big, bigSide), blocks*scale*scale; got != want {
+		t.Errorf("set pixels = %d, want %d from %d blocks", got, want, blocks)
+	}
+}
+
+// TestDrawScale checks that an enlarged sprite is the scale one drawing with
+// every pixel blown up to a block, and nothing more.
+func TestDrawScale(t *testing.T) {
+	t.Parallel()
+
+	const (
+		smallSide   = 40
+		smallCentre = 20
+		bigSide     = 140
+		bigCentre   = 70
+	)
+
+	for _, heading := range []float64{0, 90, 37} {
+		for _, scale := range []int{2, 3} {
+			t.Run(fmt.Sprintf("heading %v scale %d", heading, scale), func(t *testing.T) {
+				t.Parallel()
+
+				bmp := sprite.Airplane()
+				small := drawnAt(t, bmp, smallSide, smallCentre, heading, 1)
+				big := drawnAt(t, bmp, bigSide, bigCentre, heading, scale)
+
+				assertEnlarged(t, small, big, smallSide, smallCentre, bigSide, bigCentre, scale)
+			})
+		}
+	}
+}
+
+// TestDrawScaleBelowOne checks that a scale that cannot enlarge anything is
+// drawn at one.
+func TestDrawScaleBelowOne(t *testing.T) {
+	t.Parallel()
+
+	const (
+		side   = 40
+		centre = 20
+	)
+
+	for _, scale := range []int{0, -1} {
+		t.Run(fmt.Sprintf("scale %d is scale one", scale), func(t *testing.T) {
+			t.Parallel()
+
+			bmp := sprite.Airplane()
+			want := drawnAt(t, bmp, side, centre, 37, 1)
+			got := drawnAt(t, bmp, side, centre, 37, scale)
+
+			if !bytes.Equal(got.Image().Pix, want.Image().Pix) {
+				t.Error("drawing differs from scale one")
+			}
+		})
+	}
+}
+
+// TestDrawScaledAllocations is TestDrawAllocations for the enlarged path.
+//
+//nolint:paralleltest // testing.AllocsPerRun panics if called from a parallel test.
+func TestDrawScaledAllocations(t *testing.T) {
+	const (
+		canvasSide = 96
+		centre     = canvasSide / 2
+		heading    = 45.0
+		scale      = 2
+		runs       = 100
+	)
+
+	canv, err := canvas.New(canvasSide, canvasSide)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	bmp := sprite.Airplane()
+
+	allocs := testing.AllocsPerRun(runs, func() {
+		bmp.Draw(canv, centre, centre, heading, scale, canvas.White)
+	})
+
+	if allocs != 0 {
+		t.Errorf("Draw at scale %d allocated %v allocations per run, want 0", scale, allocs)
+	}
+}
+
+// TestLandingIsOnTheSilhouette checks what a caller putting a light on a
+// turned sprite relies on: at every whole degree and at two scales, the block
+// Landing points at for each of the silhouette's lights is one Draw painted.
+func TestLandingIsOnTheSilhouette(t *testing.T) {
+	t.Parallel()
+
+	const centre = 40
+
+	ink := color.RGBA{R: 255, A: 255}
+	plane := sprite.Airplane()
+
+	lights, carried := plane.Lights()
+	if !carried {
+		t.Fatal("the built-in silhouette carries no lights")
+	}
+
+	for _, scale := range []int{1, 2} {
+		for degrees := range 360 {
+			canv, err := canvas.New(2*centre, 2*centre)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			plane.Draw(canv, centre, centre, float64(degrees), scale, ink)
+			turn := sprite.TurnTo(float64(degrees))
+
+			for _, pixel := range []image.Point{lights.Port, lights.Starboard, lights.Tail, lights.Beacon} {
+				offset := plane.Landing(pixel, turn)
+				x, y := centre+offset.X*scale, centre+offset.Y*scale
+
+				if canv.Image().RGBAAt(x, y) != ink {
+					t.Errorf("scale %d, %d degrees: light %v lands at (%d, %d), which Draw left empty",
+						scale, degrees, pixel, x, y)
+				}
+			}
+		}
 	}
 }

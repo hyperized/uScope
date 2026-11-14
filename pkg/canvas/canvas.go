@@ -13,6 +13,7 @@
 package canvas
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -59,6 +60,13 @@ type Canvas struct {
 	edges     []polyEdge
 	active    []polyEdge
 	crossings []float64
+
+	// The same again for FillPolygonZoned's zones, which are swept beside
+	// the rings rather than mixed in with them: a zone decides the colour of
+	// a span and never whether it is painted.
+	zoneEdges     []polyEdge
+	zoneActive    []polyEdge
+	zoneCrossings []zoneCrossing
 }
 
 // New allocates a canvas of width by height pixels.
@@ -276,6 +284,64 @@ func (c *Canvas) hline(x0, x1, y int, col color.RGBA) {
 
 	for filled := bytesPerPixel; filled < len(row); filled *= 2 {
 		copy(row[filled:], row[:filled])
+	}
+}
+
+// blendSpan mixes col into the pixels from x0 to x1 inclusive on row y, with
+// the same clipping as hline.
+//
+// The weights are 8-bit fixed point, so a channel can differ from Blend's
+// float result by one step; the difference is invisible and the loop does no
+// float work per pixel. Alpha is expected in (0, 1]; the callers have already
+// screened out anything else.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func (c *Canvas) blendSpan(x0, x1, y int, col color.RGBA, alpha float64) {
+	rect := c.img.Rect
+	if y < rect.Min.Y || y >= rect.Max.Y {
+		return
+	}
+
+	//nolint:varnamelen // from, to bound the clipped span; short names keep the arithmetic below readable.
+	from, to := max(x0, rect.Min.X), min(x1, rect.Max.X-1)
+	if from > to {
+		return
+	}
+
+	const (
+		weightBits = 8
+		weightOne  = 1 << weightBits
+
+		// redBlue picks the red and blue bytes out of a little-endian pixel,
+		// leaving a byte of headroom above each, and halves is the rounding
+		// half added to both lanes at once. A lane holds at most
+		// 255*256+128, which stays inside its sixteen bits.
+		redBlue = 0x00FF00FF
+		halves  = 0x00800080
+		half    = 0x80
+		lowByte = 0xFF
+		opaqueA = 0xFF000000
+	)
+
+	next := uint32(math.Round(min(alpha, 1) * weightOne))
+	prev := weightOne - next
+	srcRB := (uint32(col.R) | uint32(col.B)<<16) * next
+	srcG := uint32(col.G) * next
+
+	start := c.img.PixOffset(from, y)
+	end := c.img.PixOffset(to, y) + bytesPerPixel
+	row := c.img.Pix[start:end:end]
+
+	// Red and blue are blended together in one multiply, green in another:
+	// half the arithmetic of a channel at a time, and the same rounding.
+	for off := 0; off < len(row); off += bytesPerPixel {
+		pix := row[off : off+bytesPerPixel : off+bytesPerPixel]
+		old := binary.LittleEndian.Uint32(pix)
+
+		rb := ((old&redBlue)*prev + srcRB + halves) >> weightBits & redBlue
+		g := ((old>>weightBits&lowByte)*prev + srcG + half) >> weightBits
+
+		binary.LittleEndian.PutUint32(pix, rb|g<<weightBits|opaqueA)
 	}
 }
 

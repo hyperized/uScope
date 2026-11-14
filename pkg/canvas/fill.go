@@ -24,6 +24,11 @@ type polyEdge struct {
 	// row. The sweep advances x rather than recomputing it.
 	x     float64
 	slope float64
+
+	// winding is one when the ring runs down the screen along this edge and
+	// minus one when it runs up. The even-odd fill never reads it; the zones
+	// of FillPolygonZoned are counted by it.
+	winding int
 }
 
 // FillPolygon fills the area enclosed by rings, clipped to clip, using the
@@ -48,6 +53,35 @@ type polyEdge struct {
 // two goroutines filling the same canvas would tread on each other's edge
 // list, not just on each other's pixels.
 func (c *Canvas) FillPolygon(rings [][]image.Point, clip image.Rectangle, col color.RGBA) {
+	c.fill(rings, clip, col, 1)
+}
+
+// BlendPolygon is FillPolygon with col composited over what is already there
+// at alpha, instead of replacing it.
+//
+// The rings, the clip and the even-odd rule mean exactly what they do for
+// FillPolygon, and every covered pixel is blended once per call however many
+// rings overlap it, which is what a translucent shape needs: drawing the same
+// area as several strokes would darken the seams. An alpha of one or more is
+// FillPolygon, byte for byte. An alpha that is NaN, zero or negative draws
+// nothing.
+//
+// The mix is done in fixed point on the pixel bytes, so a channel can land one
+// step from what Blend would give for the same alpha. That is the price of
+// not calling Blend, with its clipping and float rounding, for every pixel of
+// a large shape. Like FillPolygon it allocates nothing once the scratch
+// buffers have grown.
+func (c *Canvas) BlendPolygon(rings [][]image.Point, clip image.Rectangle, col color.RGBA, alpha float64) {
+	if math.IsNaN(alpha) || alpha <= 0 {
+		return
+	}
+
+	c.fill(rings, clip, col, alpha)
+}
+
+// fill is the body of both polygon fills: build the edges inside the clip,
+// sort them by the row they start on, and sweep.
+func (c *Canvas) fill(rings [][]image.Point, clip image.Rectangle, col color.RGBA, alpha float64) {
 	area := clip.Intersect(c.img.Rect)
 	if area.Empty() {
 		return
@@ -59,7 +93,7 @@ func (c *Canvas) FillPolygon(rings [][]image.Point, clip image.Rectangle, col co
 	}
 
 	slices.SortFunc(c.edges, byTopRow)
-	c.sweep(area, col)
+	c.sweep(area, col, alpha)
 }
 
 // byTopRow orders edges by the first row they appear on, which is the order
@@ -92,9 +126,9 @@ func appendEdge(dst []polyEdge, from, to image.Point, area image.Rectangle) []po
 		return dst
 	}
 
-	top, bottom := from, to
+	top, bottom, winding := from, to, 1
 	if top.Y > bottom.Y {
-		top, bottom = bottom, top
+		top, bottom, winding = bottom, top, -1
 	}
 
 	first := max(top.Y, area.Min.Y)
@@ -107,10 +141,11 @@ func appendEdge(dst []polyEdge, from, to image.Point, area image.Rectangle) []po
 	slope := float64(bottom.X-top.X) / float64(bottom.Y-top.Y)
 
 	return append(dst, polyEdge{
-		top:    first,
-		bottom: last,
-		x:      float64(top.X) + slope*float64(first-top.Y),
-		slope:  slope,
+		top:     first,
+		bottom:  last,
+		x:       float64(top.X) + slope*float64(first-top.Y),
+		slope:   slope,
+		winding: winding,
 	})
 }
 
@@ -121,14 +156,20 @@ func appendEdge(dst []polyEdge, from, to image.Point, area image.Rectangle) []po
 // is tens of thousands of edges against hundreds of rows. The active list
 // holds only the edges that actually cross the row being filled, which for a
 // map is a couple of dozen however much geometry is in the picture.
-func (c *Canvas) sweep(area image.Rectangle, col color.RGBA) {
+//
+// The walk starts at the first edge's row and jumps any run of empty rows to
+// the next edge's, rather than stepping through them. A small polygon on a
+// tall clip, which is what every strip of a corridor tube is, would otherwise
+// pay for the whole height of the picture to fill a few rows of it. The
+// caller hands over at least one edge, sorted by top row.
+func (c *Canvas) sweep(area image.Rectangle, col color.RGBA, alpha float64) {
 	c.active = c.active[:0]
 	next := 0
 
 	//nolint:varnamelen // y is the pixel-addressing idiom used throughout this package.
-	for y := area.Min.Y; y < area.Max.Y; y++ {
-		c.retire(y)
-		next = c.admit(next, y)
+	for y := c.edges[0].top; y < area.Max.Y; y++ {
+		c.active = retire(c.active, y)
+		c.active, next = admit(c.active, c.edges, next, y)
 
 		if len(c.active) == 0 {
 			// Nothing on this row and nothing left to admit means every
@@ -137,47 +178,50 @@ func (c *Canvas) sweep(area image.Rectangle, col color.RGBA) {
 				return
 			}
 
+			y = c.edges[next].top - 1
+
 			continue
 		}
 
-		c.fillRow(y, area, col)
-		c.advance()
+		c.fillRow(y, area, col, alpha)
+		advance(c.active)
 	}
 }
 
 // admit moves the edges that start on this row onto the active list, and
-// returns how far through the sorted list that got.
-func (c *Canvas) admit(next, y int) int {
-	for next < len(c.edges) && c.edges[next].top == y {
-		c.active = append(c.active, c.edges[next])
+// returns the list and how far through the sorted edges that got.
+func admit(active, edges []polyEdge, next, y int) ([]polyEdge, int) {
+	for next < len(edges) && edges[next].top == y {
+		active = append(active, edges[next])
 		next++
 	}
 
-	return next
+	return active, next
 }
 
 // retire drops the edges that ended above this row, compacting the active list
 // in place so it never grows past the widest row of the polygon.
-func (c *Canvas) retire(y int) {
-	kept := c.active[:0]
+func retire(active []polyEdge, y int) []polyEdge {
+	kept := active[:0]
 
-	for _, edge := range c.active {
+	for _, edge := range active {
 		if edge.bottom > y {
 			kept = append(kept, edge)
 		}
 	}
 
-	c.active = kept
+	return kept
 }
 
 // advance steps every active edge onto the next row.
-func (c *Canvas) advance() {
-	for index := range c.active {
-		c.active[index].x += c.active[index].slope
+func advance(active []polyEdge) {
+	for index := range active {
+		active[index].x += active[index].slope
 	}
 }
 
-// fillRow paints the spans between pairs of crossings on one row.
+// fillRow paints the spans between pairs of crossings on one row, opaquely
+// when alpha is one or more and blended otherwise.
 //
 // The crossings are sorted and taken two at a time, which is the even-odd rule
 // written out: the first crossing enters the shape, the second leaves it, the
@@ -187,20 +231,32 @@ func (c *Canvas) advance() {
 // instead of stopping at it.
 //
 //nolint:varnamelen // y is the pixel-addressing idiom used throughout this package.
-func (c *Canvas) fillRow(y int, area image.Rectangle, col color.RGBA) {
+func (c *Canvas) fillRow(y int, area image.Rectangle, col color.RGBA, alpha float64) {
+	c.sortCrossings()
+
+	for index := 0; index+1 < len(c.crossings); index += 2 {
+		from := max(pixelAt(c.crossings[index]), area.Min.X)
+		to := min(pixelAt(c.crossings[index+1])-1, area.Max.X-1)
+
+		if alpha >= 1 {
+			c.hline(from, to, y, col)
+
+			continue
+		}
+
+		c.blendSpan(from, to, y, col, alpha)
+	}
+}
+
+// sortCrossings lists where every active edge meets the current row, left to
+// right.
+func (c *Canvas) sortCrossings() {
 	c.crossings = c.crossings[:0]
 	for _, edge := range c.active {
 		c.crossings = append(c.crossings, edge.x)
 	}
 
 	slices.Sort(c.crossings)
-
-	for index := 0; index+1 < len(c.crossings); index += 2 {
-		from := max(pixelAt(c.crossings[index]), area.Min.X)
-		to := min(pixelAt(c.crossings[index+1])-1, area.Max.X-1)
-
-		c.hline(from, to, y, col)
-	}
 }
 
 // halfPixel is a pixel's centre offset from its own coordinate; see pixelAt.

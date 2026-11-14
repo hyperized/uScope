@@ -81,38 +81,15 @@ func (c *Canvas) LineAA(x0, y0, x1, y1 float64, col color.RGBA) {
 		return
 	}
 
-	startX, startY, endX, endY := x0, y0, x1, y1
+	// orientRun swaps a steep line into (y, x) space and walks it left to
+	// right, so the loop below always advances one pixel along the axis with
+	// more ground to cover, and LineAA(a, b, c, d) and LineAA(c, d, a, b)
+	// produce the same image.
+	run := orientRun(x0, y0, x1, y1)
+	steep, gradient := run.steep, run.gradient
+	interY := run.startMinor + gradient*(run.firstCol-run.startMajor)
 
-	// Steep lines are walked column-by-column in (y, x) space instead of
-	// (x, y): swapping the roles here keeps the stepping loop below always
-	// advancing along the axis with more ground to cover, one pixel per
-	// step, however the line is oriented.
-	steep := math.Abs(endY-startY) > math.Abs(endX-startX)
-	if steep {
-		startX, startY = startY, startX
-		endX, endY = endY, endX
-	}
-
-	// Walking left-to-right after this point, regardless of which endpoint
-	// the caller gave first, is what makes LineAA(a, b, c, d) and
-	// LineAA(c, d, a, b) produce the same image.
-	if startX > endX {
-		startX, endX = endX, startX
-		startY, endY = endY, startY
-	}
-
-	deltaX := endX - startX
-	deltaY := endY - startY
-
-	var gradient float64
-	if deltaX > 0 {
-		gradient = deltaY / deltaX
-	}
-
-	firstCol, lastCol := math.Round(startX), math.Round(endX)
-	interY := startY + gradient*(firstCol-startX)
-
-	for pixelX := firstCol; pixelX <= lastCol; pixelX++ {
+	for pixelX := run.firstCol; pixelX <= run.lastCol; pixelX++ {
 		rowFloor := math.Floor(interY)
 		frac := interY - rowFloor
 

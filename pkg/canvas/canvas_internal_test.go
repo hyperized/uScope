@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -393,8 +394,15 @@ func TestAppendEdgeNormalisesDirection(t *testing.T) {
 		t.Fatalf("appendEdge produced %d and %d edges, want 1 each", len(topDown), len(bottomUp))
 	}
 
-	if topDown[0] != bottomUp[0] {
-		t.Errorf("top-down edge = %+v, bottom-up edge = %+v, want equal", topDown[0], bottomUp[0])
+	if topDown[0].winding != 1 || bottomUp[0].winding != -1 {
+		t.Errorf("windings = %d and %d, want 1 and -1", topDown[0].winding, bottomUp[0].winding)
+	}
+
+	flipped := bottomUp[0]
+	flipped.winding = topDown[0].winding
+
+	if topDown[0] != flipped {
+		t.Errorf("top-down edge = %+v, bottom-up edge = %+v, want equal but for winding", topDown[0], bottomUp[0])
 	}
 }
 
@@ -467,7 +475,7 @@ func TestSweepReturnsWhenNothingLeftToAdmit(t *testing.T) {
 		{top: polyTop, bottom: polyBottom, x: 8, slope: 0},
 	}
 
-	canv.sweep(image.Rect(0, 0, canvasSide, canvasSide), Green)
+	canv.sweep(image.Rect(0, 0, canvasSide, canvasSide), Green, 1)
 
 	for y := polyTop; y < polyBottom; y++ {
 		assertPixelAt(t, canv, 4, y, Green)
@@ -505,7 +513,7 @@ func TestSweepContinuesThroughGapBetweenRings(t *testing.T) {
 		{top: 5, bottom: 7, x: 5, slope: 0},
 	}
 
-	canv.sweep(image.Rect(0, 0, canvasSide, canvasSide), Red)
+	canv.sweep(image.Rect(0, 0, canvasSide, canvasSide), Red, 1)
 
 	for y := range 2 {
 		assertPixelAt(t, canv, 2, y, Red)
@@ -554,5 +562,152 @@ func TestPointOnCircle(t *testing.T) {
 					centerX, centerY, testCase.radius, testCase.angle, gotX, gotY, testCase.wantX, testCase.wantY)
 			}
 		})
+	}
+}
+
+// TestZoneWalk pins how the walk takes in crossings: one at the start pixel
+// counts, one between from and to cuts the span, one past to is left for
+// later, and with none left the span runs to the end. Winding signs are
+// summed, so the depth is the absolute running total.
+func TestZoneWalk(t *testing.T) {
+	t.Parallel()
+
+	walk := zoneWalk{crossings: []zoneCrossing{
+		{at: 3, winding: 1}, {at: 6, winding: 1}, {at: 9, winding: -1}, {at: 12, winding: -1},
+	}}
+
+	for _, step := range []struct {
+		name      string
+		from, to  int
+		wantReach int
+		wantDepth int
+	}{
+		{name: "nothing taken in yet, next crossing cuts the span", from: 0, to: 10, wantReach: 2, wantDepth: 0},
+		{name: "crossing exactly at from is taken in", from: 3, to: 10, wantReach: 5, wantDepth: 1},
+		{name: "next crossing beyond to leaves the span whole", from: 6, to: 7, wantReach: 7, wantDepth: 2},
+		{name: "no new crossing at from", from: 8, to: 20, wantReach: 8, wantDepth: 2},
+		{name: "crossing between from and to cuts the span", from: 9, to: 20, wantReach: 11, wantDepth: 1},
+		{name: "no crossings left runs to the end", from: 12, to: 20, wantReach: 20, wantDepth: 0},
+	} {
+		if got := walk.reach(step.from, step.to); got != step.wantReach {
+			t.Errorf("%s: reach(%d, %d) = %d, want %d", step.name, step.from, step.to, got, step.wantReach)
+		}
+
+		if got := walk.depth(); got != step.wantDepth {
+			t.Errorf("%s: depth = %d, want %d", step.name, got, step.wantDepth)
+		}
+	}
+}
+
+// TestZoneWalkNegativeDepth pins that a zone wound the other way still
+// counts as one enclosing zone.
+func TestZoneWalkNegativeDepth(t *testing.T) {
+	t.Parallel()
+
+	walk := zoneWalk{crossings: []zoneCrossing{{at: 2, winding: -1}}}
+	walk.reach(5, 9)
+
+	if got := walk.depth(); got != 1 {
+		t.Errorf("depth = %d, want 1", got)
+	}
+}
+
+// TestInsertByX pins the order the zone walk relies on, since it consumes
+// crossings in sequence and never looks back: shuffled, reversed, already
+// sorted and tied lists all come out by x with nothing lost.
+func TestInsertByX(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		xs   []float64
+	}{
+		{name: "empty"},
+		{name: "one", xs: []float64{3}},
+		{name: "shuffled", xs: []float64{9, 1, 4, 7, 2}},
+		{name: "reversed", xs: []float64{5, 4, 3, 2, 1}},
+		{name: "sorted", xs: []float64{1, 2, 3}},
+		{name: "ties", xs: []float64{2, 1, 2, 1}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			edges := make([]polyEdge, len(testCase.xs))
+			for index, x := range testCase.xs {
+				edges[index] = polyEdge{x: x, winding: index}
+			}
+
+			insertByX(edges)
+
+			want := slices.Clone(testCase.xs)
+			slices.Sort(want)
+
+			for index, edge := range edges {
+				if edge.x != want[index] {
+					t.Fatalf("sorted xs = %v, want %v", edges, want)
+				}
+			}
+		})
+	}
+}
+
+// TestBlendSpanClipping checks that blendSpan clips like hline: nothing is
+// written off the canvas, and an empty or reversed span writes nothing.
+func TestBlendSpanClipping(t *testing.T) {
+	t.Parallel()
+
+	const side = 6
+
+	tests := []struct {
+		name   string
+		x0, x1 int
+		y      int
+		alpha  float64
+		want   image.Rectangle
+	}{
+		{name: "row above", x0: 0, x1: side, y: -1, alpha: 0.5, want: image.Rectangle{}},
+		{name: "row below", x0: 0, x1: side, y: side, alpha: 0.5, want: image.Rectangle{}},
+		{name: "crosses both edges", x0: -5, x1: side + 5, y: 2, alpha: 0.5, want: image.Rect(0, 2, side, 3)},
+		{name: "left of canvas", x0: -4, x1: -1, y: 2, alpha: 0.5, want: image.Rectangle{}},
+		{name: "right of canvas", x0: side, x1: side + 3, y: 2, alpha: 0.5, want: image.Rectangle{}},
+		{name: "reversed", x0: 4, x1: 1, y: 2, alpha: 0.5, want: image.Rectangle{}},
+		{name: "inner span", x0: 1, x1: 3, y: 4, alpha: 0.5, want: image.Rect(1, 4, 4, 5)},
+		{name: "alpha above one is opaque", x0: 0, x1: 1, y: 0, alpha: 3, want: image.Rect(0, 0, 2, 1)},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := New(side, side)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			canv.blendSpan(testCase.x0, testCase.x1, testCase.y, White, testCase.alpha)
+
+			assertBlended(t, canv, testCase.want)
+		})
+	}
+}
+
+// assertBlended checks that exactly the pixels inside want carry an opaque
+// grey and every other pixel is still clear.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func assertBlended(t *testing.T, canv *Canvas, want image.Rectangle) {
+	t.Helper()
+
+	for y := range canv.img.Rect.Dy() {
+		for x := range canv.img.Rect.Dx() {
+			got := canv.img.RGBAAt(x, y)
+			if image.Pt(x, y).In(want) {
+				if got.A != opaque || got.R == 0 || got.R != got.G || got.G != got.B {
+					t.Errorf("pixel (%d, %d) = %v, want an opaque grey", x, y, got)
+				}
+			} else if got != (color.RGBA{}) {
+				t.Errorf("pixel (%d, %d) = %v, want untouched", x, y, got)
+			}
+		}
 	}
 }
