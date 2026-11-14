@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The tilted views no longer draw a faint dashed line down the 5 degree east
+  meridian. Land is stored in five degree cells, and two cells' pieces now
+  walk their shared boundary in the same edges, so the fill closes over it.
+
 ## [0.1.0] - 2026-09-23
 
 First public release.

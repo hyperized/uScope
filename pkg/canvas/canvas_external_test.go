@@ -1,6 +1,7 @@
 package canvas_test
 
 import (
+	"bytes"
 	"errors"
 	"image"
 	"image/color"
@@ -1407,5 +1408,634 @@ func BenchmarkFillPolygon(b *testing.B) {
 
 	for b.Loop() {
 		canv.FillPolygon(rings, canv.Bounds(), canvas.White)
+	}
+}
+
+// BenchmarkBlendPolygon is BenchmarkFillPolygon with a translucent colour.
+func BenchmarkBlendPolygon(b *testing.B) {
+	const side = 256
+
+	canv, err := canvas.New(side, side)
+	if err != nil {
+		b.Fatalf("New: %v", err)
+	}
+
+	rings := [][]image.Point{{{X: 0, Y: 0}, {X: side, Y: 0}, {X: side, Y: side}, {X: 0, Y: side}}}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		canv.BlendPolygon(rings, canv.Bounds(), canvas.White, 0.5)
+	}
+}
+
+// assertSamePix fails the test if the two canvases differ in any byte.
+func assertSamePix(t *testing.T, got, want *canvas.Canvas) {
+	t.Helper()
+
+	if !bytes.Equal(got.Image().Pix, want.Image().Pix) {
+		t.Error("canvas differs from the expected pixels")
+	}
+}
+
+const blendSide = 12
+
+func blendBackground() color.RGBA { return color.RGBA{R: 100, G: 40, B: 200, A: 0xFF} }
+
+// fresh is a canvas of blendSide filled with blendBackground.
+func fresh(t *testing.T) *canvas.Canvas {
+	t.Helper()
+
+	return cleared(t, blendSide, blendBackground())
+}
+
+// cleared is a canvas of the given side filled with col.
+func cleared(t *testing.T, side int, col color.RGBA) *canvas.Canvas {
+	t.Helper()
+
+	canv := mustCanvas(t, side)
+	canv.Clear(col)
+
+	return canv
+}
+
+// nearRGBA allows the one step of rounding the fixed-point mix may differ by.
+func nearRGBA(got, want color.RGBA) bool {
+	within := func(a, b uint8) bool { return max(a, b)-min(a, b) <= 1 }
+
+	return got.A == want.A && within(got.R, want.R) && within(got.G, want.G) && within(got.B, want.B)
+}
+
+// TestBlendPolygon covers the contract of BlendPolygon against a known
+// background.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestBlendPolygon(t *testing.T) {
+	t.Parallel()
+
+	outer := squareRing(2, 2, 10, 10)
+	hole := squareRing(5, 5, 7, 7)
+
+	t.Run("half blend inside and untouched outside", func(t *testing.T) {
+		t.Parallel()
+
+		canv := fresh(t)
+		canv.BlendPolygon([][]image.Point{outer}, canv.Bounds(), canvas.White, 0.5)
+
+		want := color.RGBA{R: 178, G: 148, B: 228, A: 0xFF}
+
+		for y := range blendSide {
+			for x := range blendSide {
+				got := canv.Image().RGBAAt(x, y)
+				if !image.Pt(x, y).In(image.Rect(2, 2, 10, 10)) {
+					assertPixel(t, canv, x, y, blendBackground())
+
+					continue
+				}
+
+				if !nearRGBA(got, want) {
+					t.Errorf("inside (%d, %d) = %v, want about %v", x, y, got, want)
+				}
+			}
+		}
+	})
+
+	for _, alpha := range []float64{0, -0.5, math.NaN()} {
+		t.Run("no-op alpha", func(t *testing.T) {
+			t.Parallel()
+
+			canv := fresh(t)
+			canv.BlendPolygon([][]image.Point{outer}, canv.Bounds(), canvas.White, alpha)
+			assertSamePix(t, canv, fresh(t))
+		})
+	}
+
+	for _, alpha := range []float64{1, 1.5} {
+		t.Run("opaque alpha matches FillPolygon", func(t *testing.T) {
+			t.Parallel()
+
+			blended, filled := fresh(t), fresh(t)
+			blended.BlendPolygon([][]image.Point{outer, hole}, blended.Bounds(), canvas.White, alpha)
+			filled.FillPolygon([][]image.Point{outer, hole}, filled.Bounds(), canvas.White)
+			assertSamePix(t, blended, filled)
+		})
+	}
+}
+
+// TestBlendPolygonRegions covers holes, clips and compounding.
+func TestBlendPolygonRegions(t *testing.T) {
+	t.Parallel()
+
+	outer := squareRing(2, 2, 10, 10)
+	hole := squareRing(5, 5, 7, 7)
+
+	t.Run("hole is untouched", func(t *testing.T) {
+		t.Parallel()
+
+		canv := fresh(t)
+		canv.BlendPolygon([][]image.Point{outer, hole}, canv.Bounds(), canvas.White, 0.5)
+
+		assertPixel(t, canv, 5, 5, blendBackground())
+		assertPixel(t, canv, 6, 6, blendBackground())
+
+		if got := canv.Image().RGBAAt(3, 3); got == blendBackground() {
+			t.Error("ring body (3, 3) was not blended")
+		}
+	})
+
+	t.Run("outside the clip touches nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv := fresh(t)
+		canv.BlendPolygon([][]image.Point{outer}, image.Rect(10, 10, blendSide, blendSide), canvas.White, 0.5)
+
+		assertSamePix(t, canv, fresh(t))
+	})
+
+	t.Run("clip off the canvas touches nothing", func(t *testing.T) {
+		t.Parallel()
+
+		canv := fresh(t)
+		canv.BlendPolygon([][]image.Point{outer}, image.Rect(50, 50, 60, 60), canvas.White, 0.5)
+
+		assertSamePix(t, canv, fresh(t))
+	})
+
+	t.Run("flat polygon has no edges", func(t *testing.T) {
+		t.Parallel()
+
+		canv := fresh(t)
+		canv.BlendPolygon([][]image.Point{{{X: 1, Y: 3}, {X: 9, Y: 3}}}, canv.Bounds(), canvas.White, 0.5)
+
+		assertSamePix(t, canv, fresh(t))
+	})
+
+	t.Run("compounds across calls", func(t *testing.T) {
+		t.Parallel()
+
+		canv := cleared(t, blendSide, canvas.Black)
+
+		for range 2 {
+			canv.BlendPolygon([][]image.Point{outer}, canv.Bounds(), canvas.White, 0.5)
+		}
+
+		want := color.RGBA{R: 191, G: 191, B: 191, A: 0xFF}
+		if got := canv.Image().RGBAAt(4, 4); !nearRGBA(got, want) {
+			t.Errorf("two half blends = %v, want about %v", got, want)
+		}
+	})
+}
+
+// TestBlendPolygonAllocations holds the per-frame rule: once the scratch has
+// grown, a blended fill allocates nothing.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestBlendPolygonAllocations(t *testing.T) {
+	canv := mustCanvas(t, 64)
+	rings := [][]image.Point{squareRing(4, 4, 60, 60), squareRing(20, 20, 30, 30)}
+
+	canv.BlendPolygon(rings, canv.Bounds(), canvas.White, 0.5)
+
+	allocs := testing.AllocsPerRun(20, func() {
+		canv.BlendPolygon(rings, canv.Bounds(), canvas.White, 0.5)
+	})
+	if allocs != 0 {
+		t.Errorf("BlendPolygon allocated %v times per run, want 0", allocs)
+	}
+}
+
+// squareRing is the four corners of the rectangle from (x0, y0) to (x1, y1),
+// wound clockwise on screen.
+func squareRing(x0, y0, x1, y1 int) []image.Point {
+	return []image.Point{{X: x0, Y: y0}, {X: x1, Y: y0}, {X: x1, Y: y1}, {X: x0, Y: y1}}
+}
+
+// reversed returns ring wound the other way, leaving ring itself alone.
+func reversed(ring []image.Point) []image.Point {
+	out := make([]image.Point, len(ring))
+	for index, point := range ring {
+		out[len(ring)-1-index] = point
+	}
+
+	return out
+}
+
+// mustSize creates a width by height canvas or fails the test immediately.
+func mustSize(t *testing.T, width, height int) *canvas.Canvas {
+	t.Helper()
+
+	canv, err := canvas.New(width, height)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return canv
+}
+
+// TestClearRows pins the per-row colouring: row y takes rows[y], and rows
+// past the end of the slice take rest. A gradient sky depends on both halves.
+func TestClearRows(t *testing.T) {
+	t.Parallel()
+
+	const (
+		width  = 5
+		height = 6
+	)
+
+	rest := canvas.Magenta
+	six := []color.RGBA{canvas.Red, canvas.Green, canvas.Blue, canvas.Yellow, canvas.Cyan, canvas.White}
+
+	for _, testCase := range []struct {
+		name string
+		rows []color.RGBA
+		want func(y int) color.RGBA
+	}{
+		{
+			name: "short slice falls back to rest",
+			rows: six[:3],
+			want: func(y int) color.RGBA {
+				if y < 3 {
+					return six[y]
+				}
+
+				return rest
+			},
+		},
+		{
+			name: "slice longer than the canvas is cut off",
+			rows: append(append([]color.RGBA{}, six...), canvas.Black, canvas.Red, canvas.Green),
+			want: func(y int) color.RGBA { return six[y] },
+		},
+		{
+			name: "slice exactly as tall as the canvas",
+			rows: six,
+			want: func(y int) color.RGBA { return six[y] },
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustSize(t, width, height)
+			canv.ClearRows(testCase.rows, rest)
+
+			for y := range height {
+				for x := range width {
+					assertPixel(t, canv, x, y, testCase.want(y))
+				}
+			}
+		})
+	}
+}
+
+// TestClearRowsEmptyMatchesClear pins that no rows means a plain Clear, so a
+// caller with no gradient pays for nothing and gets the same bytes.
+func TestClearRowsEmptyMatchesClear(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		rows []color.RGBA
+	}{
+		{name: "nil", rows: nil},
+		{name: "empty slice", rows: []color.RGBA{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, want := mustSize(t, 7, 5), mustSize(t, 7, 5)
+			got.ClearRows(testCase.rows, canvas.Cyan)
+			want.Clear(canvas.Cyan)
+
+			if !bytes.Equal(got.Image().Pix, want.Image().Pix) {
+				t.Error("ClearRows with no rows differs from Clear")
+			}
+		})
+	}
+}
+
+// TestClearRowsSubCanvas pins that a window is painted from its own first
+// row and that the parent outside it is left alone. The scope draws into
+// sub-canvases, so indexing against the parent would shift the gradient.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestClearRowsSubCanvas(t *testing.T) {
+	t.Parallel()
+
+	parent := mustSize(t, 8, 8)
+	parent.Clear(canvas.White)
+
+	window, ok := parent.Sub(image.Rect(2, 3, 6, 7))
+	if !ok {
+		t.Fatal("Sub reported an empty window")
+	}
+
+	window.ClearRows([]color.RGBA{canvas.Red, canvas.Green}, canvas.Blue)
+
+	for y := range 8 {
+		for x := range 8 {
+			want := canvas.White
+
+			if x >= 2 && x < 6 && y >= 3 && y < 7 {
+				switch y - 3 {
+				case 0:
+					want = canvas.Red
+				case 1:
+					want = canvas.Green
+				default:
+					want = canvas.Blue
+				}
+			}
+
+			assertPixel(t, parent, x, y, want)
+		}
+	}
+}
+
+// TestClearRowsAllocs pins that the gradient clear allocates nothing, since
+// it runs once per frame on the render path.
+//
+//nolint:paralleltest // AllocsPerRun forbids running as a parallel test.
+func TestClearRowsAllocs(t *testing.T) {
+	canv := mustSize(t, 64, 64)
+	rows := make([]color.RGBA, 20)
+
+	for index := range rows {
+		rows[index] = color.RGBA{R: uint8(index), G: 1, B: 2, A: 0xFF}
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		canv.ClearRows(rows, canvas.Black)
+	})
+	if allocs != 0 {
+		t.Errorf("ClearRows allocated %v times per run, want 0", allocs)
+	}
+}
+
+// zonedInks are the three colours the FillPolygonZoned tests colour by depth.
+var zonedInks = []color.RGBA{canvas.Red, canvas.Green, canvas.Blue} //nolint:gochecknoglobals // read-only test palette.
+
+// nestedExpect is the picture the nested-zone tests expect on a 20x20 canvas
+// whose ring fills it, with zones over 4..16 and 8..12 on both axes.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func nestedExpect(x, y int) color.RGBA {
+	depth := 0
+	if x >= 4 && x < 16 && y >= 4 && y < 16 {
+		depth++
+	}
+
+	if x >= 8 && x < 12 && y >= 8 && y < 12 {
+		depth++
+	}
+
+	return zonedInks[depth]
+}
+
+// TestFillPolygonZonedNoZones pins that without zones the result is exactly
+// FillPolygon in inks[0], holes included, so adding the zone parameter never
+// changes a plain fill.
+func TestFillPolygonZonedNoZones(t *testing.T) {
+	t.Parallel()
+
+	rings := [][]image.Point{
+		squareRing(1, 1, 15, 15),
+		squareRing(5, 5, 10, 10),
+		{{X: 16, Y: 0}, {X: 19, Y: 8}, {X: 13, Y: 3}},
+	}
+	clip := image.Rect(0, 0, 20, 20)
+
+	for _, testCase := range []struct {
+		name  string
+		zones [][]image.Point
+	}{
+		{name: "nil", zones: nil},
+		{name: "empty slice", zones: [][]image.Point{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, want := mustSize(t, 20, 20), mustSize(t, 20, 20)
+			got.FillPolygonZoned(rings, testCase.zones, clip, zonedInks)
+			want.FillPolygon(rings, clip, zonedInks[0])
+
+			if !bytes.Equal(got.Image().Pix, want.Image().Pix) {
+				t.Error("zoned fill without zones differs from FillPolygon")
+			}
+
+			if countPixels(got, zonedInks[0]) == 0 {
+				t.Error("nothing was painted, the comparison proves nothing")
+			}
+		})
+	}
+}
+
+// TestFillPolygonZonedNested pins the colour by depth and the half-open
+// boundaries, and that the zones' winding direction does not matter.
+func TestFillPolygonZonedNested(t *testing.T) {
+	t.Parallel()
+
+	outer, inner := squareRing(4, 4, 16, 16), squareRing(8, 8, 12, 12)
+
+	for _, testCase := range []struct {
+		name  string
+		zones [][]image.Point
+	}{
+		{name: "same winding", zones: [][]image.Point{outer, inner}},
+		{name: "opposite winding", zones: [][]image.Point{reversed(outer), reversed(inner)}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustSize(t, 20, 20)
+			canv.FillPolygonZoned(
+				[][]image.Point{squareRing(0, 0, 20, 20)}, testCase.zones, canv.Bounds(), zonedInks,
+			)
+
+			for y := range 20 {
+				for x := range 20 {
+					assertPixel(t, canv, x, y, nestedExpect(x, y))
+				}
+			}
+		})
+	}
+}
+
+// TestFillPolygonZonedClampsCount pins that a depth past the last ink takes
+// the last ink rather than indexing out of range.
+func TestFillPolygonZonedClampsCount(t *testing.T) {
+	t.Parallel()
+
+	canv := mustSize(t, 20, 20)
+	zones := [][]image.Point{squareRing(2, 2, 18, 18), squareRing(5, 5, 15, 15), squareRing(8, 8, 12, 12)}
+	canv.FillPolygonZoned([][]image.Point{squareRing(0, 0, 20, 20)}, zones, canv.Bounds(), zonedInks[:2])
+
+	assertPixel(t, canv, 0, 0, zonedInks[0])
+	assertPixel(t, canv, 3, 3, zonedInks[1])
+	assertPixel(t, canv, 6, 6, zonedInks[1])
+	assertPixel(t, canv, 9, 9, zonedInks[1])
+}
+
+// TestFillPolygonZonedPaintsNothing pins the early outs: no ink, no clip
+// area, or rings with no edge crossing a row leave the canvas untouched.
+func TestFillPolygonZonedPaintsNothing(t *testing.T) {
+	t.Parallel()
+
+	square := [][]image.Point{squareRing(0, 0, 10, 10)}
+	zones := [][]image.Point{squareRing(2, 2, 8, 8)}
+	full := image.Rect(0, 0, 10, 10)
+
+	for _, testCase := range []struct {
+		name  string
+		rings [][]image.Point
+		clip  image.Rectangle
+		inks  []color.RGBA
+	}{
+		{name: "nil inks", rings: square, clip: full, inks: nil},
+		{name: "empty inks", rings: square, clip: full, inks: []color.RGBA{}},
+		{name: "empty clip", rings: square, clip: image.Rect(3, 3, 3, 3), inks: zonedInks},
+		{name: "clip off canvas", rings: square, clip: image.Rect(50, 50, 60, 60), inks: zonedInks},
+		{name: "nil rings", rings: nil, clip: full, inks: zonedInks},
+		{name: "empty ring", rings: [][]image.Point{{}}, clip: full, inks: zonedInks},
+		{
+			name:  "horizontal edges only",
+			rings: [][]image.Point{{{X: 0, Y: 4}, {X: 9, Y: 4}}},
+			clip:  full,
+			inks:  zonedInks,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustSize(t, 10, 10)
+			canv.FillPolygonZoned(testCase.rings, zones, testCase.clip, testCase.inks)
+
+			if got := countPixels(canv, color.RGBA{}); got != 100 {
+				t.Errorf("%d pixels untouched, want 100", got)
+			}
+		})
+	}
+}
+
+// TestFillPolygonZonedZoneOutsideClip pins that a zone counts where it runs
+// outside the clip, so cutting a picture to a window does not recolour it.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestFillPolygonZonedZoneOutsideClip(t *testing.T) {
+	t.Parallel()
+
+	canv := mustSize(t, 30, 10)
+	canv.FillPolygonZoned(
+		[][]image.Point{squareRing(0, 0, 30, 10)},
+		[][]image.Point{squareRing(0, 0, 15, 10)},
+		image.Rect(10, 0, 20, 10),
+		zonedInks,
+	)
+
+	for y := range 10 {
+		for x := range 30 {
+			want := color.RGBA{}
+
+			switch {
+			case x >= 10 && x < 15:
+				want = zonedInks[1]
+			case x >= 15 && x < 20:
+				want = zonedInks[0]
+			default:
+				// Outside the clip nothing is painted at all.
+			}
+
+			assertPixel(t, canv, x, y, want)
+		}
+	}
+}
+
+// TestFillPolygonZonedZoneNeverPaints pins that a zone only colours: where
+// the rings are not, nothing is painted however big the zone.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestFillPolygonZonedZoneNeverPaints(t *testing.T) {
+	t.Parallel()
+
+	canv := mustSize(t, 20, 20)
+	canv.FillPolygonZoned(
+		[][]image.Point{squareRing(5, 5, 10, 10)},
+		[][]image.Point{squareRing(0, 0, 20, 20)},
+		canv.Bounds(),
+		zonedInks,
+	)
+
+	for y := range 20 {
+		for x := range 20 {
+			want := color.RGBA{}
+			if x >= 5 && x < 10 && y >= 5 && y < 10 {
+				want = zonedInks[1]
+			}
+
+			assertPixel(t, canv, x, y, want)
+		}
+	}
+}
+
+// TestFillPolygonZonedAdvancesThroughGap pins that zone edges keep stepping
+// on rows where no ring is painted. A slanted zone spans the gap between two
+// stacked squares, so an edge left behind would land in the wrong column on
+// the lower square.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestFillPolygonZonedAdvancesThroughGap(t *testing.T) {
+	t.Parallel()
+
+	const (
+		width  = 24
+		height = 20
+	)
+
+	canv := mustSize(t, width, height)
+	rings := [][]image.Point{squareRing(0, 0, width, 4), squareRing(0, 10, width, 14)}
+	zone := []image.Point{{X: 12, Y: 0}, {X: 22, Y: 16}, {X: 2, Y: 16}}
+	canv.FillPolygonZoned(rings, [][]image.Point{zone}, canv.Bounds(), zonedInks[:2])
+
+	// Both slanted edges move 0.625 columns per row, which is exact in
+	// binary, so the edge position can be computed straight from the row.
+	const slope = 0.625
+
+	for y := range height {
+		inRing := y < 4 || (y >= 10 && y < 14)
+
+		for x := range width {
+			want := color.RGBA{}
+
+			if inRing {
+				want = zonedInks[0]
+
+				left := int(math.Ceil(12 - slope*float64(y) - 0.5))
+				right := int(math.Ceil(12 + slope*float64(y) - 0.5))
+
+				if x >= left && x < right {
+					want = zonedInks[1]
+				}
+			}
+
+			assertPixel(t, canv, x, y, want)
+		}
+	}
+}
+
+// TestFillPolygonZonedAllocs pins that the zoned fill allocates nothing once
+// the scratch has grown.
+//
+//nolint:paralleltest // AllocsPerRun forbids running as a parallel test.
+func TestFillPolygonZonedAllocs(t *testing.T) {
+	canv := mustSize(t, 64, 64)
+	rings := [][]image.Point{squareRing(2, 2, 60, 60), squareRing(10, 10, 20, 20)}
+	zones := [][]image.Point{squareRing(5, 5, 55, 55), squareRing(15, 15, 45, 45), squareRing(25, 25, 35, 35)}
+
+	canv.FillPolygonZoned(rings, zones, canv.Bounds(), zonedInks)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		canv.FillPolygonZoned(rings, zones, canv.Bounds(), zonedInks)
+	})
+	if allocs != 0 {
+		t.Errorf("FillPolygonZoned allocated %v times per run, want 0", allocs)
 	}
 }

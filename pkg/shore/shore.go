@@ -155,8 +155,10 @@ func (s *Set) Within(latMin, latMax, lonMin, lonMax float64, visit func(Polyline
 //
 // The pieces two neighbouring cells hold meet on exactly the same
 // coordinates, because both were cut from the same ring by the same
-// arithmetic, so one even-odd pass over the rings of several cells fills them
-// as one shape with no seam between them.
+// arithmetic, and wherever they run along their shared boundary they do it
+// in the same edges between the same points. One even-odd pass over the rings
+// of several cells therefore fills them as one shape with no seam between
+// them, under any projection that maps a straight edge to a straight edge.
 //
 // Everything Within's own documentation says about allocation, aliasing, nil
 // receivers and the dateline holds here word for word: the two walk the same

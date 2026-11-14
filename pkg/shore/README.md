@@ -101,8 +101,13 @@ original ran off the cell, the piece runs along the boundary instead. Splitting
 it the way a line is split would leave two open curves, and an open curve
 cannot be filled. Two neighbouring cells compute the same crossing from the
 same pair of points with the same arithmetic, so their pieces meet on exactly
-the same coordinates and an even-odd fill over both sees one continuous span
-rather than a seam. A cell that lies wholly inside a landmass gets that
+the same coordinates. They also run along the boundary in the same edges:
+every edge on a boundary is cut at every point any piece of the same ring has
+there (`weld.go`). Without that, one piece could walk the boundary corner to
+corner while its neighbour walked a third of it, which cancels in exact
+arithmetic and on the flat map but not in perspective, where the two walks are
+drawn between different rounded ends and the fill leaks a pixel between them.
+An even-odd fill over both cells sees one continuous span. A cell that lies wholly inside a landmass gets that
 landmass as its own rectangle, four points, which is the cheapest thing in
 either file.
 
@@ -121,7 +126,9 @@ half, larger ones mean more points visited that are nowhere near the scope.
 The binary has room for about 2 MB of land, and the rings do not fit in it
 unsimplified: at full detail they pack to 2,244,714 bytes. Douglas-Peucker at
 100 metres, which `pkg/shore/build.go` applies as `defaultLandToleranceM`,
-brings that to 1,988,267 bytes for 509,822 points instead of 599,604.
+brings that to 1,988,267 bytes for 509,822 points instead of 599,604. The weld
+adds 2,908 stored points to the 521,635 the cells held, and the file to
+1,996,761 bytes.
 
 A hundred metres is a fifth of a pixel at the widest range uScope draws. The
 outlines keep every point they had, so at the tightest ranges the fill's edge

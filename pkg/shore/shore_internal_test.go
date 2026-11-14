@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -1249,6 +1250,123 @@ func TestBoundedColumn(t *testing.T) {
 
 			if got := boundedColumn(testCase.lon); got != testCase.want {
 				t.Errorf("boundedColumn(%v) = %v, want %v", testCase.lon, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestWeldSplitsTheLongerWalk is the case the embedded file had around the
+// Netherlands, cut down to two pieces of one ring. The western piece walks
+// the 5 degree meridian from corner to corner and back up a third of it, the
+// eastern one walks the third once. Welded, the long walk stops where the
+// short ones do, so every stretch of the meridian is the same two points in
+// both pieces.
+func TestWeldSplitsTheLongerWalk(t *testing.T) {
+	t.Parallel()
+
+	west := Polyline{
+		{Lat: 55, Lon: 5}, {Lat: 50, Lon: 5}, {Lat: 50, Lon: 1}, {Lat: 52, Lon: 2}, {Lat: 53, Lon: 5},
+	}
+	east := Polyline{
+		{Lat: 55, Lon: 10}, {Lat: 50, Lon: 10}, {Lat: 50, Lon: 5}, {Lat: 53, Lon: 5},
+	}
+
+	pieces := []Polyline{west, east}
+	weld(pieces)
+
+	wantWest := Polyline{
+		{Lat: 55, Lon: 5}, {Lat: 53, Lon: 5}, {Lat: 50, Lon: 5},
+		{Lat: 50, Lon: 1}, {Lat: 52, Lon: 2}, {Lat: 53, Lon: 5},
+	}
+
+	if !slices.Equal(pieces[0], wantWest) {
+		t.Errorf("west piece = %v, want %v", pieces[0], wantWest)
+	}
+
+	if !slices.Equal(pieces[1], east) {
+		t.Errorf("east piece = %v, want it unchanged at %v", pieces[1], east)
+	}
+}
+
+// TestWeldWalksBothWays checks that the stops come out in the order the edge
+// meets them whichever way it runs, and that a stop the edge starts on is not
+// written twice. A parallel is used so the longitude path is the one read.
+func TestWeldWalksBothWays(t *testing.T) {
+	t.Parallel()
+
+	const lat = 50
+
+	stops := Polyline{{Lat: lat, Lon: 1}, {Lat: lat, Lon: 2}, {Lat: lat, Lon: 3}, {Lat: 51, Lon: 2}}
+	eastward := Polyline{{Lat: lat, Lon: 1}, {Lat: lat, Lon: 4}, {Lat: 49, Lon: 2}}
+	westward := Polyline{{Lat: lat, Lon: 4}, {Lat: lat, Lon: 1}, {Lat: 51, Lon: 3}}
+
+	pieces := []Polyline{stops, eastward, westward}
+	weld(pieces)
+
+	wantEast := Polyline{
+		{Lat: lat, Lon: 1}, {Lat: lat, Lon: 2}, {Lat: lat, Lon: 3}, {Lat: lat, Lon: 4}, {Lat: 49, Lon: 2},
+	}
+	wantWest := Polyline{
+		{Lat: lat, Lon: 4}, {Lat: lat, Lon: 3}, {Lat: lat, Lon: 2}, {Lat: lat, Lon: 1}, {Lat: 51, Lon: 3},
+	}
+
+	if !slices.Equal(pieces[1], wantEast) {
+		t.Errorf("eastward piece = %v, want %v", pieces[1], wantEast)
+	}
+
+	if !slices.Equal(pieces[2], wantWest) {
+		t.Errorf("westward piece = %v, want %v", pieces[2], wantWest)
+	}
+}
+
+// TestWeldLeavesRingsOffTheGridAlone covers the common case: a ring that
+// touches no boundary has nothing to weld and comes back as it went in.
+func TestWeldLeavesRingsOffTheGridAlone(t *testing.T) {
+	t.Parallel()
+
+	ring := Polyline{{Lat: 51, Lon: 1}, {Lat: 51, Lon: 2}, {Lat: 52, Lon: 2}}
+	pieces := []Polyline{ring}
+	weld(pieces)
+
+	if !slices.Equal(pieces[0], ring) {
+		t.Errorf("weld() = %v, want %v unchanged", pieces[0], ring)
+	}
+}
+
+func TestSharedLine(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		from, to Point
+		want     gridLine
+		wantOK   bool
+	}{
+		{
+			name: "along a meridian",
+			from: Point{Lat: 51, Lon: 5}, to: Point{Lat: 52, Lon: 5},
+			want: gridLine{lat: false, index: 1}, wantOK: true,
+		},
+		{
+			name: "along a parallel",
+			from: Point{Lat: 50, Lon: 1}, to: Point{Lat: 50, Lon: 2},
+			want: gridLine{lat: true, index: 10}, wantOK: true,
+		},
+		{
+			name: "a rounding error off the meridian still counts",
+			from: Point{Lat: 51, Lon: 5 + onLineTolerance/2}, to: Point{Lat: 52, Lon: 5},
+			want: gridLine{lat: false, index: 1}, wantOK: true,
+		},
+		{name: "across a cell", from: Point{Lat: 51, Lon: 1}, to: Point{Lat: 52, Lon: 2}},
+		{name: "between two meridians", from: Point{Lat: 51, Lon: 5}, to: Point{Lat: 51, Lon: 10}},
+		{name: "a point to itself", from: Point{Lat: 50, Lon: 5}, to: Point{Lat: 50, Lon: 5}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := sharedLine(testCase.from, testCase.to)
+			if got != testCase.want || ok != testCase.wantOK {
+				t.Errorf("sharedLine() = %v, %v, want %v, %v", got, ok, testCase.want, testCase.wantOK)
 			}
 		})
 	}

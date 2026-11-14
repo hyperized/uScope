@@ -902,7 +902,7 @@ func (s *Scene) drawContact(dst *canvas.Canvas, x, y int, plane airplane.Snapsho
 		return
 	}
 
-	s.icon.Draw(dst, x, y, plane.Heading, col)
+	s.icon.Draw(dst, x, y, plane.Heading, 1, col)
 }
 
 // knownHeading reports whether a heading was decoded.

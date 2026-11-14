@@ -13,8 +13,9 @@ package shore
 // half-planes a cell is the intersection of leaves a ring again, walking the
 // boundary wherever the original left the cell. Two neighbouring cells compute
 // the same crossing from the same pair of points with the same arithmetic, so
-// the two pieces meet on exactly the same coordinates and the even-odd fill
-// sees one continuous span rather than a seam.
+// the two pieces meet on exactly the same coordinates. Meeting on the same
+// points is not quite enough for a fill drawn in perspective, which is what
+// weld.go is for.
 //
 // Concave rings come out of the algorithm with zero-width bridges along the
 // boundary, which is the textbook complaint about it. For an even-odd fill
@@ -112,6 +113,12 @@ func (h halfPlane) cross(from, to Point) Point {
 type clipper struct {
 	from Polyline
 	to   Polyline
+
+	// keys and pieces are one ring's cells and what landed in each, held
+	// until the ring has been welded. The pieces themselves are fresh slices
+	// that outlive the call; only the two lists of them are reused.
+	keys   []int
+	pieces []Polyline
 }
 
 // clip returns the part of ring inside box, or nothing when none of it is.
@@ -188,12 +195,17 @@ func bucketRings(rings []Polyline) map[int][]Polyline {
 }
 
 // fileRing clips one ring into every cell it reaches.
+//
+// The pieces are welded before any of them is filed, because the weld needs
+// all of one ring's boundary points at once and nothing from any other ring:
+// two different rings never walk the same stretch of a boundary.
 func fileRing(buckets map[int][]Polyline, cut *clipper, ring Polyline) {
 	if len(ring) < minRingPoints {
 		return
 	}
 
 	span := ringCells(ring)
+	keys, pieces := cut.keys[:0], cut.pieces[:0]
 
 	for row := span.rowLow; row <= span.rowHigh; row++ {
 		for col := span.colLow; col <= span.colHigh; col++ {
@@ -202,10 +214,18 @@ func fileRing(buckets map[int][]Polyline, cut *clipper, ring Polyline) {
 				continue
 			}
 
-			key := row*cellCols + col
-			buckets[key] = append(buckets[key], piece)
+			keys = append(keys, row*cellCols+col)
+			pieces = append(pieces, piece)
 		}
 	}
+
+	weld(pieces)
+
+	for index, key := range keys {
+		buckets[key] = append(buckets[key], pieces[index])
+	}
+
+	cut.keys, cut.pieces = keys, pieces
 }
 
 // cellRange is the block of cells a ring's bounding box covers, as a pair of

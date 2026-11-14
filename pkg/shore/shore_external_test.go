@@ -957,3 +957,72 @@ func TestLoadHasLandNearTheNetherlands(t *testing.T) {
 		t.Error("LandWithin() around 52N 4E visited nothing, want at least one land ring")
 	}
 }
+
+// TestLoadedLandBoundariesCancel reads the embedded land file for the
+// property the tilted fill depends on: along every cell boundary inside the
+// world, the edges that run on the boundary pair off exactly, the same two
+// points twice, so an even-odd fill counts each stretch an even number of
+// times however the boundary is projected.
+//
+// Pairing off in total length is not enough and is what the file used to do.
+// A piece that walks a boundary from corner to corner and a neighbour that
+// walks a third of it cover the same ground in exact arithmetic, but in
+// perspective they are drawn as two lines between different rounded ends and
+// the fill leaks between them. That was the dashed line down 5 degrees east.
+//
+// The dateline and the poles are left out: nothing lies beyond them, so the
+// boundary there is the edge of the data rather than a seam.
+func TestLoadedLandBoundariesCancel(t *testing.T) {
+	t.Parallel()
+
+	set, err := shore.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	type edge struct{ from, to shore.Point }
+
+	counts := make(map[edge]int)
+
+	set.LandWithin(-90, 90, -180, 180, func(ring shore.Polyline) {
+		for index, from := range ring {
+			next := ring[(index+1)%len(ring)]
+			if !onInnerBoundary(from, next) {
+				continue
+			}
+
+			if next.Lat < from.Lat || (next.Lat == from.Lat && next.Lon < from.Lon) {
+				from, next = next, from
+			}
+
+			counts[edge{from: from, to: next}]++
+		}
+	})
+
+	if len(counts) == 0 {
+		t.Fatal("no land edge runs along a cell boundary, so the test reads nothing")
+	}
+
+	for found, count := range counts {
+		if count%2 != 0 {
+			t.Errorf("boundary edge %v to %v is counted %d times, want an even number",
+				found.from, found.to, count)
+		}
+	}
+}
+
+// onInnerBoundary reports whether an edge runs along a five degree boundary
+// that has cells on both sides of it. The decoded coordinates are fixed point
+// at 1e-5 degrees, so a point on a boundary sits on it exactly.
+func onInnerBoundary(from, next shore.Point) bool {
+	const (
+		cell     = 5
+		pole     = 90
+		dateline = 180
+	)
+
+	onMeridian := from.Lon == next.Lon && math.Mod(from.Lon, cell) == 0 && math.Abs(from.Lon) != dateline
+	onParallel := from.Lat == next.Lat && math.Mod(from.Lat, cell) == 0 && math.Abs(from.Lat) != pole
+
+	return from != next && (onMeridian || onParallel)
+}
