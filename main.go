@@ -109,6 +109,19 @@ func main() {
 	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// flagsExit turns a flag parsing error into an exit code. Being asked for
+// help is not a failure: the flag package has already printed the usage, and
+// a script that runs --help to probe for the binary should not see an error.
+func flagsExit(err error, stderr io.Writer) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return exitOK
+	}
+
+	_, _ = fmt.Fprintln(stderr, err)
+
+	return exitFailure
+}
+
 // run is main with the process boundary handed in, which is what makes it
 // testable.
 //
@@ -118,17 +131,8 @@ func main() {
 // which is the escape hatch if a restore ever wedges.
 func run(args []string, stdout, stderr io.Writer) int {
 	cfg, err := parseFlags(args)
-	if errors.Is(err, flag.ErrHelp) {
-		// The flag package has already printed the usage. Being asked for
-		// help is not a failure, and a script that runs --help to probe for
-		// the binary should not see one.
-		return exitOK
-	}
-
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
-
-		return exitFailure
+		return flagsExit(err, stderr)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
