@@ -158,6 +158,7 @@ const (
 	labelGlass     = "GLASS"
 	labelPhosphor  = "PHOSPHOR"
 	labelMono      = "MONO"
+	labelVector    = "VECTOR"
 
 	// trailBarLabel is what the trail cap falls back to. It is never drawn:
 	// capLabel answers capTrails from the mode itself, and every mode has a
@@ -167,7 +168,7 @@ const (
 
 	// lookBarLabel is the same fallback for the look cap, never drawn for the
 	// same reason: capLabel answers capLook from the look itself, and all
-	// three looks have a word.
+	// four looks have a word.
 	lookBarLabel = "LOOK"
 
 	// tubesBarLabel is the U cap's word, named because flatCaps and bareCaps
@@ -551,6 +552,8 @@ func lookLabel(look theme.Look) string {
 		return labelPhosphor
 	case theme.LookMono:
 		return labelMono
+	case theme.LookVector:
+		return labelVector
 	case theme.LookGlass:
 		fallthrough
 	default:

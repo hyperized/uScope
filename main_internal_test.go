@@ -111,13 +111,15 @@ const (
 	specimenValue = "specimen"
 
 	// nightValue and dayValue are --theme's two non-default spellings.
-	// phosphorValue and monoValue are --look's two non-default spellings.
+	// phosphorValue, monoValue and vectorValue are --look's three
+	// non-default spellings.
 	// airlineValue is the one non-default --colour spelling, offValue the one
 	// non-default --airports spelling.
 	nightValue    = "night"
 	dayValue      = "day"
 	phosphorValue = "phosphor"
 	monoValue     = "mono"
+	vectorValue   = "vector"
 	airlineValue  = "airline"
 	offValue      = "off"
 	demoValue     = "demo"
@@ -1243,7 +1245,7 @@ func TestThemeReachesConfig(t *testing.T) {
 // TestParseFlagsLook checks every spelling --look accepts lands in
 // config.look, the same way TestParseFlagsTheme pins the other half of the
 // pair. A miswired case here means an operator's --look flag is silently
-// ignored and the run starts on the wrong one of the six palettes.
+// ignored and the run starts on the wrong one of the eight palettes.
 func TestParseFlagsLook(t *testing.T) {
 	t.Parallel()
 
@@ -1256,6 +1258,7 @@ func TestParseFlagsLook(t *testing.T) {
 		{name: "glass explicit", args: []string{flagLook, defaultLook}, want: theme.LookGlass},
 		{name: phosphorValue, args: []string{flagLook, phosphorValue}, want: theme.LookPhosphor},
 		{name: monoValue, args: []string{flagLook, monoValue}, want: theme.LookMono},
+		{name: vectorValue, args: []string{flagLook, vectorValue}, want: theme.LookVector},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

@@ -16,9 +16,10 @@ import (
 // keyShore is the cap that turns the coastline and its fill on and off.
 const keyShore = 'm'
 
-// waterFadeAlpha is how far the tint sits off the field, written out again
-// here rather than read from the scene. Two independent copies of the same
-// number disagree when one of them changes, which is the point.
+// waterFadeAlpha is how far the handheld palettes' tint sits off the field,
+// written out again here rather than read from the palette. Two independent
+// copies of the same number disagree when one of them changes, which is the
+// point.
 const waterFadeAlpha = 0.08
 
 // waterTint is the sea's colour on the palette every test in this file draws
@@ -242,6 +243,34 @@ func TestTiltedGroundFadesIntoTheSky(t *testing.T) {
 // channelSum is the sum of a colour's channels, enough to order the shades of
 // one tint fading into a dark field.
 func channelSum(col color.RGBA) int { return int(col.R) + int(col.G) + int(col.B) }
+
+// TestBareViewShoreFromSettings checks that Settings.MinimalShore opens the
+// bare view with the coastline already drawn, which is what --minimal-shore is
+// for a run nobody is at the keyboard of, and that m then takes it away again.
+func TestBareViewShoreFromSettings(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41))
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame,
+		radar.WithShore(syntheticShoreSet(t, shoreLineThroughReceiver())))
+	scene.Apply(radar.Settings{View: radar.ViewMinimal3D, RangeNm: waterFleetRangeNm, MinimalShore: true})
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, canv.Bounds(), waterTint); got == 0 {
+		t.Fatal("the bare view drew no water with MinimalShore set")
+	}
+
+	if !press(scene, keyShore) {
+		t.Fatal("Handle('m') = false in the bare view, want the scene to take it")
+	}
+
+	scene.Draw(canv, 0)
+
+	if got := countColour(canv, canv.Bounds(), waterTint); got != 0 {
+		t.Errorf("m left %d water pixels, want the coastline gone", got)
+	}
+}
 
 // TestBareViewFillsEdgeToEdge checks the bare flat view's own ground. It has
 // no range ring, so the sea is the whole canvas rather than a disc, and the

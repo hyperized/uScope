@@ -1009,7 +1009,7 @@ func TestSessionCycleTheme(t *testing.T) {
 
 // TestSessionCycleLook checks the k key's fan-out directly: every scene that
 // implements Themed gets the new palette, a plain Drawer is left alone, and
-// three cycles land back on glass. Missing a scene here means switching to it
+// four cycles land back on glass. Missing a scene here means switching to it
 // after pressing k still shows the look it had before the cycle.
 func TestSessionCycleLook(t *testing.T) {
 	t.Parallel()
@@ -1041,12 +1041,22 @@ func TestSessionCycleLook(t *testing.T) {
 
 	ses.cycleLook()
 
-	if ses.look != theme.LookGlass {
-		t.Errorf("look after three cycles = %v, want %v", ses.look, theme.LookGlass)
+	if ses.look != theme.LookVector {
+		t.Errorf("look after three cycles = %v, want %v", ses.look, theme.LookVector)
 	}
 
-	if len(themed.palettes) != 3 || themed.palettes[2] != theme.Night {
-		t.Errorf("SetPalette calls = %v, want a third call with theme.Night", themed.palettes)
+	if len(themed.palettes) != 3 || themed.palettes[2] != theme.VectorNight {
+		t.Errorf("SetPalette calls = %v, want a third call with theme.VectorNight", themed.palettes)
+	}
+
+	ses.cycleLook()
+
+	if ses.look != theme.LookGlass {
+		t.Errorf("look after four cycles = %v, want %v", ses.look, theme.LookGlass)
+	}
+
+	if len(themed.palettes) != 4 || themed.palettes[3] != theme.Night {
+		t.Errorf("SetPalette calls = %v, want a fourth call with theme.Night", themed.palettes)
 	}
 }
 

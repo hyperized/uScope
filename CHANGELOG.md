@@ -144,6 +144,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `off` and the airfields to `on`, and `m` and `a` still flip them.
 - `--battery off` draws no battery indicator and starts no poller, so a
   machine with no battery stops logging a missing one every 30 seconds.
+- A fourth look, `vector`. Its night keeps glass's hues on a field lifted off
+  black, with the band, rules, softkeys, muted chrome and coast lifted with it.
+  The sea is a blue and the land a low-chroma grey-green, strong enough to stay
+  apart under the coloured route tubes. Its day is glass's day with that
+  stronger ground and a darker coast. `--look vector` and the `k` cycle
+  (glass, phosphor, mono, vector) both reach it, and the K cap reads VECTOR.
 
 ### Changed
 
@@ -159,6 +165,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tall or more draws its type, softkeys, column, markers, sprites and line
   widths at a whole multiple of the 1080 layout, so `--size 3840x2160` is the
   1080 picture at twice the size. Anything shorter renders exactly as before.
+- The land has a tint of its own where it used to be the bare field, which on
+  the day palettes was a white page. Glass, phosphor and mono mix 8% of their
+  green into the field, the share the sea takes of Data, so the land is green
+  in those two and grey in mono; vector has a grey-green of its own.
+  The sea and land colours now live on the palette rather than being mixed in
+  the scene. In the 3D views the land fades into the horizon by the same bands
+  as the sea. The flat scope paints the field back over the corners between
+  its range ring and the square the land is filled in, so no land shows
+  outside the ring.
 
 
 ### Fixed

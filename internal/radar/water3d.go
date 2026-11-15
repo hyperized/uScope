@@ -148,17 +148,16 @@ func (h haze3) edge(band int) float64 {
 }
 
 // hazeInk is the colour of one band, numbered from one beyond the full tint
-// out to hazeBands, for ground whose full tint is col: waterInk or landInk.
-// Each band takes the strength the middle of its own step would have,
+// out to hazeBands, for ground whose full tint is col: the palette's Water or
+// Land. Each band takes the strength the middle of its own step would have,
 // so the first is a shade under the full tint and the last a shade over the
 // horizon colour, and neither end of the fade lands on a visible edge.
 //
 // col is already mixed into the field, so it is let off the field by the
-// band's whole strength. For the water that is the picture a fade of Data
-// would draw, because strength times an 8 per cent mix of the ink is strength
-// of the mix itself; only the tint's own rounding can move a channel. The land
-// is the field, so its bands are the field carried towards the horizon and
-// nothing else. Land and sea go through the same call with only the colour
+// band's whole strength. On the handheld palettes that is the picture the old
+// fade of Data or OK drew, because strength times an 8 per cent mix of the ink
+// is strength of the mix itself; only the tint's own rounding can move a
+// channel. Land and sea go through the same call with only the colour
 // changed, so both lose the same share of their tint in a band and a coast
 // reads at the same strength on either side of it all the way out.
 func (s *Scene) hazeInk(col color.RGBA, band int) color.RGBA {

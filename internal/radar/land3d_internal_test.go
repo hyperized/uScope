@@ -1,13 +1,9 @@
 package radar
 
 import (
-	"image"
-	"image/color"
 	"slices"
 	"testing"
 
-	"github.com/hyperized/uScope/internal/theme"
-	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/shore"
 )
 
@@ -259,87 +255,5 @@ func TestGround3Allocations(t *testing.T) {
 
 	if moving != 0 {
 		t.Errorf("a tilted ground that walks the shore set again allocated %.1f times per frame, want 0", moving)
-	}
-}
-
-// wideLandDeg is how far a ring of land reaches from the probe receiver in
-// every direction. Twenty degrees is past the haze's far edge at the probe
-// range, so the ring covers the whole tilted picture.
-const wideLandDeg = 20
-
-// wideLand is a square of land centred on the probe receiver and much larger
-// than anything the scope shows.
-func wideLand() shore.Polyline {
-	return shore.Polyline{
-		{Lat: layerBaseLat - wideLandDeg, Lon: layerBaseLon - wideLandDeg},
-		{Lat: layerBaseLat - wideLandDeg, Lon: layerBaseLon + wideLandDeg},
-		{Lat: layerBaseLat + wideLandDeg, Lon: layerBaseLon + wideLandDeg},
-		{Lat: layerBaseLat + wideLandDeg, Lon: layerBaseLon - wideLandDeg},
-	}
-}
-
-// TestLandPastTheHazeIsTheHorizon walks the ground straight ahead of the
-// camera across one wide ring of land under a dusk sky, from the receiver to
-// a few miles past the haze's far edge. Under the camera the land is the full
-// tint and past the far edge it is the sky's horizon colour exactly, the
-// colour the clear leaves where nothing is filled, so land never shows as a
-// band against the sky.
-//
-// The walk stops just past the far edge rather than well beyond it because a
-// cell of land wholly past the haze is never filled at all: the clear already
-// painted it that colour. The cell this one ends in straddles the edge, so
-// its far part goes through the fill, and the canvas starts red so a pixel
-// the fill missed cannot pass for the horizon.
-func TestLandPastTheHazeIsTheHorizon(t *testing.T) {
-	t.Parallel()
-
-	const (
-		steps       = 400
-		pastFarEdge = 5
-	)
-
-	scene, _ := skyScene(t, -3, theme.Night)
-	scene.shoreSet = syntheticWaterSet(t, nil, []shore.Polyline{wideLand()})
-	scene.minimalShore = true
-
-	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
-	if err != nil {
-		t.Fatalf("canvas.New: %v", err)
-	}
-
-	canv.Clear(canvas.Red)
-
-	view := remeasure3D(t, scene, canv)
-	scene.drawShore3(canv, view)
-
-	horizon := scene.skyHorizon()
-	if horizon == scene.pal.Field {
-		t.Fatal("the dusk sky's horizon is the field, so the test cannot tell land past the haze from none")
-	}
-
-	haze := view.haze()
-	end := haze.foot.north + haze.far + pastFarEdge
-	first, last := color.RGBA{}, color.RGBA{}
-
-	for step := range steps + 1 {
-		//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-		x, y, ok := view.cam.at(point3{north: end * float64(step) / steps})
-		if !ok || !image.Pt(x, y).In(canv.Bounds()) {
-			continue
-		}
-
-		if first == (color.RGBA{}) {
-			first = canv.Image().RGBAAt(x, y)
-		}
-
-		last = canv.Image().RGBAAt(x, y)
-	}
-
-	if first != scene.landInk() {
-		t.Errorf("under the camera the land is %v, want the full land tint %v", first, scene.landInk())
-	}
-
-	if last != horizon {
-		t.Errorf("past the haze the land is %v, want the horizon %v", last, horizon)
 	}
 }

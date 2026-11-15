@@ -27,26 +27,6 @@ const (
 	// the whole world anyway.
 	minCosLat = 0.01
 
-	// waterFade is how far the water tint is pulled off the field towards the
-	// data colour.
-	//
-	// Eight per cent is the whole argument. The tint has one job, which is to
-	// say at a glance which side of a coastline is sea, and it has to do that
-	// without becoming something anybody reads: an aircraft two pixels wide
-	// has to stand off it, the range rings have to stay the loudest lines on
-	// the scope, and a shoreline drawn in the quietest colour in the palette
-	// still has to be visible against it. Anything stronger turns the scope
-	// into a map that happens to have aircraft on it, which is the line the
-	// shore colour was picked to stay on the right side of.
-	//
-	// Fading towards Data rather than towards a colour of its own is what
-	// makes it work in all six palettes without a table: Data is the cyan a
-	// glass panel sets a reading in, the pale green of the phosphor look and
-	// the plain ink of mono, so the tint comes out cyan-black on Glass night,
-	// a deeper green on Phosphor, a lighter grey on Mono and a faint
-	// blue-grey on the three day palettes.
-	waterFade = 0.08
-
 	// minFillRing is the fewest points that enclose an area worth filling.
 	minFillRing = 3
 )
@@ -74,18 +54,16 @@ type landSpan struct {
 
 // waterInk is the tint the sea is filled with.
 //
-// It is worked out here rather than carried on the palette for the reason
-// envelope.go works its two out here: internal/theme is the colours somebody
-// picked, and this is one of them mixed with the field for a job only the
-// scene knows about. A palette that had to carry every derived shade would
-// have to be re-picked every time a scene found a new use for one.
-func (s *Scene) waterInk() color.RGBA { return s.fade(s.pal.Data, waterFade) }
+// It comes off the palette finished rather than being mixed here, because how
+// strong the ground should be depends on the look: Glass keeps it at a
+// whisper over the field, and Vector wants a sea and a land that stay apart
+// under a cyan route tube. Only the palette knows which of the two it is for.
+func (s *Scene) waterInk() color.RGBA { return s.pal.Water }
 
-// landInk is what the land is filled with, which is the field: the sea is
-// the one side of a coastline that carries a tint. It has a name because the
-// tilted views' haze fades the land and the sea through one call, and a
-// literal Field there would hide that the two are the same kind of thing.
-func (s *Scene) landInk() color.RGBA { return s.pal.Field }
+// landInk is the tint the land is filled with. It is the palette's for the
+// reason waterInk is, and the bare field would leave the land a white page
+// beside a blue sea on the day palettes.
+func (s *Scene) landInk() color.RGBA { return s.pal.Land }
 
 // drawGround paints what lies on the flat views' ground: the shore when the
 // view on screen has it on, with the corridor exposure between its fill and
@@ -172,10 +150,11 @@ func (s *Scene) drawShore(lay *layout, view scopeFrame) {
 // even, and is left as the water it was flooded with. Nothing here has to know
 // which rings are lakes, and neither does the file they came out of.
 //
-// Outside the flooded ground nothing is painted that would show: the land fill
-// is the field colour, which is what the layer was cleared to, and the sea and
-// the lakes are left alone. That is what lets the fill be clipped to a
-// rectangle while the scope is a disc.
+// The land fill is clipped to the rectangle around the ground rather than to
+// the disc, so in the scope view land reaching past the range ring is painted
+// into the box's corners too. clearCorners puts the field back there. The
+// sea and the lakes are never painted outside the disc, because floodWater
+// fills the disc and nothing else.
 func (s *Scene) fillGround(dst *canvas.Canvas, proj projector, ring circle, latSpan, lonSpan float64) {
 	box := s.floodWater(dst, ring)
 
@@ -193,7 +172,34 @@ func (s *Scene) fillGround(dst *canvas.Canvas, proj projector, ring circle, latS
 		s.landRings = append(s.landRings, s.landPoints[span.start:span.end:span.end])
 	}
 
-	dst.FillPolygon(s.landRings, box, s.pal.Field)
+	dst.FillPolygon(s.landRings, box, s.landInk())
+
+	if !s.minimal() {
+		s.clearCorners(dst, ring)
+	}
+}
+
+// clearCorners paints the field back over the four corners between the range
+// ring and the square around it, where the land fill was let through.
+//
+// It walks the rows FillCircle walks with the same integer half-width, so the
+// field meets the water disc on exactly the pixels the disc stopped at. A
+// polygon standing in for the circle would be off by a pixel somewhere round
+// the edge, and on a light palette a pixel of green between the ring and the
+// field is a pixel somebody sees. Two one-row rectangles a row allocate
+// nothing and need no scratch.
+func (s *Scene) clearCorners(dst *canvas.Canvas, ring circle) {
+	centerX, centerY := int(ring.centerX), int(ring.centerY)
+	radius := int(math.Round(ring.radius))
+	field := s.pal.Field
+
+	for dy := -radius; dy <= radius; dy++ {
+		half := int(math.Sqrt(float64(radius*radius - dy*dy)))
+		row := centerY + dy
+
+		dst.FillRect(image.Rect(centerX-radius, row, centerX-half, row+1), field)
+		dst.FillRect(image.Rect(centerX+half+1, row, centerX+radius+1, row+1), field)
+	}
 }
 
 // floodWater paints the ground the scope covers in the water tint and returns
