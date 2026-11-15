@@ -68,9 +68,10 @@ var filterBandLabels = [bandCount]string{
 // on screen means.
 //
 // It is unexported, the way trailMode is and unlike ColourMode and View,
-// because no flag parses into it: the filter is reachable from the f key and
-// from nowhere else. A published type a caller has no way to produce would be
-// API for the sake of symmetry.
+// because no flag parses into it directly. BandFilter is the spelling
+// --filter takes, and it covers the altitude and corridor values; the
+// operator values are only ever reached from the f key, so there is nothing
+// outside the package to hand them over.
 type filterKind uint8
 
 // The six kinds of value the filter can hold.

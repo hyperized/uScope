@@ -8,6 +8,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--filter all|low|mid|high|below-high|in|out|other` starts the run on one
+  of the stops `f` cycles, so a display nobody is at the keyboard of can use
+  it, and `f` carries on from there. The band stops belong to altitude
+  colouring, the class stops to corridor colouring and `below-high` to both;
+  a stop the colouring does not have, or any stop under airline colouring,
+  starts on all. The operator filter in airline colouring has no spelling and
+  stays on `f`.
 - `--history PATH` keeps the lost tracks the corridors are drawn from across
   a restart. The file is read before the first frame, written once a minute
   while the tracks change and once more on shutdown, when aircraft still in

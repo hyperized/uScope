@@ -76,7 +76,11 @@ the end, `<25K`, which keeps the low and mid bands and hides the overflights.
 The altitude stops have 500 ft of slack at each edge: an aircraft on screen
 stays there until it is 500 ft past the line, and one off screen waits until
 it is 500 ft inside, so a flight holding FL250 under the `<25K` stop does not
-flicker.
+flicker. `--filter` starts the run on one of these stops instead of on `ALL`,
+and `f` carries on from there. A band stop (`low`, `mid`, `high`) belongs to
+altitude colouring and a class stop (`in`, `out`, `other`) to corridor
+colouring; `below-high` belongs to both. A stop the chosen colouring does not
+have, and any stop at all under `--colour airline`, starts on `ALL` instead.
 
 A new aircraft fades up from the background over two seconds. The first
 frame, and the first frame after `f`, draw everything at full strength. When
@@ -432,6 +436,7 @@ starts the four seconds again.
 | `--view` | `scope` | `scope`, `3d`, `minimal` or `minimal3d` |
 | `--range` | `auto` | range in nautical miles, or `auto` to fit the traffic |
 | `--colour` | `altitude` | `altitude`, `airline` or `corridor` |
+| `--filter` | `all` | which aircraft are drawn at the start: `low`, `mid` or `high` while colouring by altitude, `in`, `out` or `other` while colouring by corridor, `below-high` in either for everything under 25,000 ft, or `all`. A stop the colouring does not have starts on `all`; `f` still cycles |
 | `--theme` | `auto` | `night`, `day`, or `auto` to follow the sun at the receiver |
 | `--look` | `glass` | `glass`, `phosphor`, `mono` or `vector` |
 | `--airports` | `on` | airfield markers |

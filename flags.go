@@ -35,6 +35,7 @@ const (
 	defaultTheme    = "auto"
 	defaultLook     = "glass"
 	defaultColour   = "altitude"
+	defaultFilter   = "all"
 	defaultOn       = "on"
 	defaultOff      = "off"
 	defaultRange    = "auto"
@@ -121,6 +122,7 @@ var (
 	errTheme      = errors.New(appName + ": --theme must be night, day or auto")
 	errLook       = errors.New(appName + ": --look must be glass, phosphor, mono or vector")
 	errColour     = errors.New(appName + ": --colour must be altitude, airline or corridor")
+	errFilter     = errors.New(appName + ": --filter must be all, low, mid, high, below-high, in, out or other")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
 	errStars      = errors.New(appName + ": --stars must be on or off")
@@ -175,6 +177,7 @@ type config struct {
 	theme       theme.Kind
 	look        theme.Look
 	colour      radar.ColourMode
+	filter      radar.BandFilter
 	airports    radar.Toggle
 	shore       radar.Toggle
 
@@ -261,6 +264,7 @@ type rawFlags struct {
 	theme       string
 	look        string
 	colour      string
+	filter      string
 	airports    string
 	shore       string
 	minShore    string
@@ -342,6 +346,10 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.colour, "colour", defaultColour,
 		"what an aircraft's colour means: altitude, airline or corridor, which is arriving at or leaving "+
 			"the corridor airfield")
+	set.StringVar(&raw.filter, "filter", defaultFilter,
+		"which aircraft to draw: all, low, mid or high while colouring by altitude, in, out or other "+
+			"while colouring by corridor, and below-high in either for everything under 25,000 ft. "+
+			"f cycles them while it runs")
 	set.StringVar(&raw.airports, "airports", defaultOn,
 		"draw the airfield markers on the scope: on or off")
 	set.StringVar(&raw.shore, "shore", defaultOn,
@@ -483,7 +491,7 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
-	colour, err := parseColour(raw.colour)
+	colouring, err := raw.colouring()
 	if err != nil {
 		return display{}, err
 	}
@@ -522,7 +530,8 @@ func (raw rawFlags) display() (display, error) {
 		theme:      themeKind,
 		look:       look,
 		radar: radar.Settings{
-			Colour:   colour,
+			Colour:   colouring.Colour,
+			Filter:   colouring.Filter,
 			Airports: overlays.Airports,
 			Shore:    overlays.Shore,
 			RangeNm:  rangeNm,
@@ -544,6 +553,23 @@ func (raw rawFlags) display() (display, error) {
 			Azimuth:    camera.Azimuth,
 		},
 	}, nil
+}
+
+// colouring reads --colour and --filter, the two flags that say what the
+// aircraft are painted by and which of them are drawn. They are one helper so
+// display stays under the complexity cap.
+func (raw rawFlags) colouring() (radar.Settings, error) {
+	colour, err := parseColour(raw.colour)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	filter, err := radar.ParseFilter(raw.filter)
+	if err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errFilter, err)
+	}
+
+	return radar.Settings{Colour: colour, Filter: filter}, nil
 }
 
 // camera checks the flags that place the 3D camera and frame the picture,
@@ -671,6 +697,7 @@ func (raw rawFlags) validated() (config, error) {
 		theme:       show.theme,
 		look:        show.look,
 		colour:      show.radar.Colour,
+		filter:      show.radar.Filter,
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
 
