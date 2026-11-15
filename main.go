@@ -201,6 +201,7 @@ func radarSettings(cfg config) radar.Settings {
 		MinimalBar:      cfg.minimalBar,
 		Lights:          cfg.lights,
 		Stars:           cfg.stars,
+		Corridors:       cfg.corridors,
 		RangeNm:         cfg.rangeNm,
 		Recentre:        cfg.recentre,
 		View:            cfg.view,
@@ -405,12 +406,14 @@ func live(cfg config, stderr io.Writer, opts ...source.LiveOption) (source.Sourc
 	// operator that is what will happen.
 	opts = append(opts,
 		source.WithBiasTee(cfg.biasTee),
-		source.WithAutoSweep(cfg.autoSweep))
+		source.WithAutoSweep(cfg.autoSweep),
+		source.WithCorridorField(cfg.corridorField),
+		source.WithCorridorHalfLife(cfg.corridorHalfLife))
 	opts = append(opts, locationOptions(cfg, stderr)...)
 
 	src, err := source.NewLive(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", appName, err)
+		return nil, sourceError(err)
 	}
 
 	return src, nil
@@ -446,7 +449,10 @@ func locationOptions(cfg config, stderr io.Writer) []source.LiveOption {
 //
 //nolint:ireturn // every branch of sourceFor returns the interface.
 func demo(cfg config) (source.Source, error) {
-	var opts []source.DemoOption
+	opts := []source.DemoOption{
+		source.WithDemoCorridorField(cfg.corridorField),
+		source.WithDemoCorridorHalfLife(cfg.corridorHalfLife),
+	}
 
 	if cfg.hasLocation {
 		opts = append(opts, source.WithDemoLocation(cfg.latitude, cfg.longitude))
@@ -458,10 +464,25 @@ func demo(cfg config) (source.Source, error) {
 
 	src, err := source.NewDemo(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", appName, err)
+		return nil, sourceError(err)
 	}
 
 	return src, nil
+}
+
+// sourceError says which flag a source that would not build was let down by.
+//
+// The source is the only thing that knows the airport list, so an airfield
+// --corridor-field names but the list lacks is found there rather than at the
+// flag layer. The error the source returns names the airfield and not the
+// flag, and the operator should not have to work out which of thirty flags
+// carried an ICAO code.
+func sourceError(err error) error {
+	if errors.Is(err, source.ErrUnknownAirfield) {
+		return fmt.Errorf("%w: %w", errCorrField, err)
+	}
+
+	return fmt.Errorf("%s: %w", appName, err)
 }
 
 // explain turns "no framebuffer on this platform" into advice, because that

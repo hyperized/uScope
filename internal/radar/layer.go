@@ -83,6 +83,12 @@ type layerKey struct {
 	// each of those frames.
 	centreLat int64
 	centreLon int64
+
+	// exposure is whether the corridors are drawn, and corridors what they
+	// were drawn from; see exposureKey. The generations and the minute tick
+	// are what let the picture fade with nobody touching a key.
+	exposure  bool
+	corridors exposureKey
 }
 
 // paintBackground puts the background layer under the frame, redrawing it
@@ -116,10 +122,11 @@ func (s *Scene) paintBackground(dst *canvas.Canvas, frame source.Frame) {
 // rather than over a cached background.
 //
 // Three of the four do, for two different reasons. Minimal with both its
-// overlays off has nothing behind the aircraft but the field, so holding a
-// second canvas the size of the first to keep one colour in would be waste;
-// turn either overlay on and it wants the layer like any other view, because a
-// few thousand shore segments are not something to draw thirty times a second.
+// overlays and the corridor exposure off has nothing behind the aircraft but
+// the field, so holding a second canvas the size of the first to keep one
+// colour in would be waste; turn any of them on and it wants the layer like
+// any other view, because a few thousand shore segments are not something to
+// draw thirty times a second.
 // Neither 3D view can cache anything at all: the camera moves on every frame
 // the orbit is running, so a layer would be rebuilt on each one and cost the
 // same drawing plus a copy of the whole canvas on top.
@@ -128,7 +135,7 @@ func (s *Scene) layerless() bool {
 		return true
 	}
 
-	return s.minimal() && !s.shoreDrawn() && !s.airportsDrawn()
+	return s.minimal() && !s.shoreDrawn() && !s.airportsDrawn() && !s.exposureDrawn()
 }
 
 // layerKeyFor reads the current state of everything the layer depends on.
@@ -153,6 +160,9 @@ func (s *Scene) layerKeyFor(dst *canvas.Canvas, frame source.Frame) layerKey {
 		bar:       s.barShown(),
 		centreLat: snap(s.centre.lat),
 		centreLon: snap(s.centre.lon),
+
+		exposure:  s.exposureDrawn(),
+		corridors: s.exposureKey(),
 	}
 }
 

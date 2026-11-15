@@ -11,6 +11,7 @@ import (
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
+	"github.com/hyperized/uScope/pkg/shore"
 	"github.com/hyperized/uScope/pkg/sun"
 )
 
@@ -333,8 +334,8 @@ func TestResolveSkyCadence(t *testing.T) {
 	later.Receiver = source.Receiver{}
 	scene.resolveSky(later)
 
-	if scene.sky.known {
-		t.Error("a lost receiver left the sky on")
+	if scene.sky.known || scene.skyHorizon() != scene.pal.Field {
+		t.Errorf("a lost receiver left the sky on, horizon %v", scene.skyHorizon())
 	}
 }
 
@@ -389,9 +390,9 @@ func TestSkyRowsAreKept(t *testing.T) {
 	}
 }
 
-// TestPaintSky covers the two clears: the bare view's sky over the field,
-// which stays the field under the horizon with the shore on or off, and the
-// full view with no sun, which leaves its frame alone.
+// TestPaintSky covers the three clears: the bare view's sky with the ground
+// fading into the horizon, the same with no ground to fade (the field under
+// the horizon), and the full view with no sun, which leaves its frame alone.
 func TestPaintSky(t *testing.T) {
 	t.Parallel()
 
@@ -399,25 +400,35 @@ func TestPaintSky(t *testing.T) {
 	horizon := horizonRow(box, minElevation)
 
 	scene, _ := skyScene(t, -3, theme.Night)
+	scene.minimalShore = true
+
+	set, err := shore.Load()
+	if err != nil {
+		t.Fatalf("shore.Load: %v", err)
+	}
+
+	scene.shoreSet = set
 
 	canv, err := canvas.New(box.Dx(), box.Dy())
 	if err != nil {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	for _, shoreOn := range []bool{true, false} {
-		scene.minimalShore = shoreOn
+	scene.paintSky(canv, box)
 
-		canv.Clear(canvas.Red)
-		scene.paintSky(canv, box)
+	if got := canv.Image().RGBAAt(10, horizon); got != scene.sky.horizon {
+		t.Errorf("under the horizon with the shore on is %v, want the horizon colour %v", got, scene.sky.horizon)
+	}
 
-		if got := canv.Image().RGBAAt(10, horizon); got != scene.pal.Field {
-			t.Errorf("under the horizon with the shore %v is %v, want the field", shoreOn, got)
-		}
+	if got := canv.Image().RGBAAt(10, horizon-1); got == scene.pal.Field {
+		t.Error("the row above the horizon is the field, want sky")
+	}
 
-		if got := canv.Image().RGBAAt(10, horizon-1); got == scene.pal.Field {
-			t.Errorf("the row above the horizon with the shore %v is the field, want sky", shoreOn)
-		}
+	scene.minimalShore = false
+	scene.paintSky(canv, box)
+
+	if got := canv.Image().RGBAAt(10, box.Max.Y-1); got != scene.pal.Field {
+		t.Errorf("under the horizon with no ground is %v, want the field", got)
 	}
 
 	full, _ := skyScene(t, -3, theme.Night)
@@ -449,5 +460,39 @@ func TestDraw3DClearsWithNoCamera(t *testing.T) {
 
 	if got := canv.Image().RGBAAt(0, 0); got != scene.pal.Field {
 		t.Errorf("a frame with no camera came out %v, want the field", got)
+	}
+}
+
+// TestHazeEndsOnTheHorizon checks the ground, the land and the coastline all
+// fade into the sky's horizon colour: the land past the haze is that colour
+// exactly, and the last band of each is a shade off it, nearer to it than to
+// where the fade started.
+func TestHazeEndsOnTheHorizon(t *testing.T) {
+	t.Parallel()
+
+	scene, _ := skyScene(t, -3, theme.Night)
+	far := scene.skyHorizon()
+
+	land := scene.landInks3()
+	if land[0] != far || land[len(land)-1] != scene.landInk() {
+		t.Errorf("land runs %v to %v, want the land tint inside and the horizon %v past the haze",
+			land[len(land)-1], land[0], far)
+	}
+
+	water := scene.waterInks3()
+	coast := scene.coastInks3()
+
+	for _, pair := range []struct {
+		name      string
+		near, end color.RGBA
+	}{
+		{name: "water", near: water[len(water)-1], end: water[1]},
+		{name: "land", near: land[len(land)-1], end: land[1]},
+		{name: "coast", near: coast[0], end: coast[hazeBands]},
+	} {
+		if distance(pair.end, far) >= distance(pair.end, pair.near) {
+			t.Errorf("the %s's last band %v is nearer where it started %v than the horizon %v",
+				pair.name, pair.end, pair.near, far)
+		}
 	}
 }

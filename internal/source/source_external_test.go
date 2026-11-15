@@ -1250,8 +1250,8 @@ func TestDemoGhostsRunWithoutBeingAskedFor(t *testing.T) {
 	demo.Frame()
 
 	frame := demo.Frame()
-	if len(frame.Ghosts) != 1 {
-		t.Fatalf("Frame().Ghosts = %v, want one trail from a Demo nobody configured", frame.Ghosts)
+	if len(lostSince(frame, start)) != 1 {
+		t.Fatalf("Frame().Ghosts = %v, want one trail from a Demo nobody configured", lostSince(frame, start))
 	}
 }
 
@@ -1304,6 +1304,11 @@ func TestLiveGhostAircraftDisappearingLeavesGhost(t *testing.T) {
 	if len(ghost.Points) == 0 {
 		t.Error("ghost.Points is empty, want the position history the aircraft last showed")
 	}
+
+	if ghost.Latitude != latitude || ghost.Longitude != longitude {
+		t.Errorf("ghost head = %v, %v, want the last position %v, %v, which the radar coasts it at",
+			ghost.Latitude, ghost.Longitude, latitude, longitude)
+	}
 }
 
 // TestLiveGhostAircraftReappearingStopsBeingGhost checks revive: the same
@@ -1332,11 +1337,19 @@ func TestLiveGhostAircraftReappearingStopsBeingGhost(t *testing.T) {
 		t.Fatalf("Frame().Ghosts after Prune = %d, want exactly 1", len(gone.Ghosts))
 	}
 
+	oldFixes := len(gone.Ghosts[0].Points)
+
 	addAircraft(t, store, icao, callsign, altitude, latitude, longitude)
 
 	back := live.Frame()
 	if len(back.Planes) != 1 {
-		t.Errorf("Frame().Planes after the aircraft returns = %d, want 1", len(back.Planes))
+		t.Fatalf("Frame().Planes after the aircraft returns = %d, want 1", len(back.Planes))
+	}
+
+	// The old track rides in front of the new one, so the trail does not
+	// restart from a dot.
+	if got := len(back.Planes[0].PositionHistory); got < oldFixes {
+		t.Errorf("history after the return = %d fixes, want at least the %d the ghost held", got, oldFixes)
 	}
 
 	if len(back.Ghosts) != 0 {
@@ -1389,11 +1402,11 @@ func TestDemoQuietAircraftBecomesGhost(t *testing.T) {
 		}
 	}
 
-	if got := len(second.Ghosts); got != 1 {
+	if got := len(lostSince(second, start)); got != 1 {
 		t.Fatalf("Frame().Ghosts after 90s = %d, want exactly 1", got)
 	}
 
-	ghost := second.Ghosts[0]
+	ghost := lostSince(second, start)[0]
 	if ghost.ICAO != wantICAO {
 		t.Errorf("ghost ICAO = %q, want %q", ghost.ICAO, wantICAO)
 	}
@@ -1408,7 +1421,7 @@ func TestDemoQuietAircraftBecomesGhost(t *testing.T) {
 		t.Errorf("Frame().Planes on a later frame = %d, want %d (it must not come back)", got, fleetAfterLoss)
 	}
 
-	if got := len(third.Ghosts); got != 1 {
+	if got := len(lostSince(third, start)); got != 1 {
 		t.Errorf("Frame().Ghosts on a later frame = %d, want exactly 1 (not duplicated)", got)
 	}
 }
@@ -1440,8 +1453,8 @@ func TestDemoFleetWholeBeforeQuietBoundary(t *testing.T) {
 		t.Errorf("Frame().Planes at 85s = %d, want %d", got, fleetSize)
 	}
 
-	if len(frame.Ghosts) != 0 {
-		t.Errorf("Frame().Ghosts at 85s = %v, want none", frame.Ghosts)
+	if len(lostSince(frame, start)) != 0 {
+		t.Errorf("Frame().Ghosts at 85s = %v, want none", lostSince(frame, start))
 	}
 }
 
@@ -1465,12 +1478,12 @@ func TestFrameGhostsSurvivesBeingRead(t *testing.T) {
 	demo.Frame()
 
 	frame := demo.Frame()
-	if len(frame.Ghosts) != 1 {
-		t.Fatalf("Frame().Ghosts = %d entries, want 1", len(frame.Ghosts))
+	if len(lostSince(frame, start)) != 1 {
+		t.Fatalf("Frame().Ghosts = %d entries, want 1", len(lostSince(frame, start)))
 	}
 
-	first := frame.Ghosts[0]
-	second := frame.Ghosts[0]
+	first := lostSince(frame, start)[0]
+	second := lostSince(frame, start)[0]
 
 	wrongIdentity := first.ICAO != second.ICAO || first.Callsign != second.Callsign || first.Altitude != second.Altitude
 	if wrongIdentity {
@@ -1953,4 +1966,19 @@ func TestReceiverBoundShown(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lostSince is the ghosts in a frame lost at or after start, which leaves out
+// the history Demo invents for the corridor exposure: every one of those was
+// lost before the first frame.
+func lostSince(frame source.Frame, start time.Time) []source.Trail {
+	var lost []source.Trail
+
+	for _, trail := range frame.Ghosts {
+		if !trail.LostAt.Before(start) {
+			lost = append(lost, trail)
+		}
+	}
+
+	return lost
 }

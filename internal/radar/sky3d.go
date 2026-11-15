@@ -191,6 +191,18 @@ func (s *Scene) resolveSky(frame source.Frame) {
 	}
 }
 
+// skyHorizon is the colour the ground fades into at its far edge: the sky's
+// horizon colour, or the field when there is no sun to light one. It is what
+// the haze, the hazed coastline and the far land all end on, so the three
+// meet the sky in one colour.
+func (s *Scene) skyHorizon() color.RGBA {
+	if !s.sky.known {
+		return s.pal.Field
+	}
+
+	return s.sky.horizon
+}
+
 // skyClears reports whether the sky is the frame's clear rather than a paint
 // over one. The bare tilted view is the picture edge to edge, so the sky can
 // be the only write those pixels get; the full view has a header, a column
@@ -201,24 +213,29 @@ func (s *Scene) skyClears() bool {
 }
 
 // paintSky clears the tilted view's window: the gradient from the top of the
-// window to the horizon, and the field below it.
+// window to the horizon, and below it whatever the ground fades into.
 //
 // It is the frame's clear rather than a layer, one colour per row written
 // once. With no sun the full view has nothing to add to the field the frame
 // was already cleared to; the bare one, which skipped that clear, still
 // clears here, to the field.
 //
-// Below the horizon is the field whatever the sun is doing. The ground disc
-// and the land are drawn over it, and past the disc nothing models the
-// ground at all: the field there puts a dark land against the sky, which is
-// what a horizon is, where a floor in the horizon's own colour would make a
-// sunset the loudest thing in the picture.
+// Below the horizon the clear is the horizon colour only while there is
+// ground fading into it. With the shore off nothing models the ground at
+// all, and a floor of sunset orange under the traffic would be the loudest
+// thing in the picture; the field there puts a dark land against the sky,
+// which is what a horizon is.
 func (s *Scene) paintSky(window *canvas.Canvas, box image.Rectangle) {
 	if !s.sky.known && !s.skyClears() {
 		return
 	}
 
-	window.ClearRows(s.skyRows(box, window.Bounds()), s.pal.Field)
+	below := s.pal.Field
+	if s.sky.known && s.shoreDrawn() {
+		below = s.sky.horizon
+	}
+
+	window.ClearRows(s.skyRows(box, window.Bounds()), below)
 }
 
 // skyRows is the sky's gradient for a window onto box, one colour per row

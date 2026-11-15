@@ -1,6 +1,7 @@
 package radar_test
 
 import (
+	"image/color"
 	"os"
 	"testing"
 
@@ -129,12 +130,13 @@ func TestPerspectiveFillsTheGround(t *testing.T) {
 }
 
 // TestBare3DFloodsPastThePicture checks the difference between the two tilted
-// grounds, which is the reach each of them is drawn to.
+// grounds at the bottom of the frame.
 //
-// The full view's ground is the outer range ring, and the camera frames that
-// ring well inside the box, so the edge of the picture stays on the bare
-// field. The bare view's ground is the two range radii minimalReach3 draws to,
-// which at every tilt runs off the bottom of the frame.
+// The full view draws its picture in the scope box, and the key bar sits
+// under that box, so the bottom row of the frame is the bar's and never
+// ground. The bare view has the whole frame, and the full tint reaches from
+// under the camera to the far side of its two range radii, so the bottom of
+// the frame is water at every tilt.
 //
 // The set is outlines with no land half at all, the same trick
 // TestBareViewFillsEdgeToEdge uses: with nothing to take the water back out,
@@ -148,7 +150,7 @@ func TestBare3DFloodsPastThePicture(t *testing.T) {
 		presses   []rune
 		wantWater bool
 	}{
-		{name: "the full view stops short of the frame", view: radar.View3D},
+		{name: "the full view leaves the bottom row to the key bar", view: radar.View3D},
 		{
 			name:      "the bare view runs off the bottom of it",
 			view:      radar.ViewMinimal3D,
@@ -184,6 +186,62 @@ func TestBare3DFloodsPastThePicture(t *testing.T) {
 		})
 	}
 }
+
+// TestTiltedGroundFadesIntoTheSky reads one column of the bare view at a
+// shallow tilt from the bottom of the frame to the top. The ground starts at
+// the full tint, never gets brighter going up, passes through more than one
+// shade of haze, and is the field well before the top row: it fades rather
+// than stopping on an edge.
+//
+// The column is a quarter of the way across, clear of the synthetic coastline
+// that runs north through the receiver in the middle of the picture.
+func TestTiltedGroundFadesIntoTheSky(t *testing.T) {
+	t.Parallel()
+
+	const minShades = 4
+
+	frame := sceneFrame()
+
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame,
+		radar.WithShore(syntheticShoreSet(t, shoreLineThroughReceiver())))
+	scene.Apply(radar.Settings{
+		View: radar.ViewMinimal3D, RangeNm: waterFleetRangeNm, MinimalShore: true, Tilt: radar.MinTilt,
+	})
+	scene.Draw(canv, 0)
+
+	img := canv.Image()
+	column := panelWidth / 4
+
+	if got := img.RGBAAt(column, panelHeight-1); got != waterTint {
+		t.Fatalf("the bottom of the frame is %v, want the full tint %v", got, waterTint)
+	}
+
+	last := waterTint
+	shades := map[color.RGBA]bool{}
+
+	for row := panelHeight - 1; row >= 0; row-- {
+		got := img.RGBAAt(column, row)
+		if channelSum(got) > channelSum(last) {
+			t.Fatalf("row %d is %v, brighter than %v below it", row, got, last)
+		}
+
+		shades[got] = true
+		last = got
+	}
+
+	if last != theme.Night.Field {
+		t.Errorf("the top of the frame is %v, want the field %v", last, theme.Night.Field)
+	}
+
+	if len(shades) < minShades {
+		t.Errorf("the column passes through %d colours, want at least %d: the tint, haze and the field",
+			len(shades), minShades)
+	}
+}
+
+// channelSum is the sum of a colour's channels, enough to order the shades of
+// one tint fading into a dark field.
+func channelSum(col color.RGBA) int { return int(col.R) + int(col.G) + int(col.B) }
 
 // TestBareViewFillsEdgeToEdge checks the bare flat view's own ground. It has
 // no range ring, so the sea is the whole canvas rather than a disc, and the

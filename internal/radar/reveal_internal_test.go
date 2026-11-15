@@ -239,8 +239,8 @@ func TestBareCapsFitAtTheirWidestState(t *testing.T) {
 		view View
 		end  int
 	}{
-		{name: "bare flat", view: ViewMinimal, end: 896},
-		{name: "bare 3D", view: ViewMinimal3D, end: 1146},
+		{name: "bare flat", view: ViewMinimal, end: 956},
+		{name: "bare 3D", view: ViewMinimal3D, end: 1206},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -296,7 +296,7 @@ func TestDrawCapRowStopsAtTheMargin(t *testing.T) {
 
 	lay := layout{dst: canv, right: baseMargin + 1}
 
-	scene.drawCapRow(&lay, 0, keyCaps[:1], view3DCaps[:])
+	scene.drawCapRow(&lay, 0, keyCaps[:1], nil, view3DCaps[:])
 
 	// The SELECT cap, the one drawn, ends at x=86.
 	tail := image.Rect(100, 0, layerCanvasWidth, layerCanvasHeight)

@@ -132,6 +132,7 @@ const (
 	capBar
 	capLights
 	capStars
+	capCorridors
 )
 
 // The cycling keys are labelled with the value they are on rather than with
@@ -166,6 +167,10 @@ const (
 	// same reason: capLabel answers capLook from the look itself, and all
 	// three looks have a word.
 	lookBarLabel = "LOOK"
+
+	// tubesBarLabel is the U cap's word, named because flatCaps and bareCaps
+	// both carry it.
+	tubesBarLabel = "TUBES"
 )
 
 // keyCap is one entry in the bottom bar: the cap, then what the key does, then
@@ -240,6 +245,10 @@ var keyCaps = [...]keyCap{
 // TestDrawCapsFitsAtItsWidestState and TestAutoThemeKeyBarFitsAtPanelWidth
 // are the guards. See the note on keyCaps.
 //
+// U TUBES is not here either, and is not in keyCaps, for the same reason: on
+// this bar there is no room for it. It is on flatCaps instead, and u works in
+// all four views.
+//
 // Z STARS is the one 3D key with no cap here. It would take the widest bar to
 // x=1304, past the margin, and the full view at its default tilt shows no sky
 // for stars to be in anyway. z still works in this view; the cap is on
@@ -266,6 +275,21 @@ var biasCap = [...]keyCap{
 	{key: "B", label: "BIAS-T", state: capBiasTee},
 }
 
+// flatCaps are the caps the two flat full views add where the 3D view puts
+// view3DCaps.
+//
+// U TUBES is the only one. The tubes are drawn in every view, but the full 3D
+// bar has no room for the cap (see view3DCaps), so it goes on the tail the
+// camera caps take over rather than after M in keyCaps. After M it would have
+// pushed every cap from S onwards sixty pixels right in the flat views and
+// back again in the 3D one, and a control that moves when v is pressed is one
+// the eye has to hunt for. The bare rows have the room and carry it after M.
+//
+//nolint:gochecknoglobals // scene content, read-only after init.
+var flatCaps = [...]keyCap{
+	{key: "U", label: tubesBarLabel, state: capCorridors},
+}
+
 // drawKeyBar puts the key legend on the bottom edge and takes the room it
 // used out of the layout, so everything above flows into what is left.
 //
@@ -278,16 +302,17 @@ func (s *Scene) drawKeyBar(lay *layout) {
 		return
 	}
 
-	s.drawCapRow(lay, lay.bottom-(reserved-lay.px(blockGap)), keyCaps[:], view3DCaps[:])
+	s.drawCapRow(lay, lay.bottom-(reserved-lay.px(blockGap)), keyCaps[:], flatCaps[:], view3DCaps[:])
 
 	lay.bottom -= reserved
 }
 
 // drawCapRow draws one row of softkeys at top: the view's own caps, the
 // bias-tee cap when there is a dongle to flip, then the camera caps when the
-// picture is in perspective. The full views and the bare views' reveal each
-// hand in their own two tables.
-func (s *Scene) drawCapRow(lay *layout, top int, caps, camera []keyCap) {
+// picture is in perspective and the flat ones when it is not. The full views
+// and the bare views' reveal each hand in their own tables; the reveal has no
+// flat tail, since its rows carry U already.
+func (s *Scene) drawCapRow(lay *layout, top int, caps, flat, camera []keyCap) {
 	pen := s.drawCaps(lay, lay.left, top, caps)
 
 	// The bias-tee cap goes before the camera keys rather than after them, so
@@ -298,9 +323,17 @@ func (s *Scene) drawCapRow(lay *layout, top int, caps, camera []keyCap) {
 		pen = s.drawCaps(lay, pen, top, biasCap[:])
 	}
 
-	if s.perspective() && pen < lay.right {
-		s.drawCaps(lay, pen, top, camera)
+	if pen >= lay.right {
+		return
 	}
+
+	if s.perspective() {
+		s.drawCaps(lay, pen, top, camera)
+
+		return
+	}
+
+	s.drawCaps(lay, pen, top, flat)
 }
 
 // drawCaps draws a run of softkeys from pen and returns the x just past the
@@ -437,6 +470,8 @@ func (s *Scene) capEngaged(which capToggle) bool {
 		return s.lights
 	case capStars:
 		return s.stars
+	case capCorridors:
+		return s.corridors
 	case capAlways, capColour, capTheme, capLook, capTrails, capFilter:
 		fallthrough
 	default:
@@ -466,7 +501,7 @@ func (s *Scene) capLabel(entry keyCap) string {
 	case capFilter:
 		return s.filter.label()
 	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee, capWide, capBar, capLights,
-		capStars:
+		capStars, capCorridors:
 		fallthrough
 	default:
 		return entry.label

@@ -356,7 +356,7 @@ func (s *Scene) passes(icao string, altitude float64, callsign string) bool {
 // decision behind it is held to the edges themselves, which is the rule
 // bandOf gives.
 func (s *Scene) inBand(altitude float64, entry *seenEntry) bool {
-	if bandOf(altitude) == bandUnknown {
+	if _, known := source.AltitudeBandOf(altitude); !known {
 		return false
 	}
 
@@ -378,8 +378,8 @@ func (s *Scene) inBand(altitude float64, entry *seenEntry) bool {
 //
 //nolint:gochecknoglobals // two tables of thresholds, read only.
 var (
-	bandFloors   = [bandCount]float64{math.Inf(-1), lowCeiling, midCeiling}
-	bandCeilings = [bandCount]float64{lowCeiling, midCeiling, math.Inf(1)}
+	bandFloors   = [bandCount]float64{math.Inf(-1), source.LowCeilingFt, source.MidCeilingFt}
+	bandCeilings = [bandCount]float64{source.LowCeilingFt, source.MidCeilingFt, math.Inf(1)}
 )
 
 // edges is the altitude range a band lets through, before any dead band.

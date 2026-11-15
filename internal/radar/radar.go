@@ -128,13 +128,6 @@ const (
 	minLabelHeight = 320
 )
 
-// The altitude bands, in feet. An aircraft is coloured by how high it is,
-// which is the one thing a top-down scope cannot show by position.
-const (
-	lowCeiling = 10000.0
-	midCeiling = 25000.0
-)
-
 // opaque is the alpha every colour the scene produces carries. The
 // framebuffer has no alpha channel, so a translucent pixel would be flattened
 // the moment it left the canvas.
@@ -261,6 +254,20 @@ type Scene struct {
 	landPoints []image.Point
 	landSpans  []landSpan
 	landRings  [][]image.Point
+
+	// land3 is the land the tilted ground fills from and coast3 the
+	// coastlines drawn over it, each kept between frames with a box on the
+	// floor beside every line. See cacheLines3.
+	land3  lineCache3
+	coast3 lineCache3
+
+	// hazePoints holds the haze's circles on the canvas for one frame and
+	// hazeRings each circle as a slice of it: the band edges the water is
+	// filled between and the zones the land is coloured by. They are kept
+	// apart from the land scratch because the land fill reads them while it
+	// fills that.
+	hazePoints []image.Point
+	hazeRings  [][]image.Point
 
 	// sky is the tilted views' sky: the sun it was last worked out from and
 	// the colours and rows that came to. See sky3d.go.
@@ -394,6 +401,36 @@ type Scene struct {
 	// flashLit.
 	lights    bool
 	flashFrom time.Duration
+
+	// corridors is whether the lost tracks are drawn as the corridor
+	// exposure, which the u key toggles, and exposure what the last frame
+	// carried for it, copied off the frame in Draw the way the bias-tee bits
+	// are so the background layer can draw from it without being handed the
+	// frame.
+	corridors bool
+	exposure  exposure
+
+	// The tubes' scratch, kept so a frame that draws them allocates nothing
+	// once the largest picture so far has been drawn. tubeLeft, tubeRight and
+	// tubeCentre are one run of a flat band and tubeRing the band's outline.
+	// tubePoints, tubePatches, tubeGroups and tubeOrders are a tilted
+	// frame's face outlines, the faces, the stretches of tube they make up and
+	// the order those are painted in; tubeUnder and tubeOver are the lines a
+	// stretch paints under and over its near wall, and tubeLines the
+	// centrelines painted after everything. tubeRings is the one-ring list
+	// BlendPolygon is handed.
+	tubeLeft    []image.Point
+	tubeRight   []image.Point
+	tubeCentre  [][2]float64
+	tubeRing    []image.Point
+	tubeRings   [1][]image.Point
+	tubePoints  []image.Point
+	tubePatches []tubePatch
+	tubeGroups  []tubeGroup
+	tubeOrders  []tubeOrder
+	tubeUnder   []tubeLine
+	tubeOver    []tubeLine
+	tubeLines   []tubeLine
 
 	// envelope is whether the receiving envelope is drawn, which the e key
 	// toggles. It starts on: the envelope is most of the reason the view
@@ -591,6 +628,7 @@ func New(faces Faces, src source.Source, scopeRange *scope.Scope, opts ...Option
 		orbiting:   true,
 		envelope:   true,
 		stars:      true,
+		corridors:  true,
 		exaggerate: DefaultExaggerate,
 	}
 
@@ -668,6 +706,14 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// Same reason: the b key arrives between two frames and decides what to
 	// ask for from the state the last one carried.
 	s.biasSupported, s.biasEnabled = frame.BiasTee.Supported, frame.BiasTee.Enabled
+	s.exposure = exposure{
+		trails:          frame.Ghosts,
+		generation:      frame.GhostGeneration,
+		routes:          frame.Routes,
+		routeGeneration: frame.RouteGeneration,
+		corridors:       frame.Corridors,
+		now:             frame.Now,
+	}
 
 	// The operator tally is counted before anything is drawn, because in
 	// airline mode the filter is one of its entries and everything below has

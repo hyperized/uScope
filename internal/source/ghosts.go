@@ -36,7 +36,8 @@ const (
 	// uAirwaves' own cap on one aircraft's history (maxPositionHistory in
 	// pkg/airplane, unexported there). The prefix gives up its oldest fixes
 	// as the new life grows, so a stitched track is never longer than one
-	// the store could have kept unbroken.
+	// the store could have kept unbroken, and the routes' reasoning about a
+	// track being at most 256 fixes still holds.
 	stitchFixes = 256
 
 	// stitchFor is how long after the loss a prefix is still worth carrying:
@@ -56,8 +57,10 @@ const (
 // holds a coasting aircraft at for its first minute as a ghost. A zero
 // position reads as nothing to draw a head at.
 //
-// LostAt is the frame time the trail was given up on, which is what the
-// radar measures the coast from.
+// LostAt and Class are what the corridor exposure draws it by. LostAt is the
+// frame time the trail was given up on, which the exposure ages it from, and
+// Class is decided once, then, from the track's two ends; see
+// corridors.classify.
 //
 // Points aliases the slice the source last saw rather than copying it, and
 // that is safe for both sources for opposite reasons. Live takes a fresh deep
@@ -70,11 +73,32 @@ type Trail struct {
 	Altitude float64
 	Points   []airplane.PositionEntry
 	LostAt   time.Time
+	Class    TrackClass
 
 	Latitude  float64
 	Longitude float64
 	Heading   float64
 	VertRate  float64
+
+	// Tubed is true when part of the trail is inside one of the frame's
+	// Routes, which draw that part as a tube: Points[TubeFrom:TubeTo+1], the
+	// fixes either side of the stations the tube kept. Loose hands back the
+	// rest. They are only ever set on the trails a Frame carries.
+	Tubed    bool
+	TubeFrom int
+	TubeTo   int
+}
+
+// Loose returns the parts of the trail no tube draws, which are left to be
+// drawn as a hairline: the fixes before the tube and the fixes after it, each
+// sharing its end fix with the tube so the line meets it. A trail in no route
+// is loose all the way along, and either part can be too short to draw.
+func (t *Trail) Loose() ([]airplane.PositionEntry, []airplane.PositionEntry) {
+	if !t.Tubed {
+		return t.Points, nil
+	}
+
+	return t.Points[:t.TubeFrom+1], t.Points[t.TubeTo:]
 }
 
 // liveTrail is what one aircraft still in the sky last showed us, and the
@@ -103,6 +127,10 @@ type liveTrail struct {
 // A slot number is an absolute push counter modulo the ring's length, so
 // a trail whose aircraft comes back is emptied where it lies instead of
 // being shuffled out, and the trails behind it keep the age they arrived at.
+//
+// The ring is also the corridor exposure. Every trail in it is drawn on the
+// ground, fading by its age, so the same store bounds both pictures, and the
+// half-life ages a trail out of the ring once it is too faint to draw.
 //
 // ghosts is not safe for concurrent use. Each source holds one and calls into
 // it under its own lock.
@@ -141,6 +169,20 @@ type ghosts struct {
 	out   []Trail
 	dirty bool
 
+	// version moves whenever the ring does, so the radar can cache a picture
+	// of it and redraw only when this changes.
+	version uint64
+
+	// corridors is the airfield a lost trail is classified against and the
+	// half-life it is aged out by; lastExpire is when expire last walked the
+	// ring.
+	corridors  corridors
+	lastExpire time.Time
+
+	// routes bundles the lost trails into the corridors the radar draws as
+	// tubes. See routes.go.
+	routes routeBook
+
 	// stitched is the old track of each aircraft that came back while its
 	// ghost was still in the ring, by ICAO. keep puts it in front of the new
 	// history on every frame until the new life no longer needs it; see
@@ -168,11 +210,16 @@ func newGhosts() ghosts {
 		stitched:  make(map[string]prefix),
 		maxTrails: maxGhostTrails,
 		maxPoints: maxGhostPoints,
+		corridors: corridors{halfLife: DefaultCorridorHalfLife},
 	}
 }
 
 // observe folds one frame's aircraft into the ring and hands back the ghosts
 // to draw, oldest first.
+//
+// The receiver is only there to find the airfield from, which has to happen
+// before the sweep so a trail lost on the frame the field is found is already
+// classified against it.
 //
 // The slice is the tracker's own and is refilled on the next frame that
 // changes anything, which is the contract Frame.Planes already carries.
@@ -180,14 +227,16 @@ func newGhosts() ghosts {
 // It writes into planes: an aircraft carrying a stitched prefix gets its
 // PositionHistory replaced with the joined track, so the frame the caller
 // hands on draws one line where uAirwaves holds two lives.
-func (g *ghosts) observe(planes airplanes.List, now time.Time) []Trail {
+func (g *ghosts) observe(planes airplanes.List, receiver Receiver, now time.Time) []Trail {
 	g.gen++
+	g.corridors.resolve(receiver)
 
 	for index := range planes {
 		g.keep(&planes[index], now)
 	}
 
 	g.sweep(now)
+	g.expire(now)
 
 	return g.list()
 }
@@ -276,9 +325,10 @@ func (g *ghosts) stitch(plane *airplane.Snapshot, now time.Time) {
 //
 // Without it the same aeroplane would be drawn twice: once as the live trail
 // it is flying now, and once as the ghost of the gap it was quiet through.
-// The trail it returns is what keep stitches onto the new history. The ring
-// never holds the same fix twice, because the old track leaves the ring here
-// and only comes back as part of the trail the next loss pushes.
+// The trail it returns is what keep stitches onto the new history, which is
+// also what keeps the corridor exposure honest: the ring never holds the same
+// fix twice, because the old track leaves the ring here and only comes back
+// as part of the trail the next loss pushes.
 func (g *ghosts) revive(icao string) (Trail, bool) {
 	pushed, held := g.at[icao]
 	if !held {
@@ -301,9 +351,6 @@ func (g *ghosts) revive(icao string) (Trail, bool) {
 // The ring is the order the ghosts are drawn in, so two aircraft lost on the
 // same frame would otherwise stack in whichever order the runtime felt like
 // that run, and the same feed has to draw the same frame.
-//
-// Each trail is stamped with the frame time it was lost on, which is what the
-// radar's coast is measured from.
 func (g *ghosts) sweep(now time.Time) {
 	g.lost = g.lost[:0]
 
@@ -318,6 +365,7 @@ func (g *ghosts) sweep(now time.Time) {
 	for _, icao := range g.lost {
 		trail := g.live[icao].trail
 		trail.LostAt = now
+		trail.Class = g.corridors.classify(trail.Points)
 
 		g.push(trail)
 		delete(g.live, icao)
@@ -348,7 +396,7 @@ func (g *ghosts) push(trail Trail) {
 	g.at[trail.ICAO] = g.pushed
 	g.points += len(trail.Points)
 	g.pushed++
-	g.dirty = true
+	g.touch()
 }
 
 // full reports whether one more trail of this many points would put the ring
@@ -379,10 +427,51 @@ func (g *ghosts) evict() {
 
 // clear empties one slot, giving up its points so the garbage collector can
 // have the trail back.
+//
+// A slot that is already a hole is left alone, so that expire stepping over
+// one does not move the version and cost the radar a redraw for nothing.
 func (g *ghosts) clear(slot int) {
+	if g.ring[slot].ICAO == "" {
+		return
+	}
+
 	g.points -= len(g.ring[slot].Points)
 	g.ring[slot] = Trail{}
+	g.touch()
+}
+
+// touch marks the ring changed, for the frame's slice and for the radar.
+func (g *ghosts) touch() {
 	g.dirty = true
+	g.version++
+}
+
+// expire gives up the trails that have aged past corridorExposureLives
+// half-lives, at most once per corridorExpireEvery of frame time.
+//
+// The ring is in the order trails were lost, so the walk starts at the oldest
+// end and stops at the first trail still young enough: each trail is looked
+// at once on its way out and the one that stops the walk once per check,
+// which keeps expiry O(1) a trail. A hole left by a revival is evicted where
+// it lies. A clock that has gone backwards runs the check rather than waiting
+// for the old reading to come round again.
+func (g *ghosts) expire(now time.Time) {
+	since := now.Sub(g.lastExpire)
+	if !g.lastExpire.IsZero() && since >= 0 && since < corridorExpireEvery {
+		return
+	}
+
+	g.lastExpire = now
+	cutoff := now.Add(-corridorExposureLives * g.corridors.halfLife)
+
+	for g.evicted < g.pushed {
+		oldest := &g.ring[g.evicted%g.maxTrails]
+		if oldest.ICAO != "" && !oldest.LostAt.Before(cutoff) {
+			return
+		}
+
+		g.evict()
+	}
 }
 
 // list refills the slice the frame carries, skipping the holes revivals left.
@@ -408,4 +497,30 @@ func (g *ghosts) list() []Trail {
 	g.dirty = false
 
 	return g.out
+}
+
+// ghostFrame is what one frame carries off the ring.
+type ghostFrame struct {
+	trails          []Trail
+	generation      uint64
+	routes          []Route
+	routeGeneration uint64
+	corridors       Corridors
+}
+
+// frame observes one frame's aircraft and reads back everything a Frame
+// carries from the ring. The version is read after observe on purpose,
+// since observe is what moves it, and the routes are refreshed after it for
+// the same reason: they are computed from the list observe hands back.
+func (g *ghosts) frame(planes airplanes.List, receiver Receiver, now time.Time) ghostFrame {
+	trails := g.observe(planes, receiver, now)
+	routes := g.routes.refresh(trails, g.version, now, &g.corridors)
+
+	return ghostFrame{
+		trails:          trails,
+		generation:      g.version,
+		routes:          routes,
+		routeGeneration: g.routes.generation,
+		corridors:       g.corridors.public(),
+	}
 }

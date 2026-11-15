@@ -391,8 +391,8 @@ func (s *Scene) drawField(lay *layout, frame source.Frame) {
 		return
 	}
 
-	if s.shoreOn && view.plottable {
-		s.drawShore(lay.dst, view, lay.unit())
+	if view.plottable {
+		s.drawGround(lay, view)
 	}
 
 	s.drawRings(lay, view.geom, view.scopeNm)
@@ -421,9 +421,7 @@ func (s *Scene) drawMinimalField(lay *layout, view scopeFrame) {
 	// airports sitting nowhere near a label this view does not draw.
 	s.rangeLabelCount = 0
 
-	if s.minimalShore {
-		s.drawShore(lay.dst, view, lay.unit())
-	}
+	s.drawGround(lay, view)
 
 	if s.minimalAirports {
 		s.drawAirports(lay, view.proj, airports.All())

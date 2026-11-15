@@ -180,11 +180,25 @@ type BiasTeeState struct {
 type Frame struct {
 	Planes airplanes.List
 
-	// Ghosts are the trails of aircraft that have stopped transmitting, kept
-	// only by a source built with ghosts on. They are nil otherwise, which a
-	// scene has to cope with in any case: a run that has lost nothing yet has
-	// none either.
-	Ghosts []Trail
+	// Ghosts are the trails of aircraft that have stopped transmitting,
+	// oldest first. They are nil from Empty, which a scene has to cope with in
+	// any case: a run that has lost nothing yet has none either.
+	//
+	// GhostGeneration moves whenever the ring behind them does: a trail lost,
+	// revived or aged out. A scene that caches a picture of the ghosts redraws
+	// it when this changes, and is spared comparing two thousand trails to
+	// find out.
+	Ghosts          []Trail
+	GhostGeneration uint64
+
+	// Routes are the corridors the lost trails make: bundles of tracks that
+	// flew the same way, each reduced to a mean path and a spread. They are
+	// recomputed when the ghosts change and once a minute besides, as the
+	// older members fade, and RouteGeneration moves every time they are.
+	// Like Ghosts, the slice belongs to the source and is valid until the
+	// next Frame call.
+	Routes          []Route
+	RouteGeneration uint64
 
 	Receiver Receiver
 	Source   adsb.SourceInfo
@@ -228,6 +242,13 @@ type Frame struct {
 	// it zero, which reads as an antenna that has heard nothing and draws no
 	// envelope.
 	Grid CoverageGrid
+
+	// Corridors is the airfield the ghosts were classified against and the
+	// half-life the corridor exposure fades them by. Its Field is zero from
+	// Empty, and from Live and Demo until an airfield has been pinned or found
+	// from the receiver's position, which is what tells the scene there is
+	// nothing to expose yet.
+	Corridors Corridors
 }
 
 // Source hands out frames until it is closed.

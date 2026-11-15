@@ -8,6 +8,37 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Corridors: the tracks of aircraft that have gone out of range are bundled
+  into routes, and every arrival and departure route is drawn as a tube, the
+  bundle's average path with its spread as the width, so arrivals narrow onto
+  the runway and departures open out. Each track is sorted when it is lost by
+  its two ends against one airfield: cyan if it ended within 10 nm of the
+  field, amber if it began there, grey otherwise. Grey routes get no tube; the
+  flat views draw their tracks as thin lines. Arrivals and departures share a
+  route when their bearings from the field agree within 30 degrees at 2, 12,
+  30 and 50 nm. A track counts for half as much every `--corridor-half-life`
+  (2h by default, 10m to 24h), and a track in no route is drawn on its own as
+  a thin line on the flat views. The airfield is the nearest within 150 nm of
+  the receiver, or the one `--corridor-field ICAO` names; an ICAO code the
+  airport list lacks stops the start with an error. The flat views draw a
+  translucent band on the ground. The 3D views draw a tube at the route's
+  average altitude, shaded like glass: dense at the outline, thin where it
+  faces the camera, with the back wall showing through, a hairline down each
+  side and one ring at the mouth by the field. Its far end, and any end the
+  filter or the edge of the view cuts, fades out over four stations. A tube
+  runs out from the field only while at least three tracks have flown each
+  2 nm station and their spread stays within 4 nm, with position, altitude
+  and spread averaged over five stations. The altitude filter on `f` cuts a
+  tube where it leaves the band on show. `u` and `--corridors off` turn the
+  corridors off in every view. The `U TUBES` cap sits at the end of the flat
+  views' key bar and after `M` in the bare views' reveal; the 3D view's bar
+  has no room for it. `--demo` starts with seventy invented tracks around
+  Schiphol from the last two hours.
+- The tilted views' ground no longer stops at the outer range ring. The sea,
+  the land and the coastline run on past it and fade in 32 bands into the
+  sky's horizon colour, or into the field when there is no sky. Inside the
+  ring nothing changes.
+
 - Aircraft no longer blink out at the edge of coverage. When uAirwaves drops
   one, the scope keeps drawing it for a minute where it was last heard, at its
   last heading, with its trail, fading to nothing, in every view and every

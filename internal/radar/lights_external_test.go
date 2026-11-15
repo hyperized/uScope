@@ -257,7 +257,7 @@ func TestLightsAllocations(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			scene, canv := sceneFor(t, false)
+			scene, canv := sceneFor(t, false, exposureNone)
 			canv = sizedFor(t, canv, testCase.uhd)
 			scene.Apply(testCase.set)
 			scene.Draw(canv, 0)

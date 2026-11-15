@@ -103,6 +103,16 @@ type point3 struct {
 	up    float64
 }
 
+// along is the point a fraction of the way from p to other, 0 being p and 1
+// other.
+func (p point3) along(other point3, fraction float64) point3 {
+	return point3{
+		east:  p.east + fraction*(other.east-p.east),
+		north: p.north + fraction*(other.north-p.north),
+		up:    p.up + fraction*(other.up-p.up),
+	}
+}
+
 // minus is the vector from other to this point.
 func (p point3) minus(other point3) point3 {
 	return point3{east: p.east - other.east, north: p.north - other.north, up: p.up - other.up}
@@ -387,4 +397,96 @@ func wrapDegrees(degrees float64) float64 {
 	}
 
 	return wrapped
+}
+
+// lensPoint is a point in the camera's own frame: how far right of the view
+// axis, how far above it, and how far in front of the lens, all in nautical
+// miles.
+type lensPoint struct {
+	across float64
+	up     float64
+	depth  float64
+}
+
+// lens resolves a point in the world onto the camera's three axes.
+func (c camera3) lens(world point3) lensPoint {
+	rel := world.minus(c.eye)
+
+	return lensPoint{across: rel.dot(c.right), up: rel.dot(c.above), depth: rel.dot(c.forward)}
+}
+
+// plane3 is one side of what the camera sees, as the weights of a test on a
+// lensPoint: a point is on the inside when the weighted sum is not negative.
+type plane3 struct {
+	across float64
+	up     float64
+	depth  float64
+	offset float64
+}
+
+// inside reports whether a point is on the side of the plane the camera sees.
+func (p plane3) inside(at lensPoint) bool {
+	return p.across*at.across+p.up*at.up+p.depth*at.depth+p.offset >= 0
+}
+
+// frustum3 is the five planes a point has to be inside for the camera to put
+// it on a box: the near plane and the four the box's own edges make with the
+// lens.
+type frustum3 [5]plane3
+
+// frustum is the volume of the world the camera puts on the box.
+//
+// Each side plane is the pixel test at turned into arithmetic that needs no
+// division: a point lands right of box.Min.X when focal times its offset
+// across is more than the pixels between the edge and the centre times its
+// depth. Written that way the test holds behind the lens as well as in front
+// of it, which is what lets a box straddling the camera be judged by its
+// corners.
+func (c camera3) frustum(box image.Rectangle) frustum3 {
+	focal := c.focal
+	centreX, centreY := float64(c.centerX), float64(c.centerY)
+
+	return frustum3{
+		{depth: 1, offset: -minDepth},
+		{across: focal, depth: centreX - float64(box.Min.X)},
+		{across: -focal, depth: float64(box.Max.X) - centreX},
+		{up: -focal, depth: centreY - float64(box.Min.Y)},
+		{up: focal, depth: float64(box.Max.Y) - centreY},
+	}
+}
+
+// misses reports whether nothing inside a box on the floor of the world can
+// land on the picture: every corner of it is outside one and the same plane.
+//
+// It is conservative the way a cull has to be. A box that is outside no single
+// plane can still miss the picture past a corner of it, and is kept; one this
+// refuses is outside a half-space that holds the whole view, and so is
+// everything inside the box, because a half-space that does not hold a box's
+// corners does not hold anything between them either.
+func (f frustum3) misses(cam camera3, low, high point3) bool {
+	corners := [4]lensPoint{
+		cam.lens(low),
+		cam.lens(point3{east: high.east, north: low.north}),
+		cam.lens(point3{east: low.east, north: high.north}),
+		cam.lens(high),
+	}
+
+	for _, plane := range f {
+		if plane.outsideAll(&corners) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// outsideAll reports whether every one of the corners is outside the plane.
+func (p plane3) outsideAll(corners *[4]lensPoint) bool {
+	for _, corner := range corners {
+		if p.inside(corner) {
+			return false
+		}
+	}
+
+	return true
 }

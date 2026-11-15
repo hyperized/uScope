@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hyperized/uAirwaves/pkg/scope"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/shore"
 )
@@ -110,7 +111,7 @@ func TestWaterFill3DDrawOrder(t *testing.T) {
 		want color.RGBA
 	}{
 		{name: "west of the coast is water", lon: syntheticSeaLon, want: scene.waterInk()},
-		{name: "east of the coast is land", lon: syntheticLandLon, want: scene.pal.Field},
+		{name: "east of the coast is land", lon: syntheticLandLon, want: scene.landInk()},
 		{name: "inside the lake is water again", lon: syntheticInLakeLon, want: scene.waterInk()},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -126,27 +127,27 @@ func TestWaterFill3DDrawOrder(t *testing.T) {
 	}
 }
 
-// TestBare3DGroundIsTheWholeReach checks that the bare view floods the two
-// range radii it draws to rather than the range itself.
+// TestTiltedGroundRunsPastTheReach checks where each tilted view's ground
+// is at full strength and where it has started to fade.
 //
-// The two views share every line of the fill and differ only in reachNm, so
-// this is the one thing worth reading off the picture: a point one and a half
-// range radii out is bare field in the full view, where the ground stops at
-// the outer ring, and water in the bare one.
-func TestBare3DGroundIsTheWholeReach(t *testing.T) {
+// A point one and a half range radii out is past the full view's outer ring
+// and inside the bare view's two radii. The bare view has it at the full tint;
+// the full view has it in the haze, which is neither the full tint nor the
+// bare field. Before the haze the full view left it bare.
+func TestTiltedGroundRunsPastTheReach(t *testing.T) {
 	t.Parallel()
 
-	// Far enough out to be past the full view's ground and well inside the
+	// Far enough out to be past the full view's reach and well inside the
 	// bare view's, measured north so the probe stays in front of the camera.
 	const pastTheRingLat = layerBaseLat + 1.5*waterProbeRangeNm/nmPerDegree
 
 	for _, testCase := range []struct {
-		name      string
-		view      View
-		wantWater bool
+		name     string
+		view     View
+		wantFull bool
 	}{
-		{name: "the full view stops at the outer ring", view: View3D},
-		{name: "the bare view reaches two range radii", view: ViewMinimal3D, wantWater: true},
+		{name: "the full view fades past the outer ring", view: View3D},
+		{name: "the bare view is at full tint two range radii out", view: ViewMinimal3D, wantFull: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -155,17 +156,215 @@ func TestBare3DGroundIsTheWholeReach(t *testing.T) {
 				WithShore(syntheticWaterSet(t, nil, nil)))
 			scene.drawShore3(canv, view)
 
-			want := scene.pal.Field
-			if testCase.wantWater {
-				want = scene.waterInk()
+			at := pixelAt3(t, view, pastTheRingLat, layerBaseLon)
+			got := canv.Image().RGBAAt(at.X, at.Y)
+
+			if testCase.wantFull {
+				if got != scene.waterInk() {
+					t.Errorf("the pixel one and a half range radii out is %v, want the full tint %v",
+						got, scene.waterInk())
+				}
+
+				return
 			}
 
-			at := pixelAt3(t, view, pastTheRingLat, layerBaseLon)
-
-			if got := canv.Image().RGBAAt(at.X, at.Y); got != want {
-				t.Errorf("the pixel one and a half range radii out is %v, want %v", got, want)
+			if !isHazeBand(scene, got) {
+				t.Errorf("the pixel one and a half range radii out is %v, want one of the haze bands", got)
 			}
 		})
+	}
+}
+
+// isHazeBand reports whether a colour is the tint of one of the haze bands.
+func isHazeBand(scene *Scene, col color.RGBA) bool {
+	for band := 1; band <= hazeBands; band++ {
+		if col == scene.hazeInk(scene.waterInk(), band) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isLandBand reports whether col is one of the land's haze bands, the way
+// isHazeBand answers for the water's.
+func isLandBand(scene *Scene, col color.RGBA) bool {
+	for band := 1; band <= hazeBands; band++ {
+		if col == scene.hazeInk(scene.landInk(), band) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestHazeFadesIntoTheField walks the ground straight ahead of the camera
+// from the receiver out past the far edge of the haze, and reads the tint off
+// the picture at every step.
+//
+// It has to start at the full tint, never get stronger on the way out, and
+// end at the field, which is the whole of the claim the haze makes: the
+// ground does not stop, it fades. The camera sits due south at azimuth zero,
+// so due north of the receiver is straight ahead of it.
+func TestHazeFadesIntoTheField(t *testing.T) {
+	t.Parallel()
+
+	const steps = 400
+
+	for _, testCase := range []struct {
+		name  string
+		shown View
+	}{
+		{name: "3d", shown: View3D},
+		{name: "minimal3d", shown: ViewMinimal3D},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, _ := water3DScene(t, testCase.shown, WithShore(syntheticWaterSet(t, nil, nil)))
+			scene.elevation = minElevation
+			view := remeasure3D(t, scene, canv)
+			scene.drawShore3(canv, view)
+
+			haze := view.haze()
+			beyond := haze.far - haze.foot.north + 1
+
+			last := scene.waterInk()
+			seen := 0
+
+			for step := range steps + 1 {
+				north := beyond * float64(step) / steps
+
+				//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+				x, y, ok := view.cam.at(point3{north: north})
+				if !ok || !image.Pt(x, y).In(canv.Bounds()) {
+					continue
+				}
+
+				got := canv.Image().RGBAAt(x, y)
+				if brightness(got) > brightness(last) {
+					t.Fatalf("%v NM north the ground is %v, brighter than %v nearer in", north, got, last)
+				}
+
+				last = got
+				seen++
+			}
+
+			if seen < steps/2 {
+				t.Fatalf("only %d of %d steps landed on the picture, so the walk proves nothing", seen, steps)
+			}
+
+			if last != scene.pal.Field {
+				t.Errorf("past the haze the ground is %v, want the field %v", last, scene.pal.Field)
+			}
+		})
+	}
+}
+
+// remeasure3D measures the view again after a test has moved the camera.
+func remeasure3D(tb testing.TB, scene *Scene, canv *canvas.Canvas) scene3 {
+	tb.Helper()
+
+	view, drawable := scene.measure3D(stalkLayout(scene, canv), layerFrame(layerBaseLat), 0)
+	if !drawable {
+		tb.Fatal("measure3D found no room for the tilted view")
+	}
+
+	return view
+}
+
+// brightness is the sum of a colour's channels, which is enough to order the
+// tints of one fade: every band is the same colour mixed into the field by a
+// smaller share.
+func brightness(col color.RGBA) int { return int(col.R) + int(col.G) + int(col.B) }
+
+// TestHazeKeepsLandBeyondTheReach is the reason the land is queried out to the
+// far edge of the haze: a country past the reach has to stay land rather than
+// turn into sea. The ring is a square two and a half range radii north of the
+// receiver, which is past the full view's reach and in its haze.
+func TestHazeKeepsLandBeyondTheReach(t *testing.T) {
+	t.Parallel()
+
+	const (
+		farLandSouth = layerBaseLat + 2.0*waterProbeRangeNm/nmPerDegree
+		farLandNorth = layerBaseLat + 3.0*waterProbeRangeNm/nmPerDegree
+		farLandSpan  = 2.0
+		probeLat     = (farLandSouth + farLandNorth) / 2
+	)
+
+	ring := shore.Polyline{
+		{Lat: farLandSouth, Lon: layerBaseLon - farLandSpan},
+		{Lat: farLandSouth, Lon: layerBaseLon + farLandSpan},
+		{Lat: farLandNorth, Lon: layerBaseLon + farLandSpan},
+		{Lat: farLandNorth, Lon: layerBaseLon - farLandSpan},
+	}
+
+	scene, canv, view := water3DScene(t, View3D, WithShore(syntheticWaterSet(t, nil, []shore.Polyline{ring})))
+	scene.drawShore3(canv, view)
+
+	land := pixelAt3(t, view, probeLat, layerBaseLon)
+	if got := canv.Image().RGBAAt(land.X, land.Y); !isLandBand(scene, got) {
+		t.Errorf("inside the far land the ground is %v, want one of the land's haze bands", got)
+	}
+
+	sea := pixelAt3(t, view, farLandSouth-(farLandNorth-farLandSouth)/2, layerBaseLon)
+	if got := canv.Image().RGBAAt(sea.X, sea.Y); !isHazeBand(scene, got) {
+		t.Errorf("short of the far land the ground is %v, want one of the haze bands", got)
+	}
+}
+
+// TestHazeGeometry pins the haze's measurements: the bands run from the full
+// tint's edge to the far edge without going back on themselves, the far edge
+// is hazeDepth times the near one until maxHazeNm caps it, and the first and
+// last band sit a step inside the two colours the fade runs between.
+func TestHazeGeometry(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		near    float64
+		wantFar float64
+	}{
+		{name: "a short reach fades over hazeDepth of itself", near: 100, wantFar: 100 * hazeDepth},
+		{name: "a long one is capped", near: 1000, wantFar: 1000 + maxHazeNm},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			view := scene3{reachNm: testCase.near, cam: camera3{eye: point3{up: 10}}}
+			haze := view.haze()
+
+			if math.Abs(haze.far-testCase.wantFar) > 1e-9 {
+				t.Errorf("far = %g, want %g", haze.far, testCase.wantFar)
+			}
+
+			if haze.edge(0) != haze.near || math.Abs(haze.edge(hazeBands)-haze.far) > 1e-9 {
+				t.Errorf("the bands run %g to %g, want %g to %g",
+					haze.edge(0), haze.edge(hazeBands), haze.near, haze.far)
+			}
+
+			for band := 1; band <= hazeBands; band++ {
+				if haze.edge(band) <= haze.edge(band-1) {
+					t.Errorf("band %d ends at %g, not past where it starts at %g",
+						band, haze.edge(band), haze.edge(band-1))
+				}
+			}
+		})
+	}
+
+	scene := &Scene{pal: theme.Night}
+
+	// At thirty-two bands the first step is under half a level of the night
+	// tint, so it may round onto the full tint; it may never pass it, and it
+	// must still be ground rather than field.
+	data := scene.waterInk()
+
+	if first := scene.hazeInk(data, 1); brightness(first) > brightness(scene.waterInk()) || first == scene.pal.Field {
+		t.Errorf("the first band is %v, want no brighter than the full tint %v", first, scene.waterInk())
+	}
+
+	if last := scene.hazeInk(data, hazeBands); brightness(last) > brightness(scene.hazeInk(data, hazeBands-1)) {
+		t.Errorf("the last band %v is brighter than the one inside it", last)
 	}
 }
 
@@ -329,5 +528,150 @@ func TestCameraPixelAnswersWhereAtRefuses(t *testing.T) {
 
 	if got := view.cam.pixel(far); got.In(canv.Bounds()) {
 		t.Errorf("pixel put the same point at %v, which is on the canvas: want the unguarded answer", got)
+	}
+}
+
+// The stretch of the 5 degree meridian TestTiltedFillHasNoSeamOnTheCellBoundary
+// walks, across the Netherlands and the sea north of it, in steps fine enough
+// to visit every row it crosses.
+const (
+	seamLon   = 5.0
+	seamSouth = 51.0
+	seamNorth = 54.0
+	seamSteps = 4000
+
+	// seamReach is how many columns either side of the meridian are read.
+	// The projected boundary sits within half a pixel of the point probed;
+	// two leaves room for both pieces' edges and a pixel past them.
+	seamReach = 2
+)
+
+// TestTiltedFillHasNoSeamOnTheCellBoundary walks the 5 degree meridian
+// through the receiver's own country in both tilted views and looks for the
+// dashed line that used to run down it.
+//
+// The meridian is a boundary between two of the land file's cells, so the
+// fill there is two pieces of one ring meeting edge to edge. Where the pieces
+// walked the boundary in different steps, the two edges rounded onto
+// different columns on alternate rows and left a single pixel of the other
+// colour between them. With only the fill on the canvas, a pixel that differs
+// from both its neighbours while they agree with each other cannot be
+// anything else.
+//
+// The real embedded land is used on purpose: the seam came from the shape of
+// the shipped data, and a synthetic ring cut by today's clipper would pass
+// whether or not the file had been rebuilt with it.
+func TestTiltedFillHasNoSeamOnTheCellBoundary(t *testing.T) {
+	t.Parallel()
+
+	// Fewer rows than this and the walk missed the picture, so a clean result
+	// would mean nothing.
+	const minRowsRead = 100
+
+	set, err := shore.Load()
+	if err != nil {
+		t.Fatalf("shore.Load: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name  string
+		shown View
+	}{
+		{name: "3d", shown: View3D},
+		{name: "minimal3d", shown: ViewMinimal3D},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, view := water3DScene(t, testCase.shown, WithShore(set))
+
+			scene.fillGround3(canv, view, view.haze())
+
+			if rows := checkSeamRows(t, canv.Image(), view); rows < minRowsRead {
+				t.Fatalf("the meridian crossed %d rows of the picture, want at least %d", rows, minRowsRead)
+			}
+		})
+	}
+}
+
+// checkSeamRows reports every lone pixel on the rows the meridian crosses and
+// returns how many rows it read.
+func checkSeamRows(tb testing.TB, img *image.RGBA, view scene3) int {
+	tb.Helper()
+
+	box := img.Bounds().Inset(seamReach + 1)
+	rows := make(map[int]bool)
+
+	for step := range seamSteps + 1 {
+		lat := seamSouth + (seamNorth-seamSouth)*float64(step)/seamSteps
+
+		//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+		x, y, ok := view.cam.at(view.ground(lat, seamLon))
+		if !ok || !image.Pt(x, y).In(box) || rows[y] {
+			continue
+		}
+
+		rows[y] = true
+
+		for column := x - seamReach; column <= x+seamReach; column++ {
+			left, here, right := img.RGBAAt(column-1, y), img.RGBAAt(column, y), img.RGBAAt(column+1, y)
+			if left == right && here != left {
+				tb.Errorf("pixel (%d, %d) at %.4f N on the meridian is %v between two of %v",
+					column, y, lat, here, left)
+			}
+		}
+	}
+
+	return len(rows)
+}
+
+// TestHazePast checks the far cull against a haze around a foot due south of
+// the origin: a ring is past the haze only when the nearest corner or edge of
+// its box is, whichever side of the foot it lies on.
+func TestHazePast(t *testing.T) {
+	t.Parallel()
+
+	haze := haze3{foot: point3{north: -100}, near: 200, far: 800}
+
+	for _, testCase := range []struct {
+		name      string
+		low, high point3
+		want      bool
+	}{
+		{name: "a box around the foot", low: point3{east: -1, north: -101}, high: point3{east: 1, north: -99}},
+		{name: "a box just inside the far edge", low: point3{north: 690}, high: point3{east: 10, north: 750}},
+		{
+			name: "a box out beyond it to the north",
+			low:  point3{north: 701}, high: point3{east: 10, north: 750},
+			want: true,
+		},
+		{
+			name: "a box out beyond it to the south",
+			low:  point3{north: -1000}, high: point3{north: -901},
+			want: true,
+		},
+		{
+			name: "a box out beyond it to the east",
+			low:  point3{east: 801, north: -100}, high: point3{east: 900},
+			want: true,
+		},
+		{
+			name: "a box out beyond it to the west",
+			low:  point3{east: -900, north: -100}, high: point3{east: -801},
+			want: true,
+		},
+		{
+			name: "a box off the diagonal past it though each axis alone is not",
+			low:  point3{east: 600, north: 500}, high: point3{east: 700, north: 600},
+			want: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := haze.past(boxedLine3{low: testCase.low, high: testCase.high}); got != testCase.want {
+				t.Errorf("past(%+v to %+v) = %v, want %v", testCase.low, testCase.high, got, testCase.want)
+			}
+		})
 	}
 }
