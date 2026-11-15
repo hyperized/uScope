@@ -54,8 +54,9 @@ const (
 //
 // Latitude, Longitude, Heading and VertRate are where the aircraft was and
 // what it was doing on the last frame it was heard, which is what the radar
-// holds a coasting aircraft at for its first minute as a ghost. A zero
-// position reads as nothing to draw a head at.
+// holds a coasting aircraft at for its first minute as a ghost. They are zero
+// on a trail read back from the history file, which never stored them, and
+// the radar reads a zero position as nothing to draw a head at.
 //
 // LostAt and Class are what the corridor exposure draws it by. LostAt is the
 // frame time the trail was given up on, which the exposure ages it from, and
@@ -183,6 +184,10 @@ type ghosts struct {
 	// tubes. See routes.go.
 	routes routeBook
 
+	// checked is whether the last observe ran expire, which is the cadence
+	// the history file is written on. See history.go.
+	checked bool
+
 	// stitched is the old track of each aircraft that came back while its
 	// ghost was still in the ring, by ICAO. keep puts it in front of the new
 	// history on every frame until the new life no longer needs it; see
@@ -236,7 +241,7 @@ func (g *ghosts) observe(planes airplanes.List, receiver Receiver, now time.Time
 	}
 
 	g.sweep(now)
-	g.expire(now)
+	g.checked = g.expire(now)
 
 	return g.list()
 }
@@ -455,10 +460,13 @@ func (g *ghosts) touch() {
 // which keeps expiry O(1) a trail. A hole left by a revival is evicted where
 // it lies. A clock that has gone backwards runs the check rather than waiting
 // for the old reading to come round again.
-func (g *ghosts) expire(now time.Time) {
+//
+// It reports whether the check ran, which is what the history file is
+// written on: once a minute is the cadence the ring already keeps.
+func (g *ghosts) expire(now time.Time) bool {
 	since := now.Sub(g.lastExpire)
 	if !g.lastExpire.IsZero() && since >= 0 && since < corridorExpireEvery {
-		return
+		return false
 	}
 
 	g.lastExpire = now
@@ -467,11 +475,13 @@ func (g *ghosts) expire(now time.Time) {
 	for g.evicted < g.pushed {
 		oldest := &g.ring[g.evicted%g.maxTrails]
 		if oldest.ICAO != "" && !oldest.LostAt.Before(cutoff) {
-			return
+			return true
 		}
 
 		g.evict()
 	}
+
+	return true
 }
 
 // list refills the slice the frame carries, skipping the holes revivals left.
@@ -506,6 +516,7 @@ type ghostFrame struct {
 	routes          []Route
 	routeGeneration uint64
 	corridors       Corridors
+	checked         bool
 }
 
 // frame observes one frame's aircraft and reads back everything a Frame
@@ -522,5 +533,6 @@ func (g *ghosts) frame(planes airplanes.List, receiver Receiver, now time.Time) 
 		routes:          routes,
 		routeGeneration: g.routes.generation,
 		corridors:       g.corridors.public(),
+		checked:         g.checked,
 	}
 }

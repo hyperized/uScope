@@ -15,6 +15,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/location"
 	"github.com/hyperized/uAirwaves/pkg/selflocate"
+	"github.com/hyperized/uScope/internal/history"
 )
 
 // Coordinate limits. The flag layer checks these too; they are checked again
@@ -150,6 +151,17 @@ type Live struct {
 	// corridor exposure, read once by NewLive and handed to the ghost ring.
 	corridorField    string
 	corridorHalfLife time.Duration
+
+	// The history file, when WithHistory named one; see history.go.
+	// historyOut writes it, saveWake is how a frame asks the writer for a
+	// snapshot, savedVersion is the ring version the file holds, under mu,
+	// and snapshot is the copy the writer reuses, which only it and Close
+	// touch and never at once.
+	historyPath  string
+	historyOut   *history.Writer
+	saveWake     chan struct{}
+	savedVersion uint64
+	snapshot     history.Snapshot
 }
 
 // LiveOption configures a Live at construction.
@@ -333,6 +345,8 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 	}
 
 	live.ghosts.corridors = exposure
+	live.openHistory()
+
 	live.loc = live.newLocation()
 
 	// Without a position from the operator there is nothing to centre on, so
@@ -376,6 +390,10 @@ func (l *Live) Start(ctx context.Context) {
 
 	l.group.Go(func() { l.stream(streamCtx) })
 	l.startGPS(streamCtx)
+
+	if l.saveWake != nil {
+		l.group.Go(func() { l.saveLoop(streamCtx) })
+	}
 }
 
 // Frame takes one snapshot of the whole ingest.
@@ -429,10 +447,13 @@ func (l *Live) SetBiasTee(enable bool) error {
 	return nil
 }
 
-// Close stops the ingest and waits for its goroutine.
+// Close stops the ingest and waits for its goroutine, then writes the history
+// file one last time when there is one.
 //
 // Waiting matters: the goroutine holds the radio or the socket, and returning
 // before it has let go would leave the device busy for whatever starts next.
+// It also stops the history writer, which is what lets the last snapshot be
+// written here without a second writer racing it.
 func (l *Live) Close() error {
 	l.mu.Lock()
 	cancel := l.cancel
@@ -443,12 +464,13 @@ func (l *Live) Close() error {
 	}
 
 	l.group.Wait()
+	l.closeHistory()
 
 	return nil
 }
 
-// observe folds the frame's aircraft into the ghost ring and reads back what
-// the frame carries off it: the ghosts, the routes and the corridor field.
+// observe folds the frame's aircraft into the ghost ring, and on the minute
+// the ring checks for expired trails it offers the history writer a snapshot.
 //
 // It takes mu in a section of its own rather than holding it across the whole
 // of Frame, because receiver above reaches applyEstimate, which takes the
@@ -457,7 +479,12 @@ func (l *Live) observe(planes airplanes.List, receiver Receiver, now time.Time) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return l.ghosts.frame(planes, receiver, now)
+	lost := l.ghosts.frame(planes, receiver, now)
+	if lost.checked {
+		l.wakeHistory()
+	}
+
+	return lost
 }
 
 // validate range-checks what the options collected.

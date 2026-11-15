@@ -338,6 +338,7 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 		return live(cfg, stderr, source.WithBeast(cfg.beast))
 	case sourceDemo:
 		warnNoDongle(cfg, stderr, "--demo")
+		warnNoHistory(cfg, stderr, "--demo")
 
 		return demo(cfg)
 	case sourceAuto:
@@ -351,6 +352,7 @@ func sourceFor(cfg config, goos string, stderr io.Writer) (source.Source, error)
 			"%s: no receiver on %s and no --beast or --replay-iq given; flying the demo fleet\n",
 			appName, goos)
 		warnNoDongle(cfg, stderr, "the demo fleet")
+		warnNoHistory(cfg, stderr, "the demo fleet")
 
 		return demo(cfg)
 	}
@@ -381,6 +383,18 @@ func warnNoDongle(cfg config, stderr io.Writer, chosen string) {
 	_, _ = fmt.Fprintf(stderr, "%s: %s: local SDR only, ignored under %s\n", appName, flags, chosen)
 }
 
+// warnNoHistory says once that --history keeps nothing for the source that
+// was chosen. The demo fleet invents its traffic from a seed, so its lost
+// tracks are the same every run and keeping them would only write over a
+// file a live run wanted.
+func warnNoHistory(cfg config, stderr io.Writer, chosen string) {
+	if cfg.history == "" {
+		return
+	}
+
+	_, _ = fmt.Fprintf(stderr, "%s: --history: live sources only, ignored under %s\n", appName, chosen)
+}
+
 // dongleOnlyFlags names whichever of the two radio-only flags were given, or
 // the empty string when neither was.
 func dongleOnlyFlags(cfg config) string {
@@ -409,7 +423,8 @@ func live(cfg config, stderr io.Writer, opts ...source.LiveOption) (source.Sourc
 		source.WithBiasTee(cfg.biasTee),
 		source.WithAutoSweep(cfg.autoSweep),
 		source.WithCorridorField(cfg.corridorField),
-		source.WithCorridorHalfLife(cfg.corridorHalfLife))
+		source.WithCorridorHalfLife(cfg.corridorHalfLife),
+		source.WithHistory(cfg.history))
 	opts = append(opts, locationOptions(cfg, stderr)...)
 
 	src, err := source.NewLive(opts...)

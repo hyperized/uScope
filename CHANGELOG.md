@@ -8,6 +8,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--history PATH` keeps the lost tracks the corridors are drawn from across
+  a restart. The file is read before the first frame, written once a minute
+  while the tracks change and once more on shutdown, when aircraft still in
+  the sky are written as lost at that moment and revived as soon as the feed
+  hears them again. Tracks older than six half-lives are dropped on load. A
+  file that will not read is one line on stderr and an empty start; a failed
+  write is one line per distinct cause. Live sources only.
 - Corridors: the tracks of aircraft that have gone out of range are bundled
   into routes, and every arrival and departure route is drawn as a tube, the
   bundle's average path with its spread as the width, so arrivals narrow onto
