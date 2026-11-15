@@ -54,11 +54,28 @@ beside the source label, the block is left out.
 
 Colour means altitude by default: green under 10,000 ft, white to 25,000,
 orange above. `c` switches to colouring by airline, read off the callsign
-prefix, and the legend lists the four busiest operators in view. `f` filters
-the picture down to one entry of whichever legend is showing. The altitude
-stops have 500 ft of slack at each edge: an aircraft on screen stays there
-until it is 500 ft past the line, and one off screen waits until it is 500 ft
-inside, so a flight holding FL250 under the `>25K` stop does not flicker.
+prefix, and the legend lists the four busiest operators in view. Press `c`
+again for colouring by corridor: an aircraft that looks to be arriving at the
+corridor airfield is cyan, one leaving it amber, and everything else grey, by
+the same guess the corridor tubes are sorted with. The legend then reads
+`IN`, `OUT` and `OTHER`, and the aircraft list splits into those three
+sections, in that order, each under a heading with its count and each still
+nearest first, numbered from 01 again. The lines are shared a third each, and
+a section with fewer aircraft than its third hands the rest on; one that runs
+out of room ends on `+N MORE`. `n`, `p` and the arrows step through the list
+as it is drawn, IN first, and the section holding the selection scrolls to
+keep it in view. With no airfield placed every aircraft is grey and sits under
+`OTHER`. In all three colourings the level column and the panel's altitude
+figure keep the altitude colours.
+
+`f` filters the picture down to one entry of whichever legend is showing.
+Holding it to one class while colouring by corridor shows that section of the
+list alone. Coloured by altitude or by corridor the cycle has one more stop at
+the end, `<25K`, which keeps the low and mid bands and hides the overflights.
+The altitude stops have 500 ft of slack at each edge: an aircraft on screen
+stays there until it is 500 ft past the line, and one off screen waits until
+it is 500 ft inside, so a flight holding FL250 under the `<25K` stop does not
+flicker.
 
 A new aircraft fades up from the background over two seconds. The first
 frame, and the first frame after `f`, draw everything at full strength. When
@@ -116,6 +133,23 @@ views, with the wordmark and the feed's dot, the sun's state and times, and
 the two clocks. The picture moves down to make room for it rather than being
 covered.
 
+The bare 3D view can carry the flight strip board down its right quarter, for
+a big screen nobody is standing at to ask who an aeroplane is. `j` or
+`--minimal-board on` turns it on; it starts off, and `j` does nothing in the
+other three views. The board has the aircraft count at the top, `8 OF 12
+AIRCRAFT` with the filter's stop beside it while `f` is holding some back, a
+strip per aircraft nearest first, and a legend along the bottom. At 1280x720 a
+strip has room for the callsign, the level, the ground speed, the distance and
+`DIR`, which reads `IN` for an aircraft that looks to be arriving at the
+corridor airfield, `OUT` for one leaving it and `---` for anything else, in
+the colours the corridor tubes are drawn in. A bigger canvas brings back more
+of the fields the full view's column has. The picture keeps the other three
+quarters, and the camera moves in so the range ring stays the size it was. No
+strip is marked as selected, since the bare view shows no selection. Coloured
+by corridor, the board splits into IN, OUT and OTHER the way the full views'
+list does, and drops `DIR`, because the heading over each section already
+says it.
+
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture so nothing moves,
 showing only the keys that work there.
@@ -165,10 +199,13 @@ comes out wide and twisted, which is not a path anybody flies. On the flat
 views each track carries on past the end of its tube as a thin line, so the
 fan-out stays on screen.
 
-The `f` filter cuts a tube where its average altitude leaves the band on show.
-A stretch whose altitude was never decoded is not drawn under any filter. In
-airline colouring every route stays, since a filter on one airline's live
-traffic says nothing about the corridors.
+The `f` filter cuts a tube where its average altitude leaves the bands on
+show, so `<25K` cuts the top off every departure's climb and leaves the
+finals. A stretch whose altitude was never decoded is not drawn under any
+filter. In airline colouring every route stays, since a filter on one
+airline's live traffic says nothing about the corridors. Holding `f` to `IN`,
+`OUT` or `OTHER` keeps every route too: hiding the departure tubes would leave
+the picture with half the corridors it is there to show.
 
 Nothing appears until there is an airfield, which takes a receiver position (a
 GPS fix, `--lat` and `--lon`, or a self-locate estimate that has settled to
@@ -333,8 +370,9 @@ true at once and the answer is a compromise.
 | `s` | the aircraft lights on or off, in every view |
 | `u` | the corridor tubes on or off, in every view |
 | `h` | bare views: the bar across the top on or off |
-| `c` | colour by altitude or by airline |
-| `f` | filter to one entry of the legend, then back to all |
+| `j` | bare 3D view: the strip board column on or off |
+| `c` | colour by altitude, by airline or by corridor |
+| `f` | filter to one entry of the legend, then back to all; by altitude the stops are `<10K`, `10-25K`, `>25K` and `<25K`, by corridor `IN`, `OUT`, `OTHER` and `<25K` |
 | `l` | night, day or auto by the sun |
 | `k` | glass, phosphor or mono |
 | `w` | hide the right column and give the picture the whole width |
@@ -348,7 +386,8 @@ true at once and the answer is a compromise.
 Shifted letters do the same as unshifted, because caps lock is easy to hit on
 the uConsole's keyboard. The key bar along the bottom shows every key that
 does something in the view on screen, with its current state. The full 3D
-view's bar has no room for `z` or `u`; the bare 3D view's has. The bare views hide
+view's bar has no room for `z` or `u`; the bare 3D view's has, and shares one
+`CAMERA` cap between the arrows and the brackets to make room for `j`. The bare views hide
 the bar until a key is pressed, then show it for four seconds; another press
 starts the four seconds again.
 
@@ -366,7 +405,7 @@ starts the four seconds again.
 | `--lat`, `--lon` | | the receiver's position in degrees; turns gpsd and the estimate off |
 | `--view` | `scope` | `scope`, `3d`, `minimal` or `minimal3d` |
 | `--range` | `auto` | range in nautical miles, or `auto` to fit the traffic |
-| `--colour` | `altitude` | `altitude` or `airline` |
+| `--colour` | `altitude` | `altitude`, `airline` or `corridor` |
 | `--theme` | `auto` | `night`, `day`, or `auto` to follow the sun at the receiver |
 | `--look` | `glass` | `glass`, `phosphor` or `mono` |
 | `--airports` | `on` | airfield markers |
@@ -374,6 +413,7 @@ starts the four seconds again.
 | `--minimal-shore` | `off` | coastline and water in `minimal` and `minimal3d`; `m` still flips it |
 | `--minimal-airports` | `on` | airfield markers in `minimal` and `minimal3d`; `a` still flips it |
 | `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d`; `h` still flips it |
+| `--minimal-board` | `off` | the flight strip board in a column down the right quarter of `minimal3d`; `j` still flips it |
 | `--lights` | `on` | the aircraft lights: red and green wingtips, white tail, strobes and the beacon; `s` still flips them |
 | `--stars` | `on` | stars in the 3D views' night sky; `z` flips them |
 | `--corridors` | `on` | draw the routes lost aircraft flew as tubes, fading with age, see "Corridors"; `u` flips them |

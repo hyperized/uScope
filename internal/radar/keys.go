@@ -72,8 +72,8 @@ func (s *Scene) handleKey(key input.Key) bool {
 // m and a work in minimal mode and draw there, on minimal's own pair of
 // toggles rather than on the scope's. v is what cycles between the four
 // views, w takes the column away from the two of them that have one, h puts
-// a bar across the top of the two that do not, and anything not bound here
-// falls through to the camera keys, which only the 3D view takes.
+// a bar across the top of the two that do not, j gives the bare 3D view its
+// strip board, and anything not bound here falls through to the camera keys, which only the 3D view takes.
 //
 // s turns the aircraft lights on and off in every view. A scene starts
 // without them, so a press is how they come on without restarting with
@@ -117,7 +117,8 @@ func (s *Scene) handleRune(value rune) bool {
 }
 
 // handleViewRune maps the keys that change what surrounds the traffic: the
-// two overlays, the view itself, the column and the bare views' bar. Anything
+// three overlays, the view itself, the column, the bare views' bar and the
+// bare 3D view's board. Anything
 // else goes on to the camera keys. It is split from handleRune to keep each
 // switch inside the complexity limit, and the split follows a line that was
 // already there: these are the keys whose answer depends on which view is up.
@@ -135,6 +136,8 @@ func (s *Scene) handleViewRune(value rune) bool {
 		return s.toggleWide()
 	case 'h', 'H':
 		return s.toggleBar()
+	case 'j', 'J':
+		return s.toggleBoard()
 	default:
 		return s.handle3DRune(value)
 	}
@@ -160,7 +163,7 @@ func (s *Scene) toggleWide() bool {
 	return true
 }
 
-// cycleColour moves to the other colour mode and puts the filter back to ALL,
+// cycleColour moves to the next colour mode and puts the filter back to ALL,
 // which is what c does.
 //
 // The filter travels with it because a filter value is a legend entry, and
@@ -419,16 +422,13 @@ func (s *Scene) stepRange(delta int) {
 // "the nearest" mean the nearest one on screen. An unpinned selection standing
 // on an aeroplane the filter then hid would be a full strip about something
 // nobody can see.
+//
+// In corridor colouring the index is in the order the sections draw it, IN
+// then OUT then OTHER, so n and p walk the list as it reads. The nearest is
+// then wherever its section put it rather than row zero, which is why the
+// unpinned selection reads groups.nearest.
 func (s *Scene) syncSelection(frame source.Frame) {
-	s.icaos = s.icaos[:0]
-
-	for _, plane := range frame.Planes {
-		if !s.visible(plane) {
-			continue
-		}
-
-		s.icaos = append(s.icaos, plane.ICAO)
-	}
+	s.indexRows(frame)
 
 	if s.pinned && s.keepPinned(frame) {
 		return
@@ -440,8 +440,8 @@ func (s *Scene) syncSelection(frame source.Frame) {
 		return
 	}
 
-	s.selIndex, s.selHidden = 0, false
-	s.selICAO = s.icaos[0]
+	s.selIndex, s.selHidden = s.groups.nearest, false
+	s.selICAO = s.icaos[s.selIndex]
 }
 
 // keepPinned holds the selection on the aircraft the operator chose, and

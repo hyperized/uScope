@@ -428,7 +428,63 @@ func drawAllocCases() []drawAllocCase {
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
 			uhd:  true,
 		},
-	}, corridorAllocCases()...)
+	}, append(corridorAllocCases(), boardAllocCases()...)...)
+}
+
+// boardAllocCases is the rows of TestDrawAllocations for corridor colouring,
+// its filters and the bare 3D view's board. Each carries the demo's corridor
+// field, so every strip's DIR and every grouped row goes through Classify
+// rather than stopping at an unplaced field.
+func boardAllocCases() []drawAllocCase {
+	return []drawAllocCase{
+		{
+			name:     "the bare 3D view with the strip board",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Board: true},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the bare 3D view with the strip board, under the ceiling, in 4K",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Board: true},
+			filters:  pressFilterCeiling,
+			exposure: exposureDemo,
+			uhd:      true,
+		},
+		{name: "corridor mode", set: radar.Settings{Colour: radar.ColourCorridor}, exposure: exposureDemo},
+		{
+			name:     "corridor mode holding to IN",
+			set:      radar.Settings{Colour: radar.ColourCorridor},
+			filters:  pressFilterIn,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the bare 3D board in corridor mode",
+			set:      radar.Settings{Colour: radar.ColourCorridor, View: radar.ViewMinimal3D, Board: true},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the bare 3D board in corridor mode, grouped, in 4K",
+			set:      radar.Settings{Colour: radar.ColourCorridor, View: radar.ViewMinimal3D, Board: true},
+			exposure: exposureDemo,
+			uhd:      true,
+		},
+		{
+			name:     "the 3D view in corridor mode, grouped",
+			set:      radar.Settings{Colour: radar.ColourCorridor, View: radar.View3D},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the scope in corridor mode, grouped, holding to OUT",
+			set:      radar.Settings{Colour: radar.ColourCorridor},
+			filters:  pressFilterOut,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the scope with the exposure under the ceiling",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			filters:  pressFilterCeiling,
+			exposure: exposureDemo,
+		},
+	}
 }
 
 // corridorAllocCases is the corridor exposure's rows of TestDrawAllocations'
@@ -663,8 +719,8 @@ func exposureBenchCases() []drawBenchCase {
 }
 
 // BenchmarkDraw measures one whole frame at the panel's resolution, in every
-// combination of colour mode and palette: airline mode and the paper palette
-// both do more work per aircraft than the defaults, and the numbers together
+// combination of colour mode and palette: airline mode, corridor mode and the
+// paper palette all do more work per aircraft than the defaults, and the numbers together
 // are what the benchmark is for. Minimal mode following the traffic has no
 // furniture to draw and one more pass over the fleet.
 //
@@ -697,6 +753,9 @@ func exposureBenchCases() []drawBenchCase {
 // prices the layer rebuilt with the whole ring on it. The 3D ones skin every
 // tube every frame. The tube-cap cases hand the scene sixty-four routes of a
 // hundred and sixty stations, the most the source will ever carry.
+//
+// The board cases are the bare 3D view with its strip board, in altitude
+// colouring with DIR and in corridor colouring grouped into sections.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range append([]drawBenchCase{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
@@ -749,6 +808,26 @@ func BenchmarkDraw(b *testing.B) {
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
 			pal:  theme.Night,
 			uhd:  true,
+		},
+		{
+			name: "corridor/night", set: radar.Settings{Colour: radar.ColourCorridor},
+			pal: theme.Night, exposure: exposureDemo,
+		},
+		{
+			name: "corridor-3d/night", set: radar.Settings{Colour: radar.ColourCorridor, View: radar.View3D},
+			pal: theme.Night, exposure: exposureDemo,
+		},
+		{
+			name:     "minimal3d-board/night",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Board: true},
+			pal:      theme.Night,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "minimal3d-board-corridor/night",
+			set:      radar.Settings{Colour: radar.ColourCorridor, View: radar.ViewMinimal3D, Board: true},
+			pal:      theme.Night,
+			exposure: exposureDemo,
 		},
 	}, exposureBenchCases()...) {
 		b.Run(testCase.name, func(b *testing.B) {

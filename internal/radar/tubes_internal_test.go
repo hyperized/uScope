@@ -809,7 +809,7 @@ func TestTubesKeyEveryView(t *testing.T) {
 }
 
 // widestBarScene is the scene state every cycling cap is on its longest word
-// in: airline colour, the short trail, the mid-band filter, the phosphor look
+// in: corridor colour, the short trail, the mid-band filter, the phosphor look
 // and the auto theme at night, on a source with a bias-tee.
 func widestBarScene(t *testing.T, view View) (*Scene, layout) {
 	t.Helper()
@@ -823,7 +823,7 @@ func widestBarScene(t *testing.T, view View) (*Scene, layout) {
 		faces:         layerTestFaces(t),
 		shown:         view,
 		biasSupported: true,
-		colour:        ColourAirline,
+		colour:        ColourCorridor,
 		trail:         trailShort,
 		filter:        filterState{kind: filterBand, band: bandMid},
 	}
@@ -847,8 +847,8 @@ func TestTubesCapFitsTheBarsItIsOn(t *testing.T) {
 		tail  []keyCap
 		reach int
 	}{
-		{name: "flat scope", view: ViewScope, caps: keyCaps[:], tail: flatCaps[:], reach: 1038},
-		{name: "bare 3D", view: ViewMinimal3D, caps: bareCaps[:], tail: bare3DCaps[:], reach: 1206},
+		{name: "flat scope", view: ViewScope, caps: keyCaps[:], tail: flatCaps[:], reach: 1045},
+		{name: "bare 3D", view: ViewMinimal3D, caps: bareCaps[:], tail: bare3DCaps[:], reach: 1242},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

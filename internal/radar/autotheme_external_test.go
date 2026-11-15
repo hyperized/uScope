@@ -317,7 +317,7 @@ func TestAutoThemeKeepsTheLook(t *testing.T) {
 
 // TestAutoThemeKeyBarFitsAtPanelWidth is TestView3DKeyBarFitsAtPanelWidth at
 // the widest the bar can get with the L cap on its longest word, AUTO·NIGHT:
-// the 3D view on a dongle with a bias-tee, airline colours, the short trails
+// the 3D view on a dongle with a bias-tee, corridor colours, the short trails
 // and the phosphor look, whose cap word is the longest of the three.
 func TestAutoThemeKeyBarFitsAtPanelWidth(t *testing.T) {
 	t.Parallel()
@@ -331,10 +331,10 @@ func TestAutoThemeKeyBarFitsAtPanelWidth(t *testing.T) {
 	frame.Now = schipholMidnight
 
 	scene, _, canv := autoScene(t, frame,
-		radar.WithColour(radar.ColourAirline),
+		radar.WithColour(radar.ColourCorridor),
 		radar.WithPalette(theme.PhosphorNight),
 		radar.WithBiasTee(&fakeToggler{}))
-	scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourAirline})
+	scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourCorridor})
 	pressTrails(t, scene, pressShort)
 	scene.Draw(canv, 0)
 

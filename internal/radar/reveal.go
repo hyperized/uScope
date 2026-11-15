@@ -17,12 +17,12 @@ const keyBarHold = 4 * time.Second
 // the one only a bare view binds put in. S LIGHTS and U TUBES stay, because
 // the lights and the tubes are drawn in every view. U sits after M here rather
 // than on a tail of its own as in the full views, because the bare rows have
-// no select arrows, W or E to pay for. The select arrows go because the selection has
-// nothing to show on a bare field: no ring and no card. W goes because
-// toggleWide refuses there. H comes in, after V, because it is the bare
-// views' own switch for the bar across the top. A and M stay and read the
-// bare pair of toggles, which capEngaged gets from airportsDrawn and
-// shoreDrawn.
+// no select arrows, W or E to pay for. The select arrows go because the
+// selection has nothing to show on a bare field: no ring, no card, and no
+// strip marked on the board. W goes because toggleWide refuses there. H comes
+// in, after V, because it is the bare views' own switch for the bar across the
+// top. A and M stay and read the bare pair of toggles, which capEngaged gets
+// from airportsDrawn and shoreDrawn.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var bareCaps = [...]keyCap{
@@ -45,18 +45,19 @@ var bareCaps = [...]keyCap{
 // 3D view, and with Z STARS, which only fits in the room E leaves. See the
 // note on view3DCaps.
 //
-// Z goes after O, on the toggles' side of the row, and the arrows and the
-// brackets keep a cap each as they do in the full bar. At its widest, with
-// the bias-tee cap and every cycling cap on its longest word, the row's last
-// box ends at x=1141, 123 pixels inside the right margin, so there is no
-// call to fold the two camera caps into one.
+// J BOARD came in after Z. At the row's widest, with the bias-tee cap and
+// every cycling cap on its longest word (CORRIDOR on the C cap), it would have
+// left the pen at x=1273, past the 1264 margin. The arrows and the brackets
+// share one CAMERA cap here rather than having a TURN and a TILT box each,
+// which saves 31 pixels and leaves the pen at x=1242. The full 3D bar keeps
+// the two boxes: it has no J to pay for.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var bare3DCaps = [...]keyCap{
 	{key: "O", label: "ORBIT", state: capOrbit},
 	{key: "Z", label: "STARS", state: capStars},
-	{key: "←→", label: "TURN"},
-	{key: "[ ]", label: "TILT"},
+	{key: "J", label: "BOARD", state: capBoard},
+	{key: "←→[ ]", label: "CAMERA"},
 }
 
 // noteKey starts or restarts the key bar's hold after a press.

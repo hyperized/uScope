@@ -186,12 +186,17 @@ func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration
 	azimuth := s.cameraAzimuth(elapsed)
 	upScale := s.exaggerate / ftPerNm
 
+	// framedNm is the range the camera is framed on, which is the range itself
+	// unless the board column has narrowed the box. See boardFraming.
+	fill := s.boardFraming(lay)
+	framedNm := scopeNm * fill
+
 	cam, drawable := newCamera3(lay.scope, framing3{
-		scopeNm:     scopeNm,
+		scopeNm:     framedNm,
 		azimuth:     azimuth,
 		elevation:   s.elevation,
 		topNm:       bowlTopFt * upScale,
-		topRadiusNm: bowlRadiusNm(bowlTopFt, scopeNm),
+		topRadiusNm: bowlRadiusNm(bowlTopFt, scopeNm) * fill,
 	})
 	if !drawable {
 		return scene3{}, false
@@ -211,7 +216,7 @@ func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration
 		reachNm:   s.reach3(scopeNm),
 		azimuth:   azimuth,
 		upScale:   upScale,
-		minSegNm:  2 * scopeNm * shoreMinSegment / (ringSpan * float64(lay.scope.Dx())),
+		minSegNm:  2 * framedNm * shoreMinSegment / (ringSpan * float64(lay.scope.Dx())),
 		weight:    lay.unit(),
 		plottable: positioned(origin.lat, origin.lon),
 	}, true
@@ -529,7 +534,7 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 		ghost := &coasting[index]
 
 		share, _ := coastShare(ghost, frame.Now)
-		if s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+		if s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign, ghost.Class) {
 			s.drawTrail3(lay.dst, view, ghost.Points, s.fade(s.ghostColour(*ghost), share))
 		}
 	}
@@ -562,7 +567,7 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 func (s *Scene) drawCoasting3(lay *layout, view scene3, ghost *source.Trail, now time.Time) {
 	share, _ := coastShare(ghost, now)
 	if !positioned(ghost.Latitude, ghost.Longitude) ||
-		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign, ghost.Class) {
 		return
 	}
 

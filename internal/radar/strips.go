@@ -86,9 +86,10 @@ const (
 
 	// emergencyText is what the warning box says, and the two paddings are the
 	// air inside it.
-	emergencyText = "EMERGENCY"
-	emergencyPadX = 3
-	emergencyPadY = 2
+	emergencyText  = "EMERGENCY"
+	emergencyShort = "EMG"
+	emergencyPadX  = 3
+	emergencyPadY  = 2
 
 	// fullChannel is a colour channel at full strength, which is the only value
 	// emergencyInk is built out of.
@@ -104,6 +105,11 @@ const (
 	fieldRange
 	fieldPos
 	fieldSeen
+
+	// fieldDir is the inbound or outbound call, which only the bare 3D view's
+	// board carries. It is last so the full scope's fields keep the indices
+	// and the order they had before it existed.
+	fieldDir
 
 	// fieldCount is how many fields there are, which is what every loop over
 	// them runs to.
@@ -127,7 +133,16 @@ var stripHeaders = [fieldCount]string{
 	fieldRange: "DIST NM / BRG",
 	fieldPos:   "POS",
 	fieldSeen:  "SEEN",
+	fieldDir:   "DIR",
 }
+
+// The two headers a board narrowed past its codes or its bearing uses instead
+// of the full ones. A header naming a reading the strips no longer carry would
+// send the eye looking for it.
+const (
+	identHeadShort = "CALLSIGN"
+	rangeHeadShort = "DIST NM"
+)
 
 // The widest thing each field can be asked to hold.
 //
@@ -146,6 +161,7 @@ const (
 	widestDistance = "999.9"
 	widestBearing  = "359"
 	widestPlace    = "179.77 E"
+	widestDir      = dirOutText
 
 	// widestRank is the room the index at the far left of every strip is given.
 	//
@@ -175,10 +191,14 @@ const (
 var emergencyInk = color.RGBA{R: fullChannel, G: fullChannel, B: fullChannel, A: opaque}
 
 // stripDrop is one thing the plan gives up as the column narrows: usually a
-// whole field, and once the little aeroplane inside the ident field.
+// whole field, and otherwise one part of a field that stays: the little
+// aeroplane or the hex beside the callsign, or the bearing beside the
+// distance.
 type stripDrop struct {
-	field int
-	att   bool
+	field   int
+	att     bool
+	codes   bool
+	bearing bool
 }
 
 // stripDropOrder is the order things are given up as the column narrows.
@@ -203,6 +223,27 @@ var stripDropOrder = [...]stripDrop{
 	{field: fieldSpeed},
 }
 
+// boardDropOrder is stripDropOrder for the bare 3D view's board, which is a
+// quarter of a 16:9 canvas wide and has DIR to fit besides.
+//
+// It gives up two half fields the scope's column never has to: the hex beside
+// the callsign, and the bearing beside the distance. Both go before the
+// speed. The hex is an identity for whoever already has a callsign to read,
+// and the bearing is what the picture beside the board shows by where the
+// aeroplane is, while the speed is on nothing else in the picture. DIR is not
+// in the list: it is the one reading the board exists to add.
+//
+//nolint:gochecknoglobals // an order is data, and an array cannot be const.
+var boardDropOrder = [...]stripDrop{
+	{field: fieldPos},
+	{field: fieldSeen},
+	{field: fieldTrack},
+	{att: true},
+	{codes: true},
+	{bearing: true},
+	{field: fieldSpeed},
+}
+
 // stripPlan is which fields are drawn and where each one goes.
 type stripPlan struct {
 	// left is a field's own left edge and width how much room it has. Values
@@ -219,8 +260,18 @@ type stripPlan struct {
 	rule [fieldCount]int
 
 	// att is whether the little aeroplane is drawn at the right end of the
-	// ident field. It is the one thing dropped without a field going with it.
-	att bool
+	// ident field, codes whether the hex or the warning box follows the
+	// callsign, and bearing whether the range field carries the bearing after
+	// the distance. They are the things dropped without a field going with
+	// them, and the full scope's column only ever drops the first.
+	att     bool
+	codes   bool
+	bearing bool
+
+	// board is whether this is the bare 3D view's board rather than the
+	// scope's column: DIR is on it unless the list is grouped, and no strip
+	// is marked as the selection.
+	board bool
 
 	// scale is the layout's scale the plan was made at, which the gaps between
 	// fields and the attitude cell are multiplied by. Zero reads as one, the
@@ -264,10 +315,70 @@ func (p *stripPlan) total() int {
 	return sum + max(p.count()-1, 0)*p.gap()
 }
 
-// size copies the measured widths onto the plan, adding the little aeroplane's
-// cell to the ident field while that is still being drawn.
-func (p *stripPlan) size(widths [fieldCount]int) {
-	p.width = widths
+// stripMeasure is the room each field needs, with the two half fields a board
+// can give up measured apart so the plan can add them back while it has them.
+type stripMeasure struct {
+	// widths is each field at its narrowest: the ident with no hex after the
+	// callsign and the range with no bearing after the distance.
+	widths [fieldCount]int
+
+	// codes is what the hex or the warning box adds to the ident, and bearing
+	// what the bearing adds to the range, gaps included.
+	codes   int
+	bearing int
+
+	// heads is each field's full header, and identShort and rangeShort the two
+	// it is swapped for once the half field it names has gone.
+	heads      [fieldCount]int
+	identShort int
+	rangeShort int
+}
+
+// header is the word over a field on this plan.
+func (p *stripPlan) header(index int) string {
+	switch {
+	case index == fieldIdent && !p.codes:
+		return identHeadShort
+	case index == fieldRange && !p.bearing:
+		return rangeHeadShort
+	default:
+		return stripHeaders[index]
+	}
+}
+
+// headWidth is how wide header(index) comes out.
+func (p *stripPlan) headWidth(sizes *stripMeasure, index int) int {
+	switch {
+	case index == fieldIdent && !p.codes:
+		return sizes.identShort
+	case index == fieldRange && !p.bearing:
+		return sizes.rangeShort
+	default:
+		return sizes.heads[index]
+	}
+}
+
+// size copies the measured widths onto the plan, adding the half fields it
+// still has and then the little aeroplane's cell to the ident field while that
+// is still being drawn.
+//
+// Every field is at least as wide as the word over it. TRK and SEEN are the
+// two that would otherwise come out narrower than their own headers, and a
+// header running into the rule beside it says less than a wider field does.
+func (p *stripPlan) size(sizes *stripMeasure) {
+	p.width = sizes.widths
+
+	if p.codes {
+		p.width[fieldIdent] += sizes.codes
+	}
+
+	if p.bearing {
+		p.width[fieldRange] += sizes.bearing
+	}
+
+	for index := range fieldCount {
+		p.width[index] = max(p.width[index], p.headWidth(sizes, index))
+	}
 
 	if p.att {
 		p.width[fieldIdent] += p.gap() + p.cell()
@@ -275,14 +386,19 @@ func (p *stripPlan) size(widths [fieldCount]int) {
 }
 
 // give drops one entry of the drop order and measures the plan again.
-func (p *stripPlan) give(entry stripDrop, widths [fieldCount]int) {
-	if entry.att {
+func (p *stripPlan) give(entry stripDrop, sizes *stripMeasure) {
+	switch {
+	case entry.att:
 		p.att = false
-	} else {
+	case entry.codes:
+		p.codes = false
+	case entry.bearing:
+		p.bearing = false
+	default:
 		p.on[entry.field] = false
 	}
 
-	p.size(widths)
+	p.size(sizes)
 }
 
 // place spreads the fields across the width, so the first starts on the left
@@ -297,11 +413,11 @@ func (p *stripPlan) give(entry stripDrop, widths [fieldCount]int) {
 // design pixels. A share worked out on the doubled slack rounds differently
 // from the same share worked out once and doubled, and on a canvas twice the
 // size that put every field after the first a pixel away from where the
-// smaller strips have it.
+// smaller board has it.
 func (p *stripPlan) place(left, available int) {
-	unit := max(p.scale, 1)
 	slack := max(available-p.total(), 0)
 	gaps := max(p.count()-1, 1)
+	unit := max(p.scale, 1)
 	used, seen, prevRight := 0, 0, left
 
 	for index := range fieldCount {
@@ -333,33 +449,35 @@ func (p *stripPlan) place(left, available int) {
 // The ident field is the crowded one. It holds the index, the callsign, and
 // then either the ICAO hex or the warning box that takes the hex's place while
 // an aircraft is squawking an emergency, whichever of those two is wider.
-func (s *Scene) stripWidths(col *layout) [fieldCount]int {
+func (s *Scene) stripWidths(col *layout) stripMeasure {
 	small, body := s.faces.Small, s.faces.Body
 	gap := col.px(stripGap)
 
 	icao := col.measure(small, widestICAO)
 	warning := col.measure(small, emergencyText) + 2*col.px(emergencyPadX)
 
-	var widths [fieldCount]int
+	var sizes stripMeasure
 
-	widths[fieldIdent] = col.measure(small, widestRank) + gap +
-		col.measure(s.faces.BodyBold, widestCallsign) + gap + max(icao, warning)
+	sizes.widths[fieldIdent] = col.measure(small, widestRank) + gap + col.measure(s.faces.BodyBold, widestCallsign)
+	sizes.codes = gap + max(icao, warning)
 
-	widths[fieldLevel] = col.px(vertMarker) + col.px(vertGap) + col.measure(body, widestLevel)
-	widths[fieldSpeed] = col.measure(body, widestSpeed)
-	widths[fieldTrack] = col.measure(body, widestTrack) + s.arrowWidth(col)
-	widths[fieldRange] = col.measure(body, widestDistance) + gap + col.measure(body, widestBearing) + s.arrowWidth(col)
-	widths[fieldPos] = col.measure(small, widestPlace+" "+widestPlace)
-	widths[fieldSeen] = col.measure(small, seenNowText)
+	sizes.widths[fieldLevel] = col.px(vertMarker) + col.px(vertGap) + col.measure(body, widestLevel)
+	sizes.widths[fieldSpeed] = col.measure(body, widestSpeed)
+	sizes.widths[fieldTrack] = col.measure(body, widestTrack) + s.arrowWidth(col)
+	sizes.widths[fieldRange] = col.measure(body, widestDistance)
+	sizes.bearing = gap + col.measure(body, widestBearing) + s.arrowWidth(col)
+	sizes.widths[fieldPos] = col.measure(small, widestPlace+" "+widestPlace)
+	sizes.widths[fieldSeen] = col.measure(small, seenNowText)
+	sizes.widths[fieldDir] = col.measure(body, widestDir)
 
-	// Every field is at least as wide as the word over it. TRK and SEEN are the
-	// two that would otherwise come out narrower than their own headers, and a
-	// header running into the rule beside it says less than a wider field does.
 	for index := range fieldCount {
-		widths[index] = max(widths[index], col.measureTracked(small, stripHeaders[index]))
+		sizes.heads[index] = col.measureTracked(small, stripHeaders[index])
 	}
 
-	return widths
+	sizes.identShort = col.measureTracked(small, identHeadShort)
+	sizes.rangeShort = col.measureTracked(small, rangeHeadShort)
+
+	return sizes
 }
 
 // planStrips works out which fields fit between left and right.
@@ -374,28 +492,52 @@ func (s *Scene) stripWidths(col *layout) [fieldCount]int {
 // and its codes in the small one, the row of field names over the board is the
 // small one again, and the panel over that wants the large one.
 func (s *Scene) planStrips(col *layout, left, right int) (stripPlan, bool) {
-	plan := stripPlan{scale: col.scale}
+	return s.fitStrips(col, left, right, newStripPlan(col.scale), stripDropOrder[:])
+}
 
+// planBoardStrips is planStrips for the bare 3D view's board: DIR on, and the
+// board's own drop order. See boardDropOrder.
+//
+// A grouped board has no DIR. The section heading over every strip already
+// says IN or OUT, and the room the column gave up for it goes back to the
+// drop order, so a field it had cost the board can come back.
+func (s *Scene) planBoardStrips(col *layout, left, right int) (stripPlan, bool) {
+	plan := newStripPlan(col.scale)
+	plan.on[fieldDir], plan.board = !s.groups.on, true
+
+	return s.fitStrips(col, left, right, plan, boardDropOrder[:])
+}
+
+// newStripPlan is a plan with every field the scope's column can carry on it,
+// before anything has been measured or given up.
+func newStripPlan(scale int) stripPlan {
+	plan := stripPlan{scale: scale, att: true, codes: true, bearing: true}
+
+	for index := range fieldCount {
+		plan.on[index] = index != fieldDir
+	}
+
+	return plan
+}
+
+// fitStrips gives up the entries of order one at a time until plan fits
+// between left and right, and places what is left.
+func (s *Scene) fitStrips(col *layout, left, right int, plan stripPlan, order []stripDrop) (stripPlan, bool) {
 	if s.faces.Small == nil || s.faces.Body == nil || s.faces.BodyBold == nil || s.faces.Large == nil {
 		return plan, false
 	}
 
-	widths := s.stripWidths(col)
+	sizes := s.stripWidths(col)
 	available := right - left
 
-	for index := range fieldCount {
-		plan.on[index] = true
-	}
+	plan.size(&sizes)
 
-	plan.att = true
-	plan.size(widths)
-
-	for _, entry := range stripDropOrder {
+	for _, entry := range order {
 		if plan.total() <= available {
 			break
 		}
 
-		plan.give(entry, widths)
+		plan.give(entry, &sizes)
 	}
 
 	if plan.total() > available {
@@ -552,11 +694,21 @@ func (s *Scene) boardIndex() int {
 // names, one strip per aircraft in the window, and a +N line at either end the
 // window has cut.
 func (s *Scene) drawStrips(col *layout, frame source.Frame) {
-	plan, drawable := s.planStrips(col, col.left+col.px(stripEdge)+col.px(stripPadX), col.right-col.px(stripPadX))
+	plan, drawable := s.planStrips(col, stripsLeft(col), col.right-col.px(stripPadX))
 	if !drawable {
 		return
 	}
 
+	s.drawPlannedStrips(col, frame, plan, s.boardIndex())
+}
+
+// stripsLeft is where the fields of a strip start: past the accent bar every
+// strip leaves room for, and the air after it.
+func stripsLeft(col *layout) int { return col.left + col.px(stripEdge) + col.px(stripPadX) }
+
+// drawPlannedStrips draws a board already planned: the row of field names, then
+// the window, kept so sel is in view.
+func (s *Scene) drawPlannedStrips(col *layout, frame source.Frame, plan stripPlan, sel int) {
 	head := s.boardHeadHeight(col)
 	if !col.fits(head + s.halfStripHeight(col)) {
 		return
@@ -565,7 +717,13 @@ func (s *Scene) drawStrips(col *layout, frame source.Frame) {
 	s.drawBoardHead(col, plan)
 	col.top += head
 
-	s.drawBoard(col, plan, frame, s.planBoard(col, col.bottom-col.top, s.shownPlanes(), s.boardIndex()))
+	if s.groups.on {
+		s.drawGroups(col, plan, frame, sel)
+
+		return
+	}
+
+	s.drawBoard(col, plan, frame, s.planBoard(col, col.bottom-col.top, s.shownPlanes(), sel))
 }
 
 // drawBoardHead names the fields once, over the whole board.
@@ -582,7 +740,7 @@ func (s *Scene) drawBoardHead(col *layout, plan stripPlan) {
 			continue
 		}
 
-		col.tracked(s.faces.Small, plan.left[index], col.top+col.px(stripPadY), stripHeaders[index], s.pal.Data)
+		col.tracked(s.faces.Small, plan.left[index], col.top+col.px(stripPadY), plan.header(index), s.pal.Data)
 	}
 }
 
@@ -613,7 +771,13 @@ func (s *Scene) drawBoard(col *layout, plan stripPlan, frame source.Frame, board
 func (s *Scene) drawBoardStrips(
 	col *layout, plan stripPlan, frame source.Frame, board stripBoard, top int,
 ) int {
-	picked := s.boardIndex()
+	// The board in the bare 3D view marks nothing: that view draws no ring and
+	// no card, so a mark here would point at a selection nothing else shows.
+	picked := notSelected
+	if !plan.board {
+		picked = s.boardIndex()
+	}
+
 	index := 0
 
 	for _, plane := range frame.Planes {
@@ -687,6 +851,7 @@ func (s *Scene) drawStripFields(pen stripPen, plane airplane.Snapshot, frame sou
 	s.drawStripRange(pen, frame.Receiver, plane)
 	s.drawStripPos(pen, plane)
 	s.drawStripSeen(pen, frame.Now, plane)
+	s.drawStripDir(pen, frame.Corridors, plane)
 }
 
 // drawStripRules draws the hairline along the bottom of a strip and the
@@ -726,7 +891,12 @@ func (s *Scene) drawStripIdent(pen stripPen, plane airplane.Snapshot) {
 
 	mark := pen.lay.text(s.faces.BodyBold, left, pen.value, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane))
 
-	s.drawHalfCodes(pen, mark+pen.lay.px(stripGap), plane)
+	if pen.plan.codes {
+		s.drawHalfCodes(pen, mark+pen.lay.px(stripGap), plane)
+	} else {
+		s.drawShortEmergency(pen, mark+pen.lay.px(stripGap), plane)
+	}
+
 	s.drawStripAttitude(pen, plane)
 }
 
@@ -787,13 +957,41 @@ func (s *Scene) drawEmergency(lay *layout, left, top int, plane airplane.Snapsho
 		return
 	}
 
+	s.drawWarningBox(lay, left, top, emergencyText)
+}
+
+// drawWarningBox is the filled red box with word knocked out of it, which is
+// what an emergency looks like wherever it is drawn.
+func (s *Scene) drawWarningBox(lay *layout, left, top int, word string) {
 	face := s.faces.Small
 	padX, padY := lay.px(emergencyPadX), lay.px(emergencyPadY)
-	width, height := text.Measure(face, emergencyText, lay.glyphs())
+	width, height := text.Measure(face, word, lay.glyphs())
 	box := image.Rect(left, top-padY, left+width+2*padX, top+height+padY)
 
 	lay.dst.FillRect(box, s.pal.Warn)
-	lay.text(face, left+padX, top, emergencyText, emergencyInk)
+	lay.text(face, left+padX, top, word, emergencyInk)
+}
+
+// drawShortEmergency is the warning a strip with no room for its codes still
+// carries: EMG in the box, after the callsign, when the callsign leaves room
+// for it inside the field.
+//
+// The field is sized for the widest callsign there is and not for a box after
+// it, so an eight-character callsign squawking an emergency loses the box.
+// Real ones are seven characters or fewer and keep it. Reserving the room on
+// every strip for the one in a thousand that needs it would have cost the
+// board its speed column.
+func (s *Scene) drawShortEmergency(pen stripPen, left int, plane airplane.Snapshot) {
+	if !plane.Emergency {
+		return
+	}
+
+	width := pen.lay.measure(s.faces.Small, emergencyShort) + 2*pen.lay.px(emergencyPadX)
+	if left+width > pen.plan.left[fieldIdent]+pen.plan.width[fieldIdent] {
+		return
+	}
+
+	s.drawWarningBox(pen.lay, left, pen.small, emergencyShort)
 }
 
 // drawStripAttitude draws the little aeroplane at the right end of the ident
@@ -901,6 +1099,10 @@ func (s *Scene) drawStripRange(pen stripPen, receiver source.Receiver, plane air
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 	mark := pen.lay.drawBytes(face, left, pen.value, s.distance(away), s.pal.Ink) + pen.lay.px(stripGap)
 
+	if !pen.plan.bearing {
+		return
+	}
+
 	bearing, known := bearingTo(receiver, plane)
 	if !known {
 		pen.lay.text(face, mark, pen.value, trackUnknown, s.pal.Muted)
@@ -984,13 +1186,14 @@ func (s *Scene) drawStripStatus(col *layout, sel selection, shown, total int) {
 }
 
 // selRank is the selection's place in the list, counted from one, or zero when
-// no strip on the board is under it.
+// no strip on the board is under it. On a grouped list it is the place in its
+// own section, the number its strip carries, so the line and the strip agree.
 func (s *Scene) selRank(sel selection) int {
 	if !sel.found || sel.hidden {
 		return 0
 	}
 
-	return s.boardIndex() + 1
+	return s.rowRank(s.boardIndex())
 }
 
 // drawStatusRank writes the index the line opens with, or the pair of dashes
@@ -1042,4 +1245,45 @@ func digitsIn(value int) int {
 	}
 
 	return digits
+}
+
+// The words DIR is written in. They are the body face's figures rather than
+// arrows, because someone reading the board from across a room has a legend saying
+// what IN and OUT mean and no legend for which way an arrow on a strip points.
+const (
+	dirInText      = "IN"
+	dirOutText     = "OUT"
+	dirUnknownText = "---"
+)
+
+// drawStripDir writes whether the aircraft looks to be arriving at the
+// corridor airfield or leaving it, in the colour its tube will be drawn in
+// once the track is over.
+//
+// The colours are the ones the corridors use, not new ones, so the board and
+// the tubes in the picture beside it read as one key: a cyan IN on a strip is
+// the aircraft that will leave a cyan tube behind it.
+func (s *Scene) drawStripDir(pen stripPen, corridors source.Corridors, plane airplane.Snapshot) {
+	if !pen.plan.on[fieldDir] {
+		return
+	}
+
+	class := corridors.Classify(plane)
+
+	pen.lay.text(s.faces.Body, pen.plan.left[fieldDir], pen.value, dirWord(class), s.classColour(class))
+}
+
+// dirWord is what DIR says for a class. Transit is the muted dashes, which
+// classColour already draws in the muted grey the tubes give it.
+func dirWord(class source.TrackClass) string {
+	switch class {
+	case source.TrackInbound:
+		return dirInText
+	case source.TrackOutbound:
+		return dirOutText
+	case source.TrackTransit:
+		fallthrough
+	default:
+		return dirUnknownText
+	}
 }

@@ -172,6 +172,7 @@ func TestCorridorBandsFollowVisible(t *testing.T) {
 		{kind: filterBand, band: bandLow},
 		{kind: filterBand, band: bandMid},
 		{kind: filterBand, band: bandHigh},
+		{kind: filterBelow, band: bandMid},
 	} {
 		t.Run(filter.label(), func(t *testing.T) {
 			t.Parallel()
@@ -188,10 +189,14 @@ func TestCorridorBandsFollowVisible(t *testing.T) {
 		})
 	}
 
-	t.Run("an operator filter reads every band", func(t *testing.T) {
+	t.Run("an operator or a class filter reads every band", func(t *testing.T) {
 		t.Parallel()
 
-		for _, state := range []filterState{{kind: filterOperator, icao: "KLM"}, {kind: filterOther}} {
+		for _, state := range []filterState{
+			{kind: filterOperator, icao: "KLM"},
+			{kind: filterOther},
+			{kind: filterClass, class: source.TrackInbound},
+		} {
 			scene := &Scene{filter: state}
 			if got := scene.corridorBands(); got != allBands {
 				t.Errorf("%+v: corridorBands() = %b, want every band", state, got)

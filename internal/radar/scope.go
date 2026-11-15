@@ -875,7 +875,7 @@ func (s *Scene) drawTrail(lay *layout, proj projector, plane airplane.Snapshot) 
 // the way it decided the aircraft, on what it was last heard with.
 func (s *Scene) drawCoastTrail(lay *layout, proj projector, ghost *source.Trail, now time.Time) {
 	share, _ := coastShare(ghost, now)
-	if !s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+	if !s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign, ghost.Class) {
 		return
 	}
 
@@ -899,7 +899,7 @@ func (s *Scene) drawCoastTrail(lay *layout, proj projector, ghost *source.Trail,
 func (s *Scene) drawCoastHead(lay *layout, proj projector, ghost *source.Trail, now time.Time) {
 	share, _ := coastShare(ghost, now)
 	if !positioned(ghost.Latitude, ghost.Longitude) ||
-		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign, ghost.Class) {
 		return
 	}
 

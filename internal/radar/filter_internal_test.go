@@ -114,6 +114,22 @@ func TestVisible(t *testing.T) {
 			filter: filterState{kind: filterBand, band: bandLow}, plane: undecoded, want: false,
 		},
 		{
+			name:   "a ceiling keeps the band under it",
+			filter: filterState{kind: filterBelow, band: bandMid}, plane: low, want: true,
+		},
+		{
+			name:   "a ceiling keeps its own band",
+			filter: filterState{kind: filterBelow, band: bandMid}, plane: nameless, want: true,
+		},
+		{
+			name:   "a ceiling drops the band over it",
+			filter: filterState{kind: filterBelow, band: bandMid}, plane: high, want: false,
+		},
+		{
+			name:   "a ceiling drops an aircraft with no altitude decoded",
+			filter: filterState{kind: filterBelow, band: bandMid}, plane: undecoded, want: false,
+		},
+		{
 			name:   "an operator keeps its own aircraft",
 			filter: filterState{kind: filterOperator, icao: sampleICAO}, plane: low, want: true,
 		},
@@ -154,6 +170,7 @@ func TestFilterStateActive(t *testing.T) {
 	}{
 		{name: "ALL holds nothing back", filter: filterState{}},
 		{name: "a band does", filter: filterState{kind: filterBand, band: bandHigh}, want: true},
+		{name: "a ceiling does", filter: filterState{kind: filterBelow, band: bandMid}, want: true},
 		{name: "so does an operator", filter: filterState{kind: filterOperator, icao: sampleICAO}, want: true},
 		{name: "and so does OTHER", filter: filterState{kind: filterOther}, want: true},
 	} {
@@ -162,6 +179,41 @@ func TestFilterStateActive(t *testing.T) {
 
 			if got := testCase.filter.active(); got != testCase.want {
 				t.Errorf("active() on %+v = %v, want %v", testCase.filter, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestFilterStateMarksBand checks which legend swatches each altitude value
+// rings: one for a band, every band under it for a ceiling, none otherwise.
+func TestFilterStateMarksBand(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		filter filterState
+		want   [bandCount]bool
+	}{
+		{name: "ALL rings nothing", filter: filterState{}},
+		{
+			name:   "a band rings itself",
+			filter: filterState{kind: filterBand, band: bandMid},
+			want:   [bandCount]bool{bandMid: true},
+		},
+		{
+			name:   "the ceiling rings the low and the mid band",
+			filter: filterState{kind: filterBelow, band: bandMid},
+			want:   [bandCount]bool{bandLow: true, bandMid: true},
+		},
+		{name: "an operator rings no band", filter: filterState{kind: filterOperator, icao: sampleICAO}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			for band := range bandCount {
+				if got := testCase.filter.marksBand(band); got != testCase.want[band] {
+					t.Errorf("marksBand(%d) under %+v = %v, want %v", band, testCase.filter, got, testCase.want[band])
+				}
 			}
 		})
 	}
@@ -186,7 +238,19 @@ func TestNextBandFilter(t *testing.T) {
 			name:    "mid moves to high",
 			current: filterState{kind: filterBand, band: bandMid}, want: filterState{kind: filterBand, band: bandHigh},
 		},
-		{name: "high closes the cycle", current: filterState{kind: filterBand, band: bandHigh}, want: filterState{}},
+		{
+			name:    "high moves to the ceiling under it",
+			current: filterState{kind: filterBand, band: bandHigh}, want: filterState{kind: filterBelow, band: bandMid},
+		},
+		{
+			name:    "the ceiling closes the cycle",
+			current: filterState{kind: filterBelow, band: bandMid}, want: filterState{},
+		},
+		{
+			name:    "OTHER cycles the way ALL does",
+			current: filterState{kind: filterOther},
+			want:    filterState{kind: filterBand, band: bandLow},
+		},
 		{
 			name:    "an operator value cycles the way ALL does",
 			current: filterState{kind: filterOperator, icao: sampleICAO},
@@ -223,6 +287,7 @@ func TestCycleFilterInAltitudeMode(t *testing.T) {
 		{kind: filterBand, band: bandLow},
 		{kind: filterBand, band: bandMid},
 		{kind: filterBand, band: bandHigh},
+		{kind: filterBelow, band: bandMid},
 		{},
 	} {
 		if !scene.Handle(input.Key{Kind: input.Rune, Rune: 'f'}) {

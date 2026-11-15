@@ -133,6 +133,7 @@ const (
 	capLights
 	capStars
 	capCorridors
+	capBoard
 )
 
 // The cycling keys are labelled with the value they are on rather than with
@@ -144,6 +145,7 @@ const (
 const (
 	labelAltitude = "ALT"
 	labelAirline  = "AIRLINE"
+	labelCorridor = "CORRIDOR"
 	labelNight    = "NIGHT"
 	labelDay      = "DAY"
 
@@ -239,9 +241,9 @@ var keyCaps = [...]keyCap{
 // the up and down pair was.
 //
 // The whole bar at its longest is the 3D view on a dongle that has a
-// bias-tee, with every cycling cap on its longest word: AIRLINE, SHORT,
+// bias-tee, with every cycling cap on its longest word: CORRIDOR, SHORT,
 // 10-25K, PHOSPHOR and the auto theme's AUTO·NIGHT. With S LIGHTS in and Q
-// out its last box ends at x=1244, 20 pixels inside the right margin at 1264.
+// out its last box ends at x=1251, 13 pixels inside the right margin at 1264.
 // TestDrawCapsFitsAtItsWidestState and TestAutoThemeKeyBarFitsAtPanelWidth
 // are the guards. See the note on keyCaps.
 //
@@ -250,7 +252,7 @@ var keyCaps = [...]keyCap{
 // all four views.
 //
 // Z STARS is the one 3D key with no cap here. It would take the widest bar to
-// x=1304, past the margin, and the full view at its default tilt shows no sky
+// x=1311, past the margin, and the full view at its default tilt shows no sky
 // for stars to be in anyway. z still works in this view; the cap is on
 // bare3DCaps, which has E's room to spare.
 //
@@ -472,6 +474,8 @@ func (s *Scene) capEngaged(which capToggle) bool {
 		return s.stars
 	case capCorridors:
 		return s.corridors
+	case capBoard:
+		return s.board
 	case capAlways, capColour, capTheme, capLook, capTrails, capFilter:
 		fallthrough
 	default:
@@ -487,11 +491,7 @@ func (s *Scene) capEngaged(which capToggle) bool {
 func (s *Scene) capLabel(entry keyCap) string {
 	switch entry.state {
 	case capColour:
-		if s.colour == ColourAirline {
-			return labelAirline
-		}
-
-		return labelAltitude
+		return colourLabel(s.colour)
 	case capTheme:
 		return s.themeLabel()
 	case capLook:
@@ -501,10 +501,24 @@ func (s *Scene) capLabel(entry keyCap) string {
 	case capFilter:
 		return s.filter.label()
 	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee, capWide, capBar, capLights,
-		capStars, capCorridors:
+		capStars, capCorridors, capBoard:
 		fallthrough
 	default:
 		return entry.label
+	}
+}
+
+// colourLabel is the word the C cap carries for a colour mode.
+func colourLabel(mode ColourMode) string {
+	switch mode {
+	case ColourAirline:
+		return labelAirline
+	case ColourCorridor:
+		return labelCorridor
+	case ColourAltitude:
+		fallthrough
+	default:
+		return labelAltitude
 	}
 }
 

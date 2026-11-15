@@ -1432,7 +1432,7 @@ func fourOperatorFleet() []airplane.Snapshot {
 // above the stats line already claimed off its bottom.
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
-var legendStrip = image.Rect(625, 630, 1264, 642)
+var legendStrip = image.Rect(620, 648, 1264, 668)
 
 // TestAirlineLegendNamesOnlyFourOperators checks that a fifth distinct
 // operator outside the top four never changes what the legend shows, which is

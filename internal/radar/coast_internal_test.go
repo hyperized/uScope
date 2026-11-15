@@ -225,13 +225,13 @@ func TestDeadBandOnBothEdges(t *testing.T) {
 	} {
 		scene.seen.begin(time.Duration(step+1) * time.Second)
 
-		if got := scene.passes(seenICAO, testCase.altitude, ""); got != testCase.want {
+		if got := scene.passes(seenICAO, testCase.altitude, "", source.TrackTransit); got != testCase.want {
 			t.Errorf("step %d at %.0f ft: passes = %v, want %v", step, testCase.altitude, got, testCase.want)
 		}
 	}
 
 	// An address with no key gets the edges themselves and no memory.
-	if scene.passes("GHOST1", 9600, "") {
+	if scene.passes("GHOST1", 9600, "", source.TrackTransit) {
 		t.Error("an unkeyed aircraft under the floor passed, want the plain edge")
 	}
 }
