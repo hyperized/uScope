@@ -295,55 +295,21 @@ func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
 	return benchSceneWith(tb, frame)
 }
 
-// TestDrawAllocations is the promise the whole of format.go exists to keep:
-// once the first frame has grown the ICAO index, drawing costs nothing on the
-// heap, in either colour mode. Airline mode is the one that calls
-// airlines.Lookup and adapts a brand colour to the palette on every aircraft,
-// so it is not a given that it stays free the way altitude mode is.
-//
-// The third case is minimal mode following the traffic, which walks the whole
-// fleet again for a centroid. The fixture's clock never moves, so what this
-// measures is the steady frame between two centrings, which is all but one
-// frame in three minutes of them; internal/radar's TestFollowAllocations is
-// what prices the other one.
-//
-// The fifth case is the 3D view, which is the one that draws its furniture
-// straight into the frame rather than copying a cached layer under it: the
-// rings, the coastline, the bowl and the measured envelope are all projected
-// again on every frame, and none of that may reach the heap.
-//
-// The fourth case is the all mode carrying five hundred ghosts. A ghost is
-// never freed once its aircraft goes quiet, so it is the one thing on the
-// scope that grows without bound over a long session; this is the case that
-// would catch a per-ghost allocation in drawGhost or ghostColour if one crept
-// in.
-//
-// The two model cases are the aircraft shapes. Every scope frame draws one in
-// the row table's attitude cell and every 3D frame draws one per contact, each
-// of them fourteen vertices rotated, projected and filled. All of that runs
-// through fixed arrays on the Scene, and this is what says so: a model that
-// reached for a slice would show up here as one allocation per aircraft per
-// frame.
-//
-// The last three are the views and the column the w key hides. The bare 3D
-// view walks the fleet again for a centroid and projects the traffic through
-// the same camera; the two wide cases draw into a sub-canvas half again as
-// large, which is where a per-frame canvas allocation would show up if the
-// window were ever rebuilt on a frame that had not resized.
-//
-// The 3840x2160 cases draw the same frames at a scale of two, where every
-// glyph, stroke and sprite goes through the scaled paths.
-//
-//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
-func TestDrawAllocations(t *testing.T) {
-	for _, testCase := range []struct {
-		name    string
-		set     radar.Settings
-		presses int
-		ghosts  bool
-		wide    bool
-		uhd     bool
-	}{
+// drawAllocCase is one row of TestDrawAllocations.
+type drawAllocCase struct {
+	name    string
+	set     radar.Settings
+	presses int
+	ghosts  bool
+	wide    bool
+	uhd     bool
+	reveal  bool
+}
+
+// drawAllocCases is TestDrawAllocations' table, kept out of the test so the
+// test body stays short enough to read.
+func drawAllocCases() []drawAllocCase {
+	return []drawAllocCase{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
 		{
@@ -384,6 +350,31 @@ func TestDrawAllocations(t *testing.T) {
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
 			wide: true,
 		},
+		{
+			name: "minimal with its bar and shore",
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal, MinimalBar: true, MinimalShore: true,
+			},
+		},
+		{
+			name: "the bare 3D view with its bar at 3840x2160",
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, MinimalBar: true, MinimalShore: true,
+			},
+			uhd: true,
+		},
+		{
+			name:   "minimal with its key bar revealed",
+			set:    radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal},
+			reveal: true,
+		},
+		{
+			name: "the bare 3D view with its key bar revealed at 3840x2160",
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, MinimalBar: true,
+			},
+			uhd: true, reveal: true,
+		},
 		{name: "the scope at 3840x2160", set: radar.Settings{Colour: radar.ColourAltitude}, uhd: true},
 		{
 			name: "airline mode at 3840x2160",
@@ -400,13 +391,62 @@ func TestDrawAllocations(t *testing.T) {
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
 			uhd:  true,
 		},
-	} {
+	}
+}
+
+// TestDrawAllocations is the promise the whole of format.go exists to keep:
+// once the first frame has grown the ICAO index, drawing costs nothing on the
+// heap, in either colour mode. Airline mode is the one that calls
+// airlines.Lookup and adapts a brand colour to the palette on every aircraft,
+// so it is not a given that it stays free the way altitude mode is.
+//
+// The third case is minimal mode following the traffic, which walks the whole
+// fleet again for a centroid. The fixture's clock never moves, so what this
+// measures is the steady frame between two centrings, which is all but one
+// frame in three minutes of them; internal/radar's TestFollowAllocations is
+// what prices the other one.
+//
+// The fifth case is the 3D view, which is the one that draws its furniture
+// straight into the frame rather than copying a cached layer under it: the
+// rings, the coastline, the bowl and the measured envelope are all projected
+// again on every frame, and none of that may reach the heap.
+//
+// The fourth case is the all mode carrying five hundred ghosts. A ghost is
+// never freed once its aircraft goes quiet, so it is the one thing on the
+// scope that grows without bound over a long session; this is the case that
+// would catch a per-ghost allocation in drawGhost or ghostColour if one crept
+// in.
+//
+// The two model cases are the aircraft shapes. Every scope frame draws one in
+// the row table's attitude cell and every 3D frame draws one per contact, each
+// of them fifteen vertices rotated, projected and filled. All of that runs
+// through fixed arrays on the Scene, and this is what says so: a model that
+// reached for a slice would show up here as one allocation per aircraft per
+// frame.
+//
+// The last three are the views and the column the w key hides. The bare 3D
+// view walks the fleet again for a centroid and projects the traffic through
+// the same camera; the two wide cases draw into a sub-canvas half again as
+// large, which is where a per-frame canvas allocation would show up if the
+// window were ever rebuilt on a frame that had not resized.
+//
+// The 3840x2160 cases draw the same frames at a scale of two, where every
+// glyph, stroke and sprite goes through the scaled paths.
+//
+// The two reveal cases press a key in a bare view first, so every measured
+// frame paints the key bar over the picture. A hidden bar costs one comparison
+// and the rest of the cases already price that.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestDrawAllocations(t *testing.T) {
+	for _, testCase := range drawAllocCases() {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := sceneFor(t, testCase.ghosts)
 			canv = sizedFor(t, canv, testCase.uhd)
 			scene.Apply(testCase.set)
 			pressTrails(t, scene, testCase.presses)
 			pressWide(t, scene, testCase.wide)
+			pressReveal(scene, testCase.reveal)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.

@@ -689,6 +689,12 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot, 
 	centre := view.world(plane.Latitude, plane.Longitude, plane.Altitude)
 	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col, view.weight)
 
+	// After the shape, so the lights sit on top of it, and only on a model:
+	// the disc has no wingtips to put them on.
+	if knownHeading(plane.Heading) {
+		s.drawLights3(lay.dst, view.cam, plane)
+	}
+
 	if !s.bare() && plane.ICAO == s.selICAO {
 		s.drawSelection(lay, x, y, plane, receiver)
 	}

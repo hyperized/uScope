@@ -29,11 +29,49 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stars in the 3D views' night sky: a fixed field that turns with the camera,
   fully on below six degrees of sun and gone by sunrise. On by default. `z`
   and `--stars off` turn them off. The full 3D view's key bar has no room for
-  a cap.
+  a cap; the bare 3D view's has a `Z STARS` one.
+- Aircraft lights, on by default. Every aircraft with a known heading carries
+  a red light on its left wingtip, a green one on its right and a white one
+  on the tail. All three strobes double-flash white together, 200 ms apart,
+  twenty times a minute, half the certified minimum, so they keep the look of
+  a strobe without pulling the eye off the traffic. A red beacon flashes on
+  the fuselage 46 times a minute in every view: a disc with a pale core in
+  3D, so it shows on any fill colour, and a five-pixel plus on the flat
+  sprite. Each aircraft gets its own rhythm from its ICAO address, so the
+  fleet does not blink in step. A flash lights the frame it started in, so
+  the uConsole at 8 fps still shows every one, and at 30 fps a strobe lasts
+  two frames and the beacon three or four. By day the steady lights are
+  dimmer and the flashes are not. The phosphor and mono looks draw them in
+  their own hue at different strengths. `s` and `--lights on|off` turn them
+  on and off, and the key bar has an `S LIGHTS` cap.
+- A bar for the bare views. `h` in `minimal` or `minimal3d`, or
+  `--minimal-bar on`, puts a thin band across the top with the wordmark, the
+  feed's dot, the sun block and both clocks. The picture moves down by the
+  bar's height. It is off by default.
+- A key bar that hides itself in the bare views. Any key pressed in `minimal`
+  or `minimal3d` shows the softkeys along the bottom for four seconds, and
+  each press starts the four seconds again. The bar is drawn over the
+  picture, so the horizon and the projection centre stay put. It lists only
+  the keys that work in a bare view, so the select arrows, `w` and `e` are
+  left off and `h` for the top bar is added.
+- `--tilt` sets where the 3D camera's elevation starts, and `--orbit on|off`
+  and `--azimuth DEG` say whether it turns and where it stands, in degrees
+  clockwise from north.
+- `--zoom N` lands the auto range N steps inside the fit (negative widens)
+  without turning auto off, so the view keeps following the traffic.
+- `--minimal-shore` and `--minimal-airports` set where minimal and minimal3d
+  start for the coastline and the airfield markers. The coastline defaults to
+  `off` and the airfields to `on`, and `m` and `a` still flip them.
+- `--battery off` draws no battery indicator and starts no poller, so a
+  machine with no battery stops logging a missing one every 30 seconds.
 
 ### Changed
 
 - `--theme` defaults to `auto` rather than `night`.
+- The bare views draw the airfield markers by default. `a` or
+  `--minimal-airports off` takes them away.
+- The key bar has no `Q QUIT` cap any more. `S LIGHTS` took its room, since
+  with both the widest bar ran past the margin. `q` still quits.
 - The radar's layout scales with the canvas height. A canvas 2160 pixels
   tall or more draws its type, softkeys, column, markers, sprites and line
   widths at a whole multiple of the 1080 layout, so `--size 3840x2160` is the

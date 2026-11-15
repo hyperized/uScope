@@ -155,6 +155,24 @@ type Settings struct {
 	// handed the data through WithShore.
 	Shore Toggle
 
+	// MinimalShore and MinimalAirports are the bare views' own pair, the one m
+	// and a flip in minimal and minimal3d. They are plain bools rather than
+	// Toggles because their default is off, and a Toggle's zero value reads as
+	// on: false here is the bare field those views open on.
+	MinimalShore    bool
+	MinimalAirports bool
+
+	// MinimalBar is whether the bare views start with their bar across the
+	// top, the one h flips there. A plain bool for the reason the pair above
+	// is one: off is the default, and a bare view opens bare.
+	MinimalBar bool
+
+	// Lights is whether the aircraft carry their exterior lights: red and
+	// green on the wingtips, white on the tail, the strobes and the beacon.
+	// A plain bool like the bare views' pair, because the lights start off
+	// and a Toggle's zero value reads as on.
+	Lights bool
+
 	// RangeNm pins the scope to a range in nautical miles and turns auto range
 	// off with it. Zero means nobody asked, which leaves the scope fitting
 	// itself to the fleet.
@@ -168,6 +186,36 @@ type Settings struct {
 	// means nobody asked, which leaves DefaultExaggerate in place.
 	Exaggerate float64
 
+	// Zoom is how many range increments inside the fit the auto range lands,
+	// MinZoom to MaxZoom; negative widens. Zero is the fit itself. It is
+	// ignored while RangeNm pins the scope, because there is no fit then to
+	// be inside of. Values past the bounds are clamped rather than refused:
+	// the flag parser refuses them for the operator, and a library caller
+	// gets the nearest zoom the scene allows.
+	Zoom int
+
+	// Tilt is the 3D camera's starting elevation in degrees. Zero means
+	// nobody asked, which leaves DefaultTilt in place; anything else is
+	// clamped to MinTilt to MaxTilt the way the bracket keys clamp it. It is
+	// a start value only: [ and ] step from it and nothing puts it back.
+	Tilt float64
+
+	// Orbit is whether the 3D camera turns on its own. Zero reads as on,
+	// which is how the camera has always started.
+	Orbit Toggle
+
+	// Stars is whether the tilted views' night sky carries its stars. Zero
+	// reads as on, the way Orbit does, because the stars are what show the
+	// orbit turning.
+	Stars Toggle
+
+	// Azimuth is where the 3D camera stands, in degrees clockwise from north:
+	// the bearing Left and Right step. With Orbit on it is where the turning
+	// starts from, and with Orbit off it is where the camera stays. Values
+	// outside 0 to 360 are wrapped onto the compass rather than refused, for
+	// the reason Zoom gives; NaN and the infinities read as north.
+	Azimuth float64
+
 	// Recentre is how often a bare view refits itself on the traffic. Zero is
 	// off, which is the scene's own default and keeps both bare views centred
 	// on the receiver.
@@ -178,11 +226,6 @@ type Settings struct {
 	// Scene gets the plain projection until it asks for the other one, and the
 	// command line asks on its behalf.
 	Recentre time.Duration
-
-	// Stars is whether the tilted views' night sky carries its stars. Zero
-	// reads as on, the way Airports does, because the stars are what show
-	// the 3D view's orbit turning.
-	Stars Toggle
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
@@ -197,11 +240,48 @@ func (s *Scene) Apply(set Settings) {
 	s.filter = filterState{}
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
+	s.minimalShore = set.MinimalShore
+	s.minimalAirports = set.MinimalAirports
+	s.minimalBar = set.MinimalBar
+	s.lights = set.Lights
 	s.shown = set.View
 	s.applyRange(set.RangeNm)
 	s.applyRecentre(set.Recentre)
 	s.applyExaggerate(set.Exaggerate)
+	s.zoom = min(max(set.Zoom, MinZoom), MaxZoom)
+	s.applyTilt(set.Tilt)
+	s.applyOrbit(set.Orbit.On(), set.Azimuth)
 	s.stars = set.Stars.On()
+}
+
+// applyOrbit sets whether the camera turns and where it stands.
+//
+// The orbit is rebased on the last frame drawn, the way startOrbit does it, so
+// the camera sets off from the azimuth it was handed rather than from wherever
+// an older revolution would have got to by now.
+func (s *Scene) applyOrbit(turning bool, degrees float64) {
+	if math.IsNaN(degrees) || math.IsInf(degrees, 0) {
+		degrees = 0
+	}
+
+	s.azimuth = wrapDegrees(degrees)
+	s.azimuthAt = s.elapsed
+	s.orbiting = turning
+}
+
+// applyTilt sets where the 3D camera's elevation starts.
+//
+// Zero is nobody asking, for the reason applyExaggerate gives. NaN reads as
+// zero too: it came from a caller rather than from the flag, which refuses it,
+// and a NaN elevation would put every projected point at a NaN depth.
+func (s *Scene) applyTilt(degrees float64) {
+	if math.IsNaN(degrees) || degrees == 0 {
+		s.elevation = defaultElevation
+
+		return
+	}
+
+	s.elevation = min(max(degrees, minElevation), maxElevation)
 }
 
 // applyExaggerate sets how far the 3D view stretches altitude.

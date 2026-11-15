@@ -10,7 +10,6 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uAirwaves/pkg/airports"
 	"github.com/hyperized/uScope/internal/source"
-	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
@@ -297,7 +296,7 @@ type scopeFrame struct {
 // function rather than a cached answer that could go stale between them.
 func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame, bool) {
 	if s.minimal() {
-		return s.measureMinimal(lay.dst, receiver)
+		return s.measureMinimal(lay.scope, receiver)
 	}
 
 	if lay.scope.Empty() {
@@ -324,17 +323,17 @@ func (s *Scene) measureScope(lay *layout, receiver source.Receiver) (scopeFrame,
 
 // measureMinimal is the scope minimal mode projects with.
 //
-// The scope is the whole canvas rather than a box beside a column, so the
-// centre of the frame is the centre of the picture and the range maps to half
-// the short edge. What sits at that centre is the receiver with --recenter
-// off and the traffic's own centre with it on, which is minimalOrigin's
-// answer rather than this function's.
+// The scope is the whole canvas below the bar rather than a box beside a
+// column, so the centre of that box is the centre of the picture and the
+// range maps to half its short edge. What sits at that centre is the receiver
+// with --recenter off and the traffic's own centre with it on, which is
+// minimalOrigin's answer rather than this function's.
 //
 // Nothing is clipped to that radius: the cut-off is pushed out to the
 // furthest corner, which is the last place a position can land on a pixel, so
 // the corners show traffic the range ring would have hidden.
-func (s *Scene) measureMinimal(dst *canvas.Canvas, receiver source.Receiver) (scopeFrame, bool) {
-	geom, drawable := minimalGeometry(dst.Bounds())
+func (s *Scene) measureMinimal(box image.Rectangle, receiver source.Receiver) (scopeFrame, bool) {
+	geom, drawable := minimalGeometry(box)
 	if !drawable {
 		return scopeFrame{}, false
 	}
@@ -343,7 +342,7 @@ func (s *Scene) measureMinimal(dst *canvas.Canvas, receiver source.Receiver) (sc
 
 	proj, plottable := newProjector(geom, s.minimalOrigin(receiver), scopeNm)
 	if plottable {
-		proj = proj.reaching(scopeNm * cornerReach(dst.Bounds(), geom))
+		proj = proj.reaching(scopeNm * cornerReach(box, geom))
 	}
 
 	return scopeFrame{geom: geom, proj: proj, scopeNm: scopeNm, plottable: plottable}, true
@@ -929,6 +928,7 @@ func (s *Scene) drawContact(lay *layout, x, y int, plane airplane.Snapshot) { //
 	}
 
 	s.icon.Draw(lay.dst, x, y, plane.Heading, lay.unit(), col)
+	s.drawLights(lay, x, y, plane)
 }
 
 // knownHeading reports whether a heading was decoded.

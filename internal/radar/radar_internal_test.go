@@ -2838,7 +2838,7 @@ func TestMeasureMinimal(t *testing.T) {
 
 		scene := &Scene{}
 
-		if _, drawable := scene.measureMinimal(canv, source.Receiver{}); drawable {
+		if _, drawable := scene.measureMinimal(canv.Bounds(), source.Receiver{}); drawable {
 			t.Error("measureMinimal(...) drawable = true, want false on a canvas too small for a radius")
 		}
 	})
@@ -2853,7 +2853,7 @@ func TestMeasureMinimal(t *testing.T) {
 
 		scene := &Scene{scopeRange: scope.New(scope.WithCurrent(layerRangeNm))}
 
-		view, drawable := scene.measureMinimal(canv, source.Receiver{})
+		view, drawable := scene.measureMinimal(canv.Bounds(), source.Receiver{})
 		if !drawable {
 			t.Fatal("measureMinimal(...) drawable = false, want true")
 		}
@@ -3599,7 +3599,7 @@ func TestCapLabel(t *testing.T) {
 	// The five cycling entries, taken from the bar itself rather than written
 	// out again, so a rename of any of their labels cannot leave this table
 	// testing a cap that is no longer on screen.
-	trailCap, colourCap, filterCap, themeCap, lookCap := keyCaps[4], keyCaps[7], keyCaps[8], keyCaps[9], keyCaps[10]
+	trailCap, colourCap, filterCap, themeCap, lookCap := keyCaps[3], keyCaps[7], keyCaps[8], keyCaps[9], keyCaps[10]
 
 	for _, testCase := range []struct {
 		name  string
@@ -3768,10 +3768,11 @@ func TestNewStartsOnGlassNightWithoutAPalette(t *testing.T) {
 func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
 	t.Parallel()
 
-	// widestBarLastCapEnd is where the tilt cap, the last one in the bar,
-	// ends at exactly this state. It is named so a change to any cap's word
-	// shows up here rather than as a number nobody can place.
-	const widestBarLastCapEnd = 1235
+	// widestBarLastCapEnd is where the pen stands after the tilt cap, the
+	// last one in the bar, at exactly this state: its box ends at 1244 and
+	// the key gap follows. It is named so a change to any cap's word shows up
+	// here rather than as a number nobody can place.
+	const widestBarLastCapEnd = 1249
 
 	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
 	if err != nil {
@@ -3799,8 +3800,8 @@ func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
 		t.Errorf("the widest bar reached x=%d, want it to stop before the %d margin", pen, lay.right)
 	}
 
-	if pen < widestBarLastCapEnd {
-		t.Errorf("the widest bar ended at x=%d, before the last cap at %d", pen, widestBarLastCapEnd)
+	if pen != widestBarLastCapEnd {
+		t.Errorf("the widest bar ended at x=%d, want the last cap's end at %d", pen, widestBarLastCapEnd)
 	}
 }
 

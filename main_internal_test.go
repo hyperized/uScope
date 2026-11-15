@@ -78,6 +78,10 @@ const (
 	flagBattery    = "--battery"
 	flagAirports   = "--airports"
 	flagShore      = "--shore"
+	flagMinShore   = "--minimal-shore"
+	flagMinAirport = "--minimal-airports"
+	flagMinBar     = "--minimal-bar"
+	flagLights     = "--lights"
 	flagStars      = "--stars"
 	flagRange      = "--range"
 	flagMinimal    = "--minimal"
@@ -85,6 +89,10 @@ const (
 	flagDemoSector = "--demo-sector"
 	flagView       = "--view"
 	flagExaggerate = "--exaggerate"
+	flagZoom       = "--zoom"
+	flagTilt       = "--tilt"
+	flagOrbit      = "--orbit"
+	flagAzimuth    = "--azimuth"
 	flagBiasT      = "--bias-t"
 	flagAutoSweep  = "--auto-sweep"
 
@@ -113,6 +121,8 @@ const (
 	pngValue      = "png"
 	caseDefault   = "default"
 	caseMaxEdge   = "maximum edge"
+	caseMinEdge   = "lower edge"
+	caseAboveMax  = "just above the maximum"
 	caseWrongCase = "wrong case"
 	caseEmpty     = "empty"
 	caseAutoGiven = "auto explicit"
@@ -177,7 +187,12 @@ func defaultConfig() config {
 		recentre:   radar.DefaultRecentre,
 		view:       radar.ViewScope,
 		exaggerate: radar.DefaultExaggerate,
+		tilt:       radar.DefaultTilt,
+		orbit:      radar.ToggleOn,
 		gpsd:       wantDefaultGPSD(),
+
+		lights:          true,
+		minimalAirports: true,
 	}
 }
 
@@ -1364,9 +1379,10 @@ func TestParseFlagsBattery(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
-		name string
-		args []string
-		want string
+		name    string
+		args    []string
+		want    string
+		wantOff bool
 	}{
 		{name: caseDefault, args: nil, want: ""},
 		{
@@ -1375,6 +1391,13 @@ func TestParseFlagsBattery(t *testing.T) {
 			name: "a path with spaces is accepted",
 			args: []string{flagBattery, batteryPathWithSpace},
 			want: batteryPathWithSpace,
+		},
+		{
+			// off must not reach the poller as a file called "off".
+			name:    "off turns the indicator off",
+			args:    []string{flagBattery, batteryOff},
+			want:    "",
+			wantOff: true,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1387,6 +1410,7 @@ func TestParseFlagsBattery(t *testing.T) {
 
 			want := defaultConfig()
 			want.battery = testCase.want
+			want.noBattery = testCase.wantOff
 
 			checkConfig(t, got, want)
 		})
@@ -2956,5 +2980,331 @@ func TestRunReportsShoreDataItCannotDecode(t *testing.T) { //nolint:paralleltest
 
 	if !strings.Contains(stderr.String(), errUnrelated.Error()) {
 		t.Errorf("run() stderr = %q, want it to name the failure", stderr.String())
+	}
+}
+
+// TestBatteryOptionOff checks that --battery off starts no watcher and says
+// nothing on stderr. The option itself is app.WithBattery(nil), whose nil
+// handling internal/app tests.
+//
+// Not parallel: it rewrites the package-level watchBattery seam.
+func TestBatteryOptionOff(t *testing.T) { //nolint:paralleltest // rewrites watchBattery
+	original := watchBattery
+
+	t.Cleanup(func() { watchBattery = original })
+
+	watchBattery = func(context.Context, *battery.Status, string) error {
+		t.Error("watchBattery called with --battery off")
+
+		return nil
+	}
+
+	var stderr bytes.Buffer
+
+	option, wait := batteryOption(context.Background(), config{noBattery: true}, &stderr)
+	wait()
+
+	if option == nil {
+		t.Error("batteryOption returned a nil option")
+	}
+
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing", stderr.String())
+	}
+}
+
+// TestParseFlagsMinimalSwitches covers the bare views' three switches: the
+// airfields on by default and the other two off, each one flipped when asked,
+// and none of them leaking into the
+// scope's own --shore and --airports.
+func TestParseFlagsMinimalSwitches(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name         string
+		args         []string
+		wantShore    bool
+		wantAirports bool
+		wantBar      bool
+	}{
+		{name: caseDefault, args: nil, wantAirports: true},
+		{name: "bar on", args: []string{flagMinBar, defaultOn}, wantBar: true, wantAirports: true},
+		{name: "bar off explicit", args: []string{flagMinBar, offValue}, wantAirports: true},
+		{name: "off explicit", args: []string{flagMinShore, offValue, flagMinAirport, offValue}},
+		{name: "shore on", args: []string{flagMinShore, defaultOn}, wantShore: true, wantAirports: true},
+		{name: "airports off", args: []string{flagMinAirport, offValue}},
+		{
+			name: "both on", args: []string{flagMinShore, defaultOn, flagMinAirport, defaultOn},
+			wantShore: true, wantAirports: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.minimalShore = testCase.wantShore
+			want.minimalAirports = testCase.wantAirports
+			want.minimalBar = testCase.wantBar
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsMinimalSwitchRejections checks each of the three refuses
+// anything outside the on/off allow list with its own sentinel and the
+// radar's.
+func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		wantErr error
+	}{
+		{name: "shore empty", args: []string{flagMinShore, ""}, wantErr: errMinShore},
+		{name: "shore wrong case", args: []string{flagMinShore, "On"}, wantErr: errMinShore},
+		{name: "shore bool spelling", args: []string{flagMinShore, "true"}, wantErr: errMinShore},
+		{name: "airports empty", args: []string{flagMinAirport, ""}, wantErr: errMinAirport},
+		{name: "airports wrong case", args: []string{flagMinAirport, "OFF"}, wantErr: errMinAirport},
+		{name: "airports bool spelling", args: []string{flagMinAirport, "1"}, wantErr: errMinAirport},
+		{name: "bar empty", args: []string{flagMinBar, ""}, wantErr: errMinBar},
+		{name: "bar wrong case", args: []string{flagMinBar, "On"}, wantErr: errMinBar},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, testCase.wantErr) {
+				t.Fatalf("parseFlags(%v) error = %v, want %v", testCase.args, err, testCase.wantErr)
+			}
+
+			if !errors.Is(err, radar.ErrToggle) {
+				t.Errorf("parseFlags(%v) error = %v, want radar.ErrToggle wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestParseFlagsLights covers --lights: on by default, off when asked, and
+// the same two-spelling allow list every other on/off flag has.
+func TestParseFlagsLights(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		want    bool
+		wantErr error
+	}{
+		{name: caseDefault, want: true},
+		{name: "on", args: []string{flagLights, defaultOn}, want: true},
+		{name: "off", args: []string{flagLights, offValue}, want: false},
+		{name: caseWrongCase, args: []string{flagLights, "Off"}, wantErr: errLights},
+		{name: "bool spelling", args: []string{flagLights, "no"}, wantErr: errLights},
+		{name: caseEmpty, args: []string{flagLights, ""}, wantErr: errLights},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("parseFlags(%v) error = %v, want %v", testCase.args, err, testCase.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.lights = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsZoom covers --zoom's default, both edges and a widening value.
+func TestParseFlagsZoom(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want int
+	}{
+		{name: caseDefault, args: nil, want: 0},
+		{name: caseMinEdge, args: []string{flagZoom, strconv.Itoa(radar.MinZoom)}, want: radar.MinZoom},
+		{name: "two steps in", args: []string{flagZoom, "2"}, want: 2},
+		{name: "one step out", args: []string{flagZoom, "-1"}, want: -1},
+		{name: caseMaxEdge, args: []string{flagZoom, strconv.Itoa(radar.MaxZoom)}, want: radar.MaxZoom},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.zoom = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsZoomRejections covers both ends of --zoom's range. A value
+// that is not an integer at all is the flag package's own refusal, and it is
+// in the table so a later switch to a string flag cannot quietly accept one.
+func TestParseFlagsZoomRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		wantErr error
+	}{
+		{name: "just below the minimum", args: []string{flagZoom, strconv.Itoa(radar.MinZoom - 1)}, wantErr: errZoom},
+		{name: caseAboveMax, args: []string{flagZoom, strconv.Itoa(radar.MaxZoom + 1)}, wantErr: errZoom},
+		{name: "a fraction", args: []string{flagZoom, "1.5"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if err == nil {
+				t.Fatalf("parseFlags(%v) error = nil, want one", testCase.args)
+			}
+
+			if testCase.wantErr != nil && !errors.Is(err, testCase.wantErr) {
+				t.Errorf("parseFlags(%v) error = %v, want errors.Is(%v)", testCase.args, err, testCase.wantErr)
+			}
+		})
+	}
+}
+
+// TestParseFlagsTilt covers --tilt's default, both edges and a fraction.
+func TestParseFlagsTilt(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want float64
+	}{
+		{name: caseDefault, args: nil, want: radar.DefaultTilt},
+		{name: caseMinEdge, args: []string{flagTilt, exaggerateText(radar.MinTilt)}, want: radar.MinTilt},
+		{name: "a fraction", args: []string{flagTilt, "22.5"}, want: 22.5},
+		{name: caseMaxEdge, args: []string{flagTilt, exaggerateText(radar.MaxTilt)}, want: radar.MaxTilt},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			want.tilt = testCase.want
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsTiltRejections covers both ends of --tilt's range and NaN.
+// Zero is in the table on purpose: Settings reads it as "unset", so the flag
+// has to refuse it rather than let it through to mean the default.
+func TestParseFlagsTiltRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "zero", args: []string{flagTilt, "0"}},
+		{name: "just below the minimum", args: []string{flagTilt, "9.9"}},
+		{name: caseAboveMax, args: []string{flagTilt, "80.1"}},
+		{name: "NaN", args: []string{flagTilt, nanText}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, errTilt) {
+				t.Errorf("parseFlags(%v) error = %v, want errors.Is(errTilt)", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestParseFlagsCameraPlacement covers --orbit and --azimuth in their default
+// state and with a value each.
+func TestParseFlagsCameraPlacement(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		args   []string
+		adjust func(*config)
+	}{
+		{name: caseDefault, args: nil, adjust: func(*config) {}},
+		{name: "orbit off", args: []string{flagOrbit, offValue}, adjust: func(cfg *config) {
+			cfg.orbit = radar.ToggleOff
+		}},
+		{name: "azimuth", args: []string{flagAzimuth, "123.5"}, adjust: func(cfg *config) { cfg.azimuth = 123.5 }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			testCase.adjust(&want)
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestParseFlagsCameraPlacementRejections covers the values the two refuse.
+// 360 is in the table on purpose: it is north again, and the flag takes only
+// one spelling of each direction.
+func TestParseFlagsCameraPlacementRejections(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		wantErr error
+	}{
+		{name: "orbit misspelled", args: []string{flagOrbit, "spin"}, wantErr: errOrbit},
+		{name: "azimuth 360", args: []string{flagAzimuth, "360"}, wantErr: errAzimuth},
+		{name: "azimuth negative", args: []string{flagAzimuth, "-0.5"}, wantErr: errAzimuth},
+		{name: "azimuth NaN", args: []string{flagAzimuth, nanText}, wantErr: errAzimuth},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags(testCase.args)
+			if !errors.Is(err, testCase.wantErr) {
+				t.Errorf("parseFlags(%v) error = %v, want errors.Is(%v)", testCase.args, err, testCase.wantErr)
+			}
+		})
 	}
 }

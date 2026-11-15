@@ -130,7 +130,15 @@ func TestMinimal3DDrawsNothingForTheSelection(t *testing.T) {
 		scenePlane("3C6745", "DLH4EA", 200, 38, 36000, 268),
 	)
 
-	scene, canv := minimal3DScene(t, frame, minimal3DSettings())
+	// The camera holds still so the frame drawn after the press, which waits
+	// out the key bar's hold, is the same pose as the one before it. The
+	// lights stay off, their default, because the two frames are five
+	// seconds apart, and a strobe lit on one of them would be a difference
+	// nobody selected.
+	set := minimal3DSettings()
+	set.Orbit = radar.ToggleOff
+
+	scene, canv := minimal3DScene(t, frame, set)
 
 	before, err := canvas.New(panelWidth, panelHeight)
 	if err != nil {
@@ -143,7 +151,7 @@ func TestMinimal3DDrawsNothingForTheSelection(t *testing.T) {
 		t.Fatal("the n key was not handled, want the selection to move")
 	}
 
-	scene.Draw(canv, 0)
+	scene.Draw(canv, pastKeyBarHold)
 
 	if !identical(canv, before) {
 		t.Error("the selection changed the bare 3D picture, want nothing drawn for it")

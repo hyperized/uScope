@@ -26,7 +26,18 @@ const notSelected = -1
 // up: it is the way back to following the nearest aircraft, which is the
 // commoner thing to want once a selection has been pinned. Ctrl-C and q still
 // quit, and both are reachable without letting go of the keyboard.
+//
+// In a bare view every press also brings the key bar up for keyBarHold,
+// whether this method took the key or not. See noteKey.
 func (s *Scene) Handle(key input.Key) bool {
+	taken := s.handleKey(key)
+	s.noteKey()
+
+	return taken
+}
+
+// handleKey is Handle without the reveal: the bindings themselves.
+func (s *Scene) handleKey(key input.Key) bool {
 	switch key.Kind {
 	case input.Down:
 		s.step(1)
@@ -59,10 +70,14 @@ func (s *Scene) Handle(key input.Key) bool {
 // shift to change the range on a thumb keyboard is a nuisance.
 //
 // m and a work in minimal mode and draw there, on minimal's own pair of
-// toggles rather than on the scope's. v is what cycles between the three
-// views, w takes the column away from the two of them that have one, and
-// anything not bound here falls through to the camera keys, which only the 3D
-// view takes.
+// toggles rather than on the scope's. v is what cycles between the four
+// views, w takes the column away from the two of them that have one, h puts
+// a bar across the top of the two that do not, and anything not bound here
+// falls through to the camera keys, which only the 3D view takes.
+//
+// s turns the aircraft lights on and off in every view. A scene starts
+// without them, so a press is how they come on without restarting with
+// --lights on.
 //
 // c and f are one pair rather than two keys: c picks what a colour means and f
 // picks one of the colours, so c is also what puts the filter back to ALL. See
@@ -81,6 +96,28 @@ func (s *Scene) handleRune(value rune) bool {
 		s.autoRange = !s.autoRange
 	case 't', 'T':
 		s.trail = s.trail.next()
+	case 'c', 'C':
+		s.cycleColour()
+	case 'f', 'F':
+		s.cycleFilter()
+	case 'b', 'B':
+		return s.toggleBiasTee()
+	case 's', 'S':
+		s.lights = !s.lights
+	default:
+		return s.handleViewRune(value)
+	}
+
+	return true
+}
+
+// handleViewRune maps the keys that change what surrounds the traffic: the
+// two overlays, the view itself, the column and the bare views' bar. Anything
+// else goes on to the camera keys. It is split from handleRune to keep each
+// switch inside the complexity limit, and the split follows a line that was
+// already there: these are the keys whose answer depends on which view is up.
+func (s *Scene) handleViewRune(value rune) bool {
+	switch value {
 	case 'a', 'A':
 		s.toggleAirports()
 	case 'm', 'M':
@@ -89,12 +126,8 @@ func (s *Scene) handleRune(value rune) bool {
 		s.shown = s.shown.Next()
 	case 'w', 'W':
 		return s.toggleWide()
-	case 'c', 'C':
-		s.cycleColour()
-	case 'f', 'F':
-		s.cycleFilter()
-	case 'b', 'B':
-		return s.toggleBiasTee()
+	case 'h', 'H':
+		return s.toggleBar()
 	default:
 		return s.handle3DRune(value)
 	}
@@ -450,8 +483,18 @@ func indexOf(icaos []string, want string) int {
 	return -1
 }
 
+// The bounds of --zoom, in range increments. Five either way is about as far
+// as the default scope's twenty-mile steps go before the clamp at either end of
+// its range does all the work, and a zoom that changes nothing on screen is a
+// value the flag should refuse rather than accept.
+const (
+	MinZoom = -5
+	MaxZoom = 5
+)
+
 // fitRange widens or narrows the scope to hold the farthest aircraft that has
-// a position, rounded up to a whole increment.
+// a position, rounded up to a whole increment and then stepped zoom
+// increments inside that.
 //
 // Aircraft with no position are skipped rather than counted as far away:
 // HaversineDistance reports MaxFloat64 for an unknown position, and one of
@@ -506,5 +549,10 @@ func (s *Scene) fitRangeAround(frame source.Frame, origin geo) {
 		return
 	}
 
-	s.scopeRange.Update(scope.WithCurrent(math.Ceil(farthest/increment) * increment))
+	// The zoom comes off the fit rather than off the range on screen, so it
+	// is the same number of increments inside the traffic on every refit and
+	// never accumulates. scope.Update clamps to the scope's own limits, which
+	// is what stops a tight zoom on close traffic going under the minimum.
+	fitted := math.Ceil(farthest/increment) - float64(s.zoom)
+	s.scopeRange.Update(scope.WithCurrent(fitted * increment))
 }

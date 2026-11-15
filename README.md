@@ -10,9 +10,14 @@ Aircraft come in over the uConsole's own RTL-SDR, from a Mode S BEAST feed on
 another machine, from a captured IQ file, or from an invented fleet so you can
 try it at a desk with no receiver at all. Each one is drawn as a silhouette
 turned to its heading with the trail it flew in on, coloured by altitude or by
-the airline it is flying for. Around them: the coastline, the water, the
-airfields, range rings, a panel for the selected flight and a table of the
-rest.
+the airline it is flying for, and carries its lights the way a real aircraft
+does: red on the left wingtip, green on the right, white on the tail, white
+strobes, and a red beacon flashing on the fuselage 46 times a minute. The
+strobes double-flash twenty times a minute, half the slowest rate a real
+aircraft may use and below the certified range on purpose: on a screen the
+real cadence pulls the eye away from the traffic. `s` or `--lights off` turns
+them off. Around them: the coastline, the water, the airfields, range rings,
+a panel for the selected flight and a table of the rest.
 
 uScope is the sister of [uAirwaves](https://github.com/hyperized/uAirwaves),
 which does the same job in character cells with tview. uAirwaves is also where
@@ -68,8 +73,9 @@ sun there: black at night, a band of deep blue in nautical twilight, an orange
 horizon under a dark zenith around sunrise and sunset, gold with the sun low,
 and pale blue by day. Dawn and dusk look the same. Phosphor paints the sky
 green, mono paints it grey, and the night palettes keep it dark. At the
-default tilt the horizon is above the top of the picture; `[` brings the
-camera down until the sky comes into view.
+default tilt the horizon is above the top of the picture; `[` or `--tilt 10`
+brings the camera down until the sky comes into view. `--orbit off` and
+`--azimuth` hold the camera still at a bearing of your choosing.
 
 At night the sky carries a fixed field of stars, so you can see the slow orbit
 turning even when there is no traffic to watch. They turn with the ground at
@@ -85,9 +91,17 @@ The third view is the aircraft and their trails on a bare field, with no
 header, no column and no rings. With a directional antenna every contact
 lands on one side, so minimal follows the traffic's own centre rather than the
 receiver, gliding to a new centre every few minutes, and marks where the
-antenna actually is with a small ring. `a` and `m` put the airfields and the
-coast back if you want them. There is a bare 3D view as well, fourth on the
-`v` cycle.
+antenna actually is with a small ring. The airfield markers are drawn there
+too; `a` or `--minimal-airports off` takes them away, and `m` or
+`--minimal-shore on` brings the coast back. There is a bare 3D view as well, fourth on the `v`
+cycle. `h` or `--minimal-bar on` puts a thin bar across the top of both bare
+views, with the wordmark and the feed's dot, the sun's state and times, and
+the two clocks. The picture moves down to make room for it rather than being
+covered.
+
+Neither bare view has a key bar of its own. Press any key and one comes up
+along the bottom for four seconds, drawn over the picture so nothing moves,
+showing only the keys that work there.
 
 ![Minimal mode following a fleet that is all to the north-west](docs/minimal.png)
 
@@ -231,7 +245,7 @@ true at once and the answer is a compromise.
 
 | Key | Does |
 |---|---|
-| `q` | quit |
+| `q` | quit; it has no cap on the key bar, but it still works |
 | `v` | cycle the view: scope, 3D, minimal, bare 3D |
 | `n`, Down | select the next aircraft |
 | `p`, Up | select the previous one |
@@ -241,6 +255,8 @@ true at once and the answer is a compromise.
 | `t` | cycle the trails: off, short, long, all. All keeps the trails of aircraft that have gone quiet |
 | `a` | airfield markers on or off |
 | `m` | coastline and water on or off |
+| `s` | the aircraft lights on or off, in every view |
+| `h` | bare views: the bar across the top on or off |
 | `c` | colour by altitude or by airline |
 | `f` | filter to one entry of the legend, then back to all |
 | `l` | night, day or auto by the sun |
@@ -255,8 +271,10 @@ true at once and the answer is a compromise.
 
 Shifted letters do the same as unshifted, because caps lock is easy to hit on
 the uConsole's keyboard. The key bar along the bottom shows every key that
-does something in the view on screen, with its current state, except `z`,
-which there is no room for.
+does something in the view on screen, with its current state. The full 3D
+view's bar has no room for `z`; the bare 3D view's has. The bare views hide
+the bar until a key is pressed, then show it for four seconds; another press
+starts the four seconds again.
 
 ## Flags
 
@@ -277,13 +295,21 @@ which there is no room for.
 | `--look` | `glass` | `glass`, `phosphor` or `mono` |
 | `--airports` | `on` | airfield markers |
 | `--shore` | `on` | coastline and water |
+| `--minimal-shore` | `off` | coastline and water in `minimal` and `minimal3d`; `m` still flips it |
+| `--minimal-airports` | `on` | airfield markers in `minimal` and `minimal3d`; `a` still flips it |
+| `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d`; `h` still flips it |
+| `--lights` | `on` | the aircraft lights: red and green wingtips, white tail, strobes and the beacon; `s` still flips them |
 | `--stars` | `on` | stars in the 3D views' night sky; `z` flips them |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
+| `--zoom` | `0` | range steps inside the `auto` fit, `-5` to `5`; negative widens, the view keeps following the traffic, `+` and `-` still turn auto off, and a fixed `--range` ignores it |
+| `--tilt` | `35` | the 3D camera's starting elevation in degrees, 10 to 80; `[` and `]` step from it |
+| `--orbit` | `on` | whether the 3D camera turns on its own; `o` flips it |
+| `--azimuth` | `0` | where the 3D camera stands, degrees clockwise from north, 0 up to 360; where the orbit starts, or where the camera stays with `--orbit off` |
 | `--recenter` | `3m` | how often minimal mode recentres on the traffic, `10s` to `1h`, or `0` |
 | `--backend` | `auto` | `fb`, `kitty`, `blocks` or `png`; `auto` picks the first that works |
 | `--fb` | `/dev/fb0` | framebuffer device |
 | `--rotate` | `auto` | read fbcon's rotation, or force `0` to `3` |
-| `--battery` | | a `power_supply` uevent file to read the battery from; Linux only, found on its own otherwise |
+| `--battery` | | a `power_supply` uevent file to read the battery from, or `off` for no indicator; Linux only, found on its own otherwise |
 | `--fps` | `30` | frames per second |
 | `--frames` | `0` | stop after this many frames |
 | `--png` | | render one frame to this file and exit |

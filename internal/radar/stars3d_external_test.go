@@ -2,6 +2,7 @@ package radar_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/input"
@@ -12,11 +13,16 @@ import (
 	"github.com/hyperized/uScope/pkg/shore"
 )
 
+// starsAfter is a render clock past the key bar's hold, so a frame drawn
+// after a key press carries no bar and compares with one that had no press.
+const starsAfter = 10 * time.Second
+
 // starsScene is the bare tilted view over the demo fleet with the sun at
 // about elevation degrees, the camera at its lowest tilt and stopped after
 // turns presses of Right, with the stars as given. Each press is fifteen
 // degrees, and the first one is also what stops the orbit, so turns has to be
-// at least one for two frames drawn at different render clocks to agree.
+// at least one for two frames drawn at different render clocks to agree. The
+// lights are left at their default, off, for the same reason.
 func starsScene(tb testing.TB, elevation float64, turns int, stars radar.Toggle) *radar.Scene {
 	tb.Helper()
 
@@ -42,12 +48,21 @@ func starsScene(tb testing.TB, elevation float64, turns int, stars radar.Toggle)
 func starsFrame(tb testing.TB, scene *radar.Scene) *canvas.Canvas {
 	tb.Helper()
 
+	return starsFrameAt(tb, scene, starsAfter)
+}
+
+// starsFrameAt is starsFrame at a render clock of the caller's choosing, for
+// a scene that has had a key pressed after its last frame and has to be drawn
+// past that press's hold.
+func starsFrameAt(tb testing.TB, scene *radar.Scene, elapsed time.Duration) *canvas.Canvas {
+	tb.Helper()
+
 	canv, err := canvas.New(skyWidth, skyHeight)
 	if err != nil {
 		tb.Fatalf("canvas.New: %v", err)
 	}
 
-	scene.Draw(canv, 0)
+	scene.Draw(canv, elapsed)
 
 	return canv
 }
@@ -151,7 +166,7 @@ func TestStarsKey(t *testing.T) {
 	}
 
 	on := starsFrame(t, starsScene(t, -20, 1, radar.ToggleOn))
-	if got := starsFrame(t, scene); string(got.Image().Pix) != string(on.Image().Pix) {
+	if got := starsFrameAt(t, scene, 2*starsAfter); string(got.Image().Pix) != string(on.Image().Pix) {
 		t.Error("the frame after Z differs from one with the stars on")
 	}
 

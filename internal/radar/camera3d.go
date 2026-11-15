@@ -33,15 +33,25 @@ const (
 	DefaultExaggerate = 8.0
 )
 
+// The bounds --tilt is checked against and the elevation the camera starts at
+// when nobody set one, in degrees above the horizon. They are exported for the
+// flag parser alone; inside this package the camera reads them under the
+// names below.
+const (
+	MinTilt     = 10.0
+	MaxTilt     = 80.0
+	DefaultTilt = 35.0
+)
+
 // The camera and what moves it.
 const (
 	// The elevation the brackets tilt between, and where it starts. Below ten
 	// degrees the ground rings collapse into a line and the view says nothing
 	// about where anything is; above eighty it is the scope view again with
 	// the heights hidden behind the aircraft that carry them.
-	minElevation     = 10.0
-	maxElevation     = 80.0
-	defaultElevation = 35.0
+	minElevation     = MinTilt
+	maxElevation     = MaxTilt
+	defaultElevation = DefaultTilt
 
 	// tiltStep is how far one press of [ or ] moves the elevation, and
 	// azimuthStep how far Left or Right turns the camera.
