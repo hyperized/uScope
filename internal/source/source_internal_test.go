@@ -841,9 +841,9 @@ func ghostICAOs(trails []Trail) []string {
 // It hands back the ghost list as it stands right after that aircraft is
 // lost.
 func loseGhost(tracker *ghosts, icao string, points int) []Trail {
-	tracker.observe(airplanes.List{snapshotWithHistory(icao, points)})
+	tracker.observe(airplanes.List{snapshotWithHistory(icao, points)}, time.Time{})
 
-	return tracker.observe(nil)
+	return tracker.observe(nil, time.Time{})
 }
 
 // TestGhostsEvictByTrailCount drives more lost aircraft through observe than
@@ -969,9 +969,9 @@ func TestGhostsSweepOrderIsSortedAndStable(t *testing.T) {
 		tracker.observe(airplanes.List{
 			snapshotWithHistory("ZULU01", points),
 			snapshotWithHistory("ALPHA1", points),
-		})
+		}, time.Time{})
 
-		got := ghostICAOs(tracker.observe(nil))
+		got := ghostICAOs(tracker.observe(nil, time.Time{}))
 		want := []string{"ALPHA1", "ZULU01"}
 
 		if !slices.Equal(got, want) {
@@ -1002,7 +1002,7 @@ func TestGhostsReviveLeavesHoleWithoutShifting(t *testing.T) {
 
 	// D00002 reappears: keep calls revive first, which empties its ring slot
 	// before the trail is recorded as live again.
-	afterRevive := tracker.observe(airplanes.List{snapshotWithHistory("D00002", points)})
+	afterRevive := tracker.observe(airplanes.List{snapshotWithHistory("D00002", points)}, time.Time{})
 
 	wantAfter := []string{"D00001", "D00003"}
 	if got := ghostICAOs(afterRevive); !slices.Equal(got, wantAfter) {

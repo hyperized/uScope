@@ -55,7 +55,20 @@ beside the source label, the block is left out.
 Colour means altitude by default: green under 10,000 ft, white to 25,000,
 orange above. `c` switches to colouring by airline, read off the callsign
 prefix, and the legend lists the four busiest operators in view. `f` filters
-the picture down to one entry of whichever legend is showing.
+the picture down to one entry of whichever legend is showing. The altitude
+stops have 500 ft of slack at each edge: an aircraft on screen stays there
+until it is 500 ft past the line, and one off screen waits until it is 500 ft
+inside, so a flight holding FL250 under the `>25K` stop does not flicker.
+
+A new aircraft fades up from the background over two seconds. The first
+frame, and the first frame after `f`, draw everything at full strength. When
+the receiver stops hearing an aircraft, it stays where it was last heard,
+pointing the way it was going with its trail behind it, and fades out over a
+minute. This happens in every trail mode, and the filter treats it the way it
+did while it was heard. A coasting aircraft carries no lights and cannot be
+selected. The rows, the strips and the aircraft count leave it out, because
+they list what is being heard. If it is heard again, its trail carries on
+from the old one instead of growing back from a dot.
 
 ![Airline colouring, KLM and easyJet and Transavia each in their own colour](docs/airline.png)
 

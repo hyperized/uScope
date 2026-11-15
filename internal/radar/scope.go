@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
@@ -799,14 +800,26 @@ func (s *Scene) overlapsRangeLabel(box image.Rectangle) bool {
 // The f key's business is which aircraft there are at all. A filtered-out
 // aeroplane loses its trail, its silhouette and its label together, because
 // half of one on the field would say there is something there without saying
-// what. Ghosts are not filtered; see visible.
+// what. Ghosts past their coast are not filtered; see visible.
+//
+// The coasting aircraft, the ones lost under coastFor ago, sit between the
+// two layers: their trails under the live trails and their heads under the
+// live heads, so a contact that is still being heard is always on top of one
+// that is not.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
+	coast := coastStart(frame.Ghosts, frame.Now)
+
 	if s.trail.ghostsDrawn() {
-		for _, ghost := range frame.Ghosts {
-			s.drawGhost(lay, proj, ghost)
+		for index := range frame.Ghosts[:coast] {
+			s.drawGhost(lay, proj, frame.Ghosts[index])
 		}
+	}
+
+	coasting := frame.Ghosts[coast:]
+	for index := range coasting {
+		s.drawCoastTrail(lay, proj, &coasting[index], frame.Now)
 	}
 
 	for _, plane := range frame.Planes {
@@ -815,6 +828,10 @@ func (s *Scene) drawAircraft(lay *layout, proj projector, frame source.Frame) {
 		}
 
 		s.drawTrail(lay, proj, plane)
+	}
+
+	for index := range coasting {
+		s.drawCoastHead(lay, proj, &coasting[index], frame.Now)
 	}
 
 	for _, plane := range frame.Planes {
@@ -847,7 +864,53 @@ func (s *Scene) drawTrail(lay *layout, proj projector, plane airplane.Snapshot) 
 		return
 	}
 
-	s.drawPath(lay, proj, plane.PositionHistory, s.aircraftColour(plane), plan)
+	col := s.faded(s.aircraftColour(plane), s.presence(plane.ICAO))
+	s.drawPath(lay, proj, plane.PositionHistory, col, plan)
+}
+
+// drawCoastTrail draws the trail of an aircraft lost less than coastFor ago,
+// under the mode's own plan and faded by how long ago that was.
+//
+// It is drawn in every trail mode, where a ghost is only drawn in one,
+// because for its first minute it is still the trail of an aircraft on the
+// field: the head is drawn over it by drawCoastHead. The filter decides it
+// the way it decided the aircraft, on what it was last heard with.
+func (s *Scene) drawCoastTrail(lay *layout, proj projector, ghost *source.Trail, now time.Time) {
+	share, _ := coastShare(ghost, now)
+	if !s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+		return
+	}
+
+	plan, drawn := s.trail.plan(len(ghost.Points))
+	if !drawn {
+		return
+	}
+
+	s.drawPath(lay, proj, ghost.Points, s.fade(s.ghostColour(*ghost), share), plan)
+}
+
+// drawCoastHead draws a coasting aircraft where it was last heard, turned to
+// the heading it last reported and faded with its trail.
+//
+// It carries no lights and no selection ring. The lights belong to an
+// aeroplane somebody can still hear, and the selection only ever follows the
+// frame's live list, so a coasting aircraft cannot be picked. A trail with no
+// position on it gets no head.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawCoastHead(lay *layout, proj projector, ghost *source.Trail, now time.Time) {
+	share, _ := coastShare(ghost, now)
+	if !positioned(ghost.Latitude, ghost.Longitude) ||
+		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+		return
+	}
+
+	x, y, inside := proj.at(ghost.Latitude, ghost.Longitude)
+	if !inside {
+		return
+	}
+
+	s.drawBody(lay, x, y, ghost.Heading, s.fade(s.ghostColour(*ghost), share))
 }
 
 // drawGhost draws the track of an aircraft that has stopped transmitting.
@@ -855,7 +918,8 @@ func (s *Scene) drawTrail(lay *layout, proj projector, plane airplane.Snapshot) 
 // It is the same polyline as a live trail, with nothing at the head of it: no
 // silhouette, no label, no selection ring. There is no aeroplane to mark and
 // no heading to turn one to, and a marker on the end of a ghost would read as
-// a contact.
+// a contact. The first minute of a ghost is the exception, and drawCoastTrail
+// and drawCoastHead draw it instead.
 //
 // It runs the mode's own plan rather than a rule of its own, which comes to
 // the same picture it always drew: trailAll is the only mode that draws a
@@ -919,16 +983,27 @@ func segmentAlpha(floor float64, index int, span float64) float64 {
 // heading is a bare circle, because a silhouette would be claiming to know
 // which way it is pointing.
 func (s *Scene) drawContact(lay *layout, x, y int, plane airplane.Snapshot) { //nolint:varnamelen // pixels.
-	col := s.aircraftColour(plane)
+	share := s.presence(plane.ICAO)
+	s.drawBody(lay, x, y, plane.Heading, s.faded(s.aircraftColour(plane), share))
 
-	if !knownHeading(plane.Heading) {
+	// The lights wait for the fade-in to finish. A red and a green lamp at
+	// full strength on a shape still coming up out of the field would arrive
+	// two seconds before the aeroplane they are on.
+	if share >= 1 && knownHeading(plane.Heading) {
+		s.drawLights(lay, x, y, plane)
+	}
+}
+
+// drawBody is the silhouette turned to a heading, or the bare circle when
+// there is none, in whatever colour the caller has faded it to.
+func (s *Scene) drawBody(lay *layout, x, y int, heading float64, col color.RGBA) { //nolint:varnamelen // pixels.
+	if !knownHeading(heading) {
 		lay.dst.StrokeCircle(x, y, lay.px(noHeadingRadius), lay.unit(), col)
 
 		return
 	}
 
-	s.icon.Draw(lay.dst, x, y, plane.Heading, lay.unit(), col)
-	s.drawLights(lay, x, y, plane)
+	s.icon.Draw(lay.dst, x, y, heading, lay.unit(), col)
 }
 
 // knownHeading reports whether a heading was decoded.

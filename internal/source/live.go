@@ -358,7 +358,7 @@ func (l *Live) Frame() Frame {
 
 	return Frame{
 		Planes:   planes,
-		Ghosts:   l.observe(planes),
+		Ghosts:   l.observe(planes, now),
 		Receiver: receiver,
 		Source:   l.in.Source(),
 		Stats:    l.in.Stats(),
@@ -411,16 +411,17 @@ func (l *Live) Close() error {
 	return nil
 }
 
-// observe folds the frame's aircraft into the ghost ring.
+// observe folds the frame's aircraft into the ghost ring, stamping anything
+// lost on this frame with now.
 //
 // It takes mu in a section of its own rather than holding it across the whole
 // of Frame, because receiver above reaches applyEstimate, which takes the
 // same lock on its own way past.
-func (l *Live) observe(planes airplanes.List) []Trail {
+func (l *Live) observe(planes airplanes.List, now time.Time) []Trail {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return l.ghosts.observe(planes)
+	return l.ghosts.observe(planes, now)
 }
 
 // validate range-checks what the options collected.

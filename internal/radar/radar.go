@@ -409,6 +409,10 @@ type Scene struct {
 	// filled it and the draw path never allocates one.
 	counts tally
 
+	// seen is what the filter's dead band and the fade-in remember about
+	// each aircraft from one frame to the next. See coast.go.
+	seen seenTable
+
 	// rangeLabelRects and rangeLabelCount are where the background layer put
 	// its range labels the last time it drew them, so the airport overlay
 	// drawn right after it can skip a marker that would sit on top of one.
@@ -638,7 +642,8 @@ type layout struct {
 //
 // Everything on screen comes from the data and the clock in the frame. What
 // elapsed is read for is animation rather than reading: minimal mode's glide,
-// the orbit, the lights' flashes and the key bar's hold all have to advance
+// the orbit, the lights' flashes, the key bar's hold and a new aircraft's
+// fade-in all have to advance
 // once per drawn frame whatever the feed is doing, and the run loop's own
 // clock is the only thing that measures that.
 func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
@@ -658,6 +663,7 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// it replaces is what the lights measure this frame's interval from.
 	s.flashFrom = s.elapsed
 	s.elapsed = elapsed
+	s.seen.begin(elapsed)
 
 	// Same reason: the b key arrives between two frames and decides what to
 	// ask for from the state the last one carried.

@@ -304,6 +304,11 @@ type drawAllocCase struct {
 	wide    bool
 	uhd     bool
 	reveal  bool
+
+	// coast picks one of coast.go's fixtures instead, drawn at the render
+	// clock at; see coastAllocScene.
+	coast coastAllocKind
+	at    time.Duration
 }
 
 // drawAllocCases is TestDrawAllocations' table, kept out of the test so the
@@ -312,6 +317,10 @@ func drawAllocCases() []drawAllocCase {
 	return []drawAllocCase{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
+		{name: "a coasting fleet", coast: coastAllocCoasting},
+		{name: "a coasting fleet in 3D", set: radar.Settings{View: radar.View3D}, coast: coastAllocCoasting},
+		{name: "a fleet fading in", coast: coastAllocFadingIn, at: coastAllocAt},
+		{name: "the band filter's dead band", coast: coastAllocDeadBand},
 		{
 			name: "minimal mode following the traffic",
 			set: radar.Settings{
@@ -437,22 +446,31 @@ func drawAllocCases() []drawAllocCase {
 // frame paints the key bar over the picture. A hidden bar costs one comparison
 // and the rest of the cases already price that.
 //
+// The four coast cases price the seen table: a whole fleet coasting, flat and
+// tilted, half a fleet still fading in, and a fleet held inside the band
+// filter's dead band.
+//
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range drawAllocCases() {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := sceneFor(t, testCase.ghosts)
+			if testCase.coast != coastAllocNone {
+				scene, canv = coastAllocScene(t, testCase.coast, testCase.set)
+			} else {
+				scene.Apply(testCase.set)
+			}
+
 			canv = sizedFor(t, canv, testCase.uhd)
-			scene.Apply(testCase.set)
 			pressTrails(t, scene, testCase.presses)
 			pressWide(t, scene, testCase.wide)
 			pressReveal(scene, testCase.reveal)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.
-			scene.Draw(canv, 0)
+			scene.Draw(canv, testCase.at)
 
-			if got := testing.AllocsPerRun(50, func() { scene.Draw(canv, 0) }); got != 0 {
+			if got := testing.AllocsPerRun(50, func() { scene.Draw(canv, testCase.at) }); got != 0 {
 				t.Errorf("Draw allocated %.1f times per frame in %s, want 0", got, testCase.name)
 			}
 		})

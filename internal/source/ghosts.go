@@ -2,6 +2,7 @@ package source
 
 import (
 	"slices"
+	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
@@ -29,12 +30,34 @@ const (
 	maxGhostPoints = 1_000_000
 )
 
+// How a revived aircraft's old track is carried on its new one.
+const (
+	// stitchFixes is the most fixes a stitched history holds, which is
+	// uAirwaves' own cap on one aircraft's history (maxPositionHistory in
+	// pkg/airplane, unexported there). The prefix gives up its oldest fixes
+	// as the new life grows, so a stitched track is never longer than one
+	// the store could have kept unbroken.
+	stitchFixes = 256
+
+	// stitchFor is how long after the loss a prefix is still worth carrying:
+	// 256 fixes at uAirwaves' one every ten seconds, the span the longest
+	// unbroken history covers. A prefix older than that would draw a line
+	// across a gap longer than any trail on screen.
+	stitchFor = stitchFixes * 10 * time.Second
+)
+
 // Trail is a track with no aircraft on the end of it.
 //
 // It is what a source keeps when a contact is lost: the last position history
 // the aircraft showed, plus the two things the radar needs to colour it by.
-// There is no position and no heading, because there is no longer an
-// aeroplane to have either.
+//
+// Latitude, Longitude, Heading and VertRate are where the aircraft was and
+// what it was doing on the last frame it was heard, which is what the radar
+// holds a coasting aircraft at for its first minute as a ghost. A zero
+// position reads as nothing to draw a head at.
+//
+// LostAt is the frame time the trail was given up on, which is what the
+// radar measures the coast from.
 //
 // Points aliases the slice the source last saw rather than copying it, and
 // that is safe for both sources for opposite reasons. Live takes a fresh deep
@@ -46,6 +69,12 @@ type Trail struct {
 	Callsign string
 	Altitude float64
 	Points   []airplane.PositionEntry
+	LostAt   time.Time
+
+	Latitude  float64
+	Longitude float64
+	Heading   float64
+	VertRate  float64
 }
 
 // liveTrail is what one aircraft still in the sky last showed us, and the
@@ -111,6 +140,19 @@ type ghosts struct {
 	// the same slice goes back out untouched.
 	out   []Trail
 	dirty bool
+
+	// stitched is the old track of each aircraft that came back while its
+	// ghost was still in the ring, by ICAO. keep puts it in front of the new
+	// history on every frame until the new life no longer needs it; see
+	// stitch.
+	stitched map[string]prefix
+}
+
+// prefix is a revived aircraft's track from before it was lost, and when it
+// was lost.
+type prefix struct {
+	points []airplane.PositionEntry
+	lostAt time.Time
 }
 
 // newGhosts builds the tracker.
@@ -123,6 +165,7 @@ func newGhosts() ghosts {
 	return ghosts{
 		live:      make(map[string]liveTrail),
 		at:        make(map[string]int),
+		stitched:  make(map[string]prefix),
 		maxTrails: maxGhostTrails,
 		maxPoints: maxGhostPoints,
 	}
@@ -133,14 +176,18 @@ func newGhosts() ghosts {
 //
 // The slice is the tracker's own and is refilled on the next frame that
 // changes anything, which is the contract Frame.Planes already carries.
-func (g *ghosts) observe(planes airplanes.List) []Trail {
+//
+// It writes into planes: an aircraft carrying a stitched prefix gets its
+// PositionHistory replaced with the joined track, so the frame the caller
+// hands on draws one line where uAirwaves holds two lives.
+func (g *ghosts) observe(planes airplanes.List, now time.Time) []Trail {
 	g.gen++
 
-	for _, plane := range planes {
-		g.keep(plane)
+	for index := range planes {
+		g.keep(&planes[index], now)
 	}
 
-	g.sweep()
+	g.sweep(now)
 
 	return g.list()
 }
@@ -151,36 +198,100 @@ func (g *ghosts) observe(planes airplanes.List) []Trail {
 // An aircraft with no ICAO address is ignored. Every Mode S frame carries
 // one, so a snapshot without one is a decode that went wrong rather than an
 // aeroplane, and the empty string is how an emptied ring slot is marked.
-func (g *ghosts) keep(plane airplane.Snapshot) {
+//
+// An aircraft whose ghost is still in the ring takes that ghost's track as a
+// prefix, and the prefix goes in front of its history here, before the
+// history is remembered: the trail a second loss pushes is then the whole
+// track, old life and new.
+func (g *ghosts) keep(plane *airplane.Snapshot, now time.Time) {
 	if plane.ICAO == "" {
 		return
 	}
 
-	g.revive(plane.ICAO)
+	if lost, held := g.revive(plane.ICAO); held && now.Sub(lost.LostAt) <= stitchFor {
+		g.stitched[plane.ICAO] = prefix{points: lost.Points, lostAt: lost.LostAt}
+	}
+
+	g.stitch(plane, now)
 
 	g.live[plane.ICAO] = liveTrail{
 		gen: g.gen,
 		trail: Trail{
-			ICAO:     plane.ICAO,
-			Callsign: plane.Callsign,
-			Altitude: plane.Altitude,
-			Points:   plane.PositionHistory,
+			ICAO:      plane.ICAO,
+			Callsign:  plane.Callsign,
+			Altitude:  plane.Altitude,
+			Points:    plane.PositionHistory,
+			Latitude:  plane.Latitude,
+			Longitude: plane.Longitude,
+			Heading:   plane.Heading,
+			VertRate:  plane.VertRate,
 		},
 	}
 }
 
-// revive empties the ring slot of an aircraft that has come back.
+// stitch puts a revived aircraft's old track in front of its new history.
 //
-// Without it the same aeroplane would be drawn twice: once as the live trail
-// it is flying now, and once as the ghost of the gap it was quiet through.
-func (g *ghosts) revive(icao string) {
-	pushed, held := g.at[icao]
+// uAirwaves forgets an aircraft a minute after its last message and starts it
+// again from an empty history when the next one arrives, so without this the
+// trail of an aircraft at the edge of coverage restarts from a dot every time
+// it drops out. The prefix is cut from its oldest end so the two together stay
+// within stitchFixes, and once the new life holds that many on its own, or the
+// loss is older than stitchFor, the prefix is given up for good.
+//
+// A first new fix identical to the last old one is dropped, so the seam has
+// no zero-length segment in it. PositionEntry carries no timestamp, so the
+// position is the only thing two fixes can be compared on.
+//
+// The joined history is a fresh slice on every frame. Frame already copies
+// every history out of uAirwaves, so this is one more of the same, and it
+// means nothing the ring keeps aliases a buffer that is written to later.
+func (g *ghosts) stitch(plane *airplane.Snapshot, now time.Time) {
+	old, held := g.stitched[plane.ICAO]
 	if !held {
 		return
 	}
 
+	fresh := plane.PositionHistory
+	room := stitchFixes - len(fresh)
+
+	if room <= 0 || now.Sub(old.lostAt) > stitchFor {
+		delete(g.stitched, plane.ICAO)
+
+		return
+	}
+
+	points := old.points[max(0, len(old.points)-room):]
+	if len(points) > 0 && len(fresh) > 0 && points[len(points)-1] == fresh[0] {
+		fresh = fresh[1:]
+	}
+
+	joined := make([]airplane.PositionEntry, 0, len(points)+len(fresh))
+	joined = append(joined, points...)
+	joined = append(joined, fresh...)
+	plane.PositionHistory = joined
+}
+
+// revive empties the ring slot of an aircraft that has come back, and hands
+// back the trail that was in it.
+//
+// Without it the same aeroplane would be drawn twice: once as the live trail
+// it is flying now, and once as the ghost of the gap it was quiet through.
+// The trail it returns is what keep stitches onto the new history. The ring
+// never holds the same fix twice, because the old track leaves the ring here
+// and only comes back as part of the trail the next loss pushes.
+func (g *ghosts) revive(icao string) (Trail, bool) {
+	pushed, held := g.at[icao]
+	if !held {
+		return Trail{}, false
+	}
+
+	slot := pushed % g.maxTrails
+	lost := g.ring[slot]
+
 	delete(g.at, icao)
-	g.clear(pushed % g.maxTrails)
+	g.clear(slot)
+
+	return lost, true
 }
 
 // sweep moves out every aircraft that was in the last frame and is not in
@@ -190,7 +301,10 @@ func (g *ghosts) revive(icao string) {
 // The ring is the order the ghosts are drawn in, so two aircraft lost on the
 // same frame would otherwise stack in whichever order the runtime felt like
 // that run, and the same feed has to draw the same frame.
-func (g *ghosts) sweep() {
+//
+// Each trail is stamped with the frame time it was lost on, which is what the
+// radar's coast is measured from.
+func (g *ghosts) sweep(now time.Time) {
 	g.lost = g.lost[:0]
 
 	for icao, entry := range g.live {
@@ -202,8 +316,12 @@ func (g *ghosts) sweep() {
 	slices.Sort(g.lost)
 
 	for _, icao := range g.lost {
-		g.push(g.live[icao].trail)
+		trail := g.live[icao].trail
+		trail.LostAt = now
+
+		g.push(trail)
 		delete(g.live, icao)
+		delete(g.stitched, icao)
 	}
 }
 
