@@ -711,6 +711,43 @@ func TestView3DKeyBarFitsAtPanelWidth(t *testing.T) {
 	}
 }
 
+// TestView3DKeyBarDoublesAt2160 is the widest bar on a 4K canvas. The layout
+// there is the 1080 one at twice the size, so the bar has to end at exactly
+// twice the x it ends at on a 1920x1080 canvas, which also puts it inside the
+// doubled margin.
+func TestView3DKeyBarDoublesAt2160(t *testing.T) {
+	t.Parallel()
+
+	// capRow is the cap row's height and margin the frame margin, both in
+	// design pixels: the row sits margin above the bottom edge.
+	const capRow, margin = 22, 16
+
+	end := func(width, height, unit int) int {
+		frame := covered(sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)))
+
+		scene, canv, _ := sceneOn(t, width, height, frame, radar.WithColour(radar.ColourAirline))
+		scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourAirline})
+		scene.Draw(canv, 0)
+
+		row := image.Rect(0, height-(margin+capRow)*unit, width, height-margin*unit)
+
+		return paintedEnd(canv, row)
+	}
+
+	small, large := end(1920, 1080, 1), end(3840, 2160, 2)
+	if small < 0 || large < 0 {
+		t.Fatalf("the key bar ends at x=%d and x=%d, want both drawn", small, large)
+	}
+
+	if got, want := large+1, 2*(small+1); got != want {
+		t.Errorf("the 4K bar ends at x=%d, want %d, twice the 1080 bar", got, want)
+	}
+
+	if rightMargin := 3840 - 2*margin; large >= rightMargin {
+		t.Errorf("the 4K bar reached x=%d, want it to stop before the %d margin", large, rightMargin)
+	}
+}
+
 // TestView3DOrbitCapFollowsTheKey checks that o reads as a switch.
 //
 // The orbit is on from the first frame, so before o toggled, the commonest

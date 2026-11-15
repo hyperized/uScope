@@ -181,7 +181,7 @@ func TestDrawStarsAtNight(t *testing.T) {
 	scene.orbiting, scene.azimuth = false, 143
 
 	canv, box, before := starsCanvas(t, scene)
-	scene.drawStars(canv, box)
+	scene.drawStars(canv, box, uiScale(box))
 
 	rows := changedRows(canv, before)
 	if len(rows) < 30 {
@@ -225,7 +225,7 @@ func TestDrawStarsRefuses(t *testing.T) {
 			testCase.change(scene)
 
 			canv, box, before := starsCanvas(t, scene)
-			scene.drawStars(canv, box)
+			scene.drawStars(canv, box, 1)
 
 			if rows := changedRows(canv, before); len(rows) != 0 {
 				t.Errorf("%d pixels changed, want none", len(rows))
@@ -340,7 +340,7 @@ func TestDrawStarsAllocations(t *testing.T) {
 	scene, _ := skyScene(t, -20, theme.Night)
 	canv, box, _ := starsCanvas(t, scene)
 
-	if got := testing.AllocsPerRun(50, func() { scene.drawStars(canv, box) }); got != 0 {
+	if got := testing.AllocsPerRun(50, func() { scene.drawStars(canv, box, 1) }); got != 0 {
 		t.Errorf("drawStars allocated %.1f times, want 0", got)
 	}
 }
@@ -355,6 +355,6 @@ func BenchmarkDrawStars(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		scene.drawStars(canv, box)
+		scene.drawStars(canv, box, uiScale(box))
 	}
 }

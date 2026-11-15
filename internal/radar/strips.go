@@ -9,8 +9,6 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uScope/internal/source"
-	"github.com/hyperized/uScope/pkg/canvas"
-	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
@@ -223,7 +221,17 @@ type stripPlan struct {
 	// att is whether the little aeroplane is drawn at the right end of the
 	// ident field. It is the one thing dropped without a field going with it.
 	att bool
+
+	// scale is the layout's scale the plan was made at, which the gaps between
+	// fields and the attitude cell are multiplied by. Zero reads as one, the
+	// way it does on a layout.
+	scale int
 }
+
+// gap is the room between two fields, and cell the attitude cell's width, at
+// the plan's scale.
+func (p *stripPlan) gap() int  { return stripGap * max(p.scale, 1) }
+func (p *stripPlan) cell() int { return attCell * max(p.scale, 1) }
 
 // count is how many fields are still on the plan.
 func (p *stripPlan) count() int {
@@ -253,7 +261,7 @@ func (p *stripPlan) total() int {
 		}
 	}
 
-	return sum + max(p.count()-1, 0)*stripGap
+	return sum + max(p.count()-1, 0)*p.gap()
 }
 
 // size copies the measured widths onto the plan, adding the little aeroplane's
@@ -262,7 +270,7 @@ func (p *stripPlan) size(widths [fieldCount]int) {
 	p.width = widths
 
 	if p.att {
-		p.width[fieldIdent] += stripGap + attCell
+		p.width[fieldIdent] += p.gap() + p.cell()
 	}
 }
 
@@ -284,7 +292,14 @@ func (p *stripPlan) give(entry stripDrop, widths [fieldCount]int) {
 // adding a fixed gap, which is how the compact rows shared theirs: an integer
 // gap leaves a remainder, and the last field would then stop a few pixels short
 // of the edge it is meant to meet.
+//
+// Both the share and the hairline between two fields are rounded to whole
+// design pixels. A share worked out on the doubled slack rounds differently
+// from the same share worked out once and doubled, and on a canvas twice the
+// size that put every field after the first a pixel away from where the
+// smaller strips have it.
 func (p *stripPlan) place(left, available int) {
+	unit := max(p.scale, 1)
 	slack := max(available-p.total(), 0)
 	gaps := max(p.count()-1, 1)
 	used, seen, prevRight := 0, 0, left
@@ -294,10 +309,10 @@ func (p *stripPlan) place(left, available int) {
 			continue
 		}
 
-		p.left[index] = left + used + seen*stripGap + slack*seen/gaps
+		p.left[index] = left + used + seen*p.gap() + slack*seen/gaps/unit*unit
 
 		if seen > 0 {
-			p.rule[index] = (prevRight + p.left[index]) / 2
+			p.rule[index] = (prevRight + p.left[index]) / (2 * unit) * unit
 		}
 
 		used += p.width[index]
@@ -318,29 +333,30 @@ func (p *stripPlan) place(left, available int) {
 // The ident field is the crowded one. It holds the index, the callsign, and
 // then either the ICAO hex or the warning box that takes the hex's place while
 // an aircraft is squawking an emergency, whichever of those two is wider.
-func (s *Scene) stripWidths() [fieldCount]int {
+func (s *Scene) stripWidths(col *layout) [fieldCount]int {
 	small, body := s.faces.Small, s.faces.Body
+	gap := col.px(stripGap)
 
-	icao := measure(small, widestICAO)
-	warning := measure(small, emergencyText) + 2*emergencyPadX
+	icao := col.measure(small, widestICAO)
+	warning := col.measure(small, emergencyText) + 2*col.px(emergencyPadX)
 
 	var widths [fieldCount]int
 
-	widths[fieldIdent] = measure(small, widestRank) + stripGap +
-		measure(s.faces.BodyBold, widestCallsign) + stripGap + max(icao, warning)
+	widths[fieldIdent] = col.measure(small, widestRank) + gap +
+		col.measure(s.faces.BodyBold, widestCallsign) + gap + max(icao, warning)
 
-	widths[fieldLevel] = vertMarker + vertGap + measure(body, widestLevel)
-	widths[fieldSpeed] = measure(body, widestSpeed)
-	widths[fieldTrack] = measure(body, widestTrack) + s.arrowWidth()
-	widths[fieldRange] = measure(body, widestDistance) + stripGap + measure(body, widestBearing) + s.arrowWidth()
-	widths[fieldPos] = measure(small, widestPlace+" "+widestPlace)
-	widths[fieldSeen] = measure(small, seenNowText)
+	widths[fieldLevel] = col.px(vertMarker) + col.px(vertGap) + col.measure(body, widestLevel)
+	widths[fieldSpeed] = col.measure(body, widestSpeed)
+	widths[fieldTrack] = col.measure(body, widestTrack) + s.arrowWidth(col)
+	widths[fieldRange] = col.measure(body, widestDistance) + gap + col.measure(body, widestBearing) + s.arrowWidth(col)
+	widths[fieldPos] = col.measure(small, widestPlace+" "+widestPlace)
+	widths[fieldSeen] = col.measure(small, seenNowText)
 
 	// Every field is at least as wide as the word over it. TRK and SEEN are the
 	// two that would otherwise come out narrower than their own headers, and a
 	// header running into the rule beside it says less than a wider field does.
 	for index := range fieldCount {
-		widths[index] = max(widths[index], measureTracked(small, stripHeaders[index]))
+		widths[index] = max(widths[index], col.measureTracked(small, stripHeaders[index]))
 	}
 
 	return widths
@@ -357,14 +373,14 @@ func (s *Scene) stripWidths() [fieldCount]int {
 // All four faces have to be there. A strip sets its callsign in the bold face
 // and its codes in the small one, the row of field names over the board is the
 // small one again, and the panel over that wants the large one.
-func (s *Scene) planStrips(left, right int) (stripPlan, bool) {
-	var plan stripPlan
+func (s *Scene) planStrips(col *layout, left, right int) (stripPlan, bool) {
+	plan := stripPlan{scale: col.scale}
 
 	if s.faces.Small == nil || s.faces.Body == nil || s.faces.BodyBold == nil || s.faces.Large == nil {
 		return plan, false
 	}
 
-	widths := s.stripWidths()
+	widths := s.stripWidths(col)
 	available := right - left
 
 	for index := range fieldCount {
@@ -394,7 +410,7 @@ func (s *Scene) planStrips(left, right int) (stripPlan, bool) {
 // stripPen is everything the fields of one strip share: where to draw, where
 // the plan put each field, and the two rows the type sits on.
 type stripPen struct {
-	dst  *canvas.Canvas
+	lay  *layout
 	plan stripPlan
 
 	// value is the top of the row a figure in the body face rides on and small
@@ -414,12 +430,12 @@ type stripPen struct {
 // the row of field names over the board. Both come out of the faces rather
 // than being written down, so a scene handed different fonts gets a board that
 // fits them.
-func (s *Scene) halfStripHeight() int {
-	return 2*stripHalfPadY + lineHeight(s.faces.Body)
+func (s *Scene) halfStripHeight(col *layout) int {
+	return 2*col.px(stripHalfPadY) + col.lineHeight(s.faces.Body)
 }
 
-func (s *Scene) boardHeadHeight() int {
-	return 2*stripPadY + lineHeight(s.faces.Small)
+func (s *Scene) boardHeadHeight(col *layout) int {
+	return 2*col.px(stripPadY) + col.lineHeight(s.faces.Small)
 }
 
 // stripBoard is the slice of the list that has strips this frame.
@@ -458,8 +474,8 @@ func (b stripBoard) marks() int {
 // A +N line is charged a whole strip's height rather than its own. It stands in
 // the list where a strip would, and one squeezed into the slack under the last
 // strip would be drawn over the legend.
-func (s *Scene) stripFit(room, marks int) int {
-	height := s.halfStripHeight()
+func (s *Scene) stripFit(col *layout, room, marks int) int {
+	height := s.halfStripHeight(col)
 
 	return max((room-marks*height)/height, 0)
 }
@@ -482,8 +498,8 @@ func stripFirst(total, count, sel int) int {
 }
 
 // boardAt measures the window for a fixed number of +N lines.
-func (s *Scene) boardAt(room, total, sel, marks int) stripBoard {
-	count := min(s.stripFit(room, marks), total)
+func (s *Scene) boardAt(col *layout, room, total, sel, marks int) stripBoard {
+	count := min(s.stripFit(col, room, marks), total)
 	first := stripFirst(total, count, sel)
 
 	return stripBoard{first: first, count: count, above: first, below: total - first - count}
@@ -500,15 +516,15 @@ func (s *Scene) boardAt(room, total, sel, marks int) stripBoard {
 // A column with no room for a strip and a line keeps the strip. The line over
 // the panel already says how many aircraft there are, so what is lost is a
 // figure rather than an aeroplane.
-func (s *Scene) planBoard(room, total, sel int) stripBoard {
-	board := s.boardAt(room, total, sel, 0)
+func (s *Scene) planBoard(col *layout, room, total, sel int) stripBoard {
+	board := s.boardAt(col, room, total, sel, 0)
 
 	for marks := 1; marks <= maxStripMarks; marks++ {
 		if board.marks() < marks {
 			break
 		}
 
-		next := s.boardAt(room, total, sel, marks)
+		next := s.boardAt(col, room, total, sel, marks)
 		if next.count == 0 {
 			break
 		}
@@ -536,20 +552,20 @@ func (s *Scene) boardIndex() int {
 // names, one strip per aircraft in the window, and a +N line at either end the
 // window has cut.
 func (s *Scene) drawStrips(col *layout, frame source.Frame) {
-	plan, drawable := s.planStrips(col.left+stripEdge+stripPadX, col.right-stripPadX)
+	plan, drawable := s.planStrips(col, col.left+col.px(stripEdge)+col.px(stripPadX), col.right-col.px(stripPadX))
 	if !drawable {
 		return
 	}
 
-	head := s.boardHeadHeight()
-	if !col.fits(head + s.halfStripHeight()) {
+	head := s.boardHeadHeight(col)
+	if !col.fits(head + s.halfStripHeight(col)) {
 		return
 	}
 
 	s.drawBoardHead(col, plan)
 	col.top += head
 
-	s.drawBoard(col, plan, frame, s.planBoard(col.bottom-col.top, s.shownPlanes(), s.boardIndex()))
+	s.drawBoard(col, plan, frame, s.planBoard(col, col.bottom-col.top, s.shownPlanes(), s.boardIndex()))
 }
 
 // drawBoardHead names the fields once, over the whole board.
@@ -559,15 +575,14 @@ func (s *Scene) drawStrips(col *layout, frame source.Frame) {
 // the board already showed, and carried on the selected strip alone they walked
 // down the list with the cursor.
 func (s *Scene) drawBoardHead(col *layout, plan stripPlan) {
-	s.drawStripRules(col.dst, plan, image.Rect(col.left, col.top, col.right, col.top+s.boardHeadHeight()))
+	s.drawStripRules(col, plan, image.Rect(col.left, col.top, col.right, col.top+s.boardHeadHeight(col)))
 
 	for index := range fieldCount {
 		if !plan.on[index] {
 			continue
 		}
 
-		text.Draw(col.dst, s.faces.Small, plan.left[index], col.top+stripPadY, stripHeaders[index], s.pal.Data,
-			text.WithSpacing(labelTracking))
+		col.tracked(s.faces.Small, plan.left[index], col.top+col.px(stripPadY), stripHeaders[index], s.pal.Data)
 	}
 }
 
@@ -576,14 +591,14 @@ func (s *Scene) drawBoard(col *layout, plan stripPlan, frame source.Frame, board
 	top := col.top
 
 	if board.above > 0 {
-		s.drawMoreStrip(col.dst, plan, top, board.above, aboveSuffix)
-		top += s.halfStripHeight()
+		s.drawMoreStrip(col, plan, top, board.above, aboveSuffix)
+		top += s.halfStripHeight(col)
 	}
 
 	top = s.drawBoardStrips(col, plan, frame, board, top)
 
 	if board.below > 0 {
-		s.drawMoreStrip(col.dst, plan, top, board.below, moreSuffix)
+		s.drawMoreStrip(col, plan, top, board.below, moreSuffix)
 	}
 }
 
@@ -612,7 +627,7 @@ func (s *Scene) drawBoardStrips(
 
 		if index >= board.first {
 			s.drawHalfStrip(col, plan, frame, plane, top, stripPen{rank: index + 1, picked: index == picked})
-			top += s.halfStripHeight()
+			top += s.halfStripHeight(col)
 		}
 
 		index++
@@ -626,13 +641,13 @@ func (s *Scene) drawBoardStrips(
 //
 // It takes a strip's room and sits centred in it, so the board keeps its pitch
 // whether the line at the top of it is a strip or a count of the ones above.
-func (s *Scene) drawMoreStrip(dst *canvas.Canvas, plan stripPlan, top, hidden int, suffix string) {
+func (s *Scene) drawMoreStrip(col *layout, plan stripPlan, top, hidden int, suffix string) {
 	face := s.faces.Small
-	line := top + (s.halfStripHeight()-lineHeight(face))/2
+	line := top + (s.halfStripHeight(col)-col.lineHeight(face))/2
 
-	pen := text.Draw(dst, face, plan.left[fieldIdent], line, morePrefix, s.pal.Muted)
-	pen = drawBytes(dst, face, pen, line, s.count(hidden), s.pal.Muted)
-	text.Draw(dst, face, pen, line, suffix, s.pal.Muted)
+	pen := col.text(face, plan.left[fieldIdent], line, morePrefix, s.pal.Muted)
+	pen = col.drawBytes(face, pen, line, s.count(hidden), s.pal.Muted)
+	col.text(face, pen, line, suffix, s.pal.Muted)
 }
 
 // drawHalfStrip draws one aircraft: a single row of figures with the field
@@ -646,18 +661,18 @@ func (s *Scene) drawMoreStrip(dst *canvas.Canvas, plan stripPlan, top, hidden in
 func (s *Scene) drawHalfStrip(
 	col *layout, plan stripPlan, frame source.Frame, plane airplane.Snapshot, top int, pen stripPen,
 ) {
-	height := s.halfStripHeight()
+	height := s.halfStripHeight(col)
 
-	s.drawStripRules(col.dst, plan, image.Rect(col.left, top, col.right, top+height))
+	s.drawStripRules(col, plan, image.Rect(col.left, top, col.right, top+height))
 
 	if pen.picked {
-		col.dst.FillRect(image.Rect(col.left, top, col.left+stripEdge, top+height), s.pal.Accent)
+		col.dst.FillRect(image.Rect(col.left, top, col.left+col.px(stripEdge), top+height), s.pal.Accent)
 	}
 
-	pen.dst = col.dst
+	pen.lay = col
 	pen.plan = plan
-	pen.value = top + stripHalfPadY
-	pen.small = top + (height-lineHeight(s.faces.Small))/2
+	pen.value = top + col.px(stripHalfPadY)
+	pen.small = top + (height-col.lineHeight(s.faces.Small))/2
 
 	s.drawStripFields(pen, plane, frame)
 }
@@ -680,15 +695,17 @@ func (s *Scene) drawStripFields(pen stripPen, plane airplane.Snapshot, frame sou
 // The verticals run the whole height of the strip rather than stopping at the
 // type, which is what makes a field a field: the eye follows a rule down the
 // board and finds the same reading on every aircraft in the same place.
-func (s *Scene) drawStripRules(dst *canvas.Canvas, plan stripPlan, box image.Rectangle) {
-	dst.FillRect(image.Rect(box.Min.X, box.Max.Y-ruleHeight, box.Max.X, box.Max.Y), s.pal.Rule)
+func (s *Scene) drawStripRules(col *layout, plan stripPlan, box image.Rectangle) {
+	rule := col.px(ruleHeight)
+
+	col.dst.FillRect(image.Rect(box.Min.X, box.Max.Y-rule, box.Max.X, box.Max.Y), s.pal.Rule)
 
 	for index := range fieldCount {
 		if !plan.on[index] || index == fieldIdent {
 			continue
 		}
 
-		dst.FillRect(image.Rect(plan.rule[index], box.Min.Y, plan.rule[index]+ruleHeight, box.Max.Y), s.pal.Rule)
+		col.dst.FillRect(image.Rect(plan.rule[index], box.Min.Y, plan.rule[index]+rule, box.Max.Y), s.pal.Rule)
 	}
 }
 
@@ -703,14 +720,13 @@ func (s *Scene) drawStripIdent(pen stripPen, plane airplane.Snapshot) {
 	small := s.faces.Small
 	left := pen.plan.left[fieldIdent]
 
-	drawBytes(pen.dst, small, left, pen.small, s.rank(pen.rank), s.rankInk(pen.picked))
+	pen.lay.drawBytes(small, left, pen.small, s.rank(pen.rank), s.rankInk(pen.picked))
 
-	left += measure(small, widestRank) + stripGap
+	left += pen.lay.measure(small, widestRank) + pen.lay.px(stripGap)
 
-	mark := text.Draw(pen.dst, s.faces.BodyBold, left, pen.value,
-		clip(callsignOf(plane), maxCallsign), s.callsignInk(plane))
+	mark := pen.lay.text(s.faces.BodyBold, left, pen.value, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane))
 
-	s.drawHalfCodes(pen, mark+stripGap, plane)
+	s.drawHalfCodes(pen, mark+pen.lay.px(stripGap), plane)
 	s.drawStripAttitude(pen, plane)
 }
 
@@ -747,12 +763,12 @@ func (s *Scene) rankInk(picked bool) color.RGBA {
 // declaring one.
 func (s *Scene) drawHalfCodes(pen stripPen, left int, plane airplane.Snapshot) {
 	if plane.Emergency {
-		s.drawEmergency(pen.dst, left, pen.small, plane)
+		s.drawEmergency(pen.lay, left, pen.small, plane)
 
 		return
 	}
 
-	text.Draw(pen.dst, s.faces.Small, left, pen.small, clip(plane.ICAO, maxICAO), s.pal.Muted)
+	pen.lay.text(s.faces.Small, left, pen.small, clip(plane.ICAO, maxICAO), s.pal.Muted)
 }
 
 // drawEmergency puts the warning box on the line at left, and does nothing at
@@ -766,17 +782,18 @@ func (s *Scene) drawHalfCodes(pen stripPen, left int, plane airplane.Snapshot) {
 //
 // Nothing needs the x past it. Both callers put the box at the end of what they
 // are drawing: the panel after the squawk, a strip in the hex's own place.
-func (s *Scene) drawEmergency(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+func (s *Scene) drawEmergency(lay *layout, left, top int, plane airplane.Snapshot) {
 	if !plane.Emergency {
 		return
 	}
 
 	face := s.faces.Small
-	width, height := text.Measure(face, emergencyText)
-	box := image.Rect(left, top-emergencyPadY, left+width+2*emergencyPadX, top+height+emergencyPadY)
+	padX, padY := lay.px(emergencyPadX), lay.px(emergencyPadY)
+	width, height := text.Measure(face, emergencyText, lay.glyphs())
+	box := image.Rect(left, top-padY, left+width+2*padX, top+height+padY)
 
-	dst.FillRect(box, s.pal.Warn)
-	text.Draw(dst, face, left+emergencyPadX, top, emergencyText, emergencyInk)
+	lay.dst.FillRect(box, s.pal.Warn)
+	lay.text(face, left+padX, top, emergencyText, emergencyInk)
 }
 
 // drawStripAttitude draws the little aeroplane at the right end of the ident
@@ -799,11 +816,12 @@ func (s *Scene) drawStripAttitude(pen stripPen, plane airplane.Snapshot) {
 	}
 
 	centre := image.Pt(
-		pen.plan.left[fieldIdent]+pen.plan.width[fieldIdent]-attCell/2,
-		pen.value+lineHeight(s.faces.Body)/2,
+		pen.plan.left[fieldIdent]+pen.plan.width[fieldIdent]-pen.plan.cell()/2,
+		pen.value+pen.lay.lineHeight(s.faces.Body)/2,
 	)
 
-	s.drawShape3(pen.dst, newCellCamera3(centre), plane, point3{}, centre, s.aircraftColour(plane))
+	s.drawShape3(pen.lay.dst, newCellCamera3(centre, pen.lay.unit()), plane, point3{}, centre,
+		s.aircraftColour(plane), pen.lay.unit())
 }
 
 // drawStripLevel sets the level field: the altitude in the colour of its band,
@@ -826,10 +844,11 @@ func (s *Scene) drawStripLevel(pen stripPen, plane airplane.Snapshot) {
 	band := s.bandColour(plane.Altitude)
 
 	if !level(plane.VertRate) {
-		s.drawVertMarker(pen.dst, left, pen.value, plane.VertRate, band)
+		s.drawVertMarker(pen.lay, left, pen.value, plane.VertRate, band)
 	}
 
-	drawBytes(pen.dst, s.faces.Body, left+vertMarker+vertGap, pen.value, s.thousands(plane.Altitude), band)
+	pen.lay.drawBytes(s.faces.Body, left+pen.lay.px(vertMarker)+pen.lay.px(vertGap), pen.value,
+		s.thousands(plane.Altitude), band)
 }
 
 // drawStripSpeed sets the ground speed, which is the one figure on the board
@@ -839,7 +858,7 @@ func (s *Scene) drawStripSpeed(pen stripPen, plane airplane.Snapshot) {
 		return
 	}
 
-	drawBytes(pen.dst, s.faces.Body, pen.plan.left[fieldSpeed], pen.value, s.speed(plane.Velocity), s.pal.Ink)
+	pen.lay.drawBytes(s.faces.Body, pen.plan.left[fieldSpeed], pen.value, s.speed(plane.Velocity), s.pal.Ink)
 }
 
 // drawStripTrack sets the course the aircraft is flying, as degrees with a
@@ -857,13 +876,13 @@ func (s *Scene) drawStripTrack(pen stripPen, plane airplane.Snapshot) {
 	left := pen.plan.left[fieldTrack]
 
 	if !knownHeading(plane.Heading) {
-		text.Draw(pen.dst, face, left, pen.value, trackUnknown, s.pal.Muted)
+		pen.lay.text(face, left, pen.value, trackUnknown, s.pal.Muted)
 
 		return
 	}
 
-	mark := drawBytes(pen.dst, face, left, pen.value, s.degrees(plane.Heading), s.pal.Ink)
-	s.drawArrow(pen.dst, mark+arrowGap, pen.value+lineHeight(face)/2, plane.Heading, s.pal.Ink)
+	mark := pen.lay.drawBytes(face, left, pen.value, s.degrees(plane.Heading), s.pal.Ink)
+	s.drawArrow(pen.lay, mark+pen.lay.px(arrowGap), pen.value+pen.lay.lineHeight(face)/2, plane.Heading, s.pal.Ink)
 }
 
 // drawStripRange sets how far the aircraft is from the receiver and on what
@@ -880,17 +899,17 @@ func (s *Scene) drawStripRange(pen stripPen, receiver source.Receiver, plane air
 	left := pen.plan.left[fieldRange]
 
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
-	mark := drawBytes(pen.dst, face, left, pen.value, s.distance(away), s.pal.Ink) + stripGap
+	mark := pen.lay.drawBytes(face, left, pen.value, s.distance(away), s.pal.Ink) + pen.lay.px(stripGap)
 
 	bearing, known := bearingTo(receiver, plane)
 	if !known {
-		text.Draw(pen.dst, face, mark, pen.value, trackUnknown, s.pal.Muted)
+		pen.lay.text(face, mark, pen.value, trackUnknown, s.pal.Muted)
 
 		return
 	}
 
-	mark = drawBytes(pen.dst, face, mark, pen.value, s.degrees(bearing), s.pal.Ink)
-	s.drawArrow(pen.dst, mark+arrowGap, pen.value+lineHeight(face)/2, bearing, s.pal.Ink)
+	mark = pen.lay.drawBytes(face, mark, pen.value, s.degrees(bearing), s.pal.Ink)
+	s.drawArrow(pen.lay, mark+pen.lay.px(arrowGap), pen.value+pen.lay.lineHeight(face)/2, bearing, s.pal.Ink)
 }
 
 // drawStripPos writes where the aircraft is, to two decimals.
@@ -908,15 +927,15 @@ func (s *Scene) drawStripPos(pen stripPen, plane airplane.Snapshot) {
 	left := pen.plan.left[fieldPos]
 
 	if !hasPosition(plane) {
-		text.Draw(pen.dst, face, left, pen.small, detailUnknown, s.pal.Muted)
+		pen.lay.text(face, left, pen.small, detailUnknown, s.pal.Muted)
 
 		return
 	}
 
 	// One half at a time: both share the scene's coordinate buffer, so
 	// formatting the second would overwrite the first.
-	mark := drawBytes(pen.dst, face, left, pen.small, s.place(plane.Latitude, 'N', 'S'), s.pal.Muted)
-	drawBytes(pen.dst, face, mark+glyphWidth(face), pen.small, s.place(plane.Longitude, 'E', 'W'), s.pal.Muted)
+	mark := pen.lay.drawBytes(face, left, pen.small, s.place(plane.Latitude, 'N', 'S'), s.pal.Muted)
+	pen.lay.drawBytes(face, mark+pen.lay.glyphWidth(face), pen.small, s.place(plane.Longitude, 'E', 'W'), s.pal.Muted)
 }
 
 // drawStripSeen writes how long ago the aircraft was last heard, in the coarse
@@ -926,8 +945,7 @@ func (s *Scene) drawStripSeen(pen stripPen, now time.Time, plane airplane.Snapsh
 		return
 	}
 
-	text.Draw(pen.dst, s.faces.Small, pen.plan.left[fieldSeen], pen.small,
-		seenBucket(now.Sub(plane.LastUpdate)), s.pal.Muted)
+	pen.lay.text(s.faces.Small, pen.plan.left[fieldSeen], pen.small, seenBucket(now.Sub(plane.LastUpdate)), s.pal.Muted)
 }
 
 // drawStripStatus writes where the selection is sitting and how many aircraft
@@ -940,29 +958,29 @@ func (s *Scene) drawStripSeen(pen stripPen, now time.Time, plane airplane.Snapsh
 // what a panel says that with.
 func (s *Scene) drawStripStatus(col *layout, sel selection, shown, total int) {
 	face := s.faces.Small
-	if measureTracked(face, widestStatus) > col.right-col.left {
+	if col.measureTracked(face, widestStatus) > col.right-col.left {
 		return
 	}
 
 	top := col.top
-	pen := col.right - s.statusWidth(sel, shown, total)
+	pen := col.right - s.statusWidth(col, sel, shown, total)
 
-	pen = text.Draw(col.dst, face, pen, top, selPrefix, s.pal.Data, text.WithSpacing(labelTracking))
-	pen = s.drawStatusRank(col.dst, pen, top, s.selRank(sel))
+	pen = col.tracked(face, pen, top, selPrefix, s.pal.Data)
+	pen = s.drawStatusRank(col, pen, top, s.selRank(sel))
 
 	if sel.hidden {
-		pen = text.Draw(col.dst, face, pen, top, selFilteredTag, s.pal.Caution, text.WithSpacing(labelTracking))
+		pen = col.tracked(face, pen, top, selFilteredTag, s.pal.Caution)
 	}
 
-	pen = text.Draw(col.dst, face, pen, top, stripsSeparator, s.pal.Data, text.WithSpacing(labelTracking))
+	pen = col.tracked(face, pen, top, stripsSeparator, s.pal.Data)
 
 	if s.filter.active() {
-		pen = drawBytesTracked(col.dst, face, pen, top, s.shownCount(shown), s.pal.Data)
-		pen = text.Draw(col.dst, face, pen, top, stripsOfInfix, s.pal.Data, text.WithSpacing(labelTracking))
+		pen = col.drawBytesTracked(face, pen, top, s.shownCount(shown), s.pal.Data)
+		pen = col.tracked(face, pen, top, stripsOfInfix, s.pal.Data)
 	}
 
-	pen = drawBytesTracked(col.dst, face, pen, top, s.count(total), s.pal.Data)
-	text.Draw(col.dst, face, pen, top, stripsCountSuffix, s.pal.Data, text.WithSpacing(labelTracking))
+	pen = col.drawBytesTracked(face, pen, top, s.count(total), s.pal.Data)
+	col.tracked(face, pen, top, stripsCountSuffix, s.pal.Data)
 }
 
 // selRank is the selection's place in the list, counted from one, or zero when
@@ -977,14 +995,14 @@ func (s *Scene) selRank(sel selection) int {
 
 // drawStatusRank writes the index the line opens with, or the pair of dashes
 // that stands for a selection no strip is under.
-func (s *Scene) drawStatusRank(dst *canvas.Canvas, left, top, rank int) int {
+func (s *Scene) drawStatusRank(col *layout, left, top, rank int) int {
 	face := s.faces.Small
 
 	if rank <= 0 {
-		return text.Draw(dst, face, left, top, selNone, s.pal.Data, text.WithSpacing(labelTracking))
+		return col.tracked(face, left, top, selNone, s.pal.Data)
 	}
 
-	return drawBytesTracked(dst, face, left, top, s.rank(rank), s.pal.Data)
+	return col.drawBytesTracked(face, left, top, s.rank(rank), s.pal.Data)
 }
 
 // statusWidth is how wide the status line will come out.
@@ -992,21 +1010,21 @@ func (s *Scene) drawStatusRank(dst *canvas.Canvas, left, top, rank int) int {
 // The numbers are counted rather than formatted. Three of them have to be
 // measured before the first is drawn so the run can be right-aligned, and only
 // one of them can be in a scratch buffer at a time.
-func (s *Scene) statusWidth(sel selection, shown, total int) int {
+func (s *Scene) statusWidth(col *layout, sel selection, shown, total int) int {
 	face := s.faces.Small
 
-	width := measureTracked(face, selPrefix) +
-		trackedWidth(face, max(digitsIn(s.selRank(sel)), len(selNone))) +
-		measureTracked(face, stripsSeparator) +
-		trackedWidth(face, digitsIn(total)) +
-		measureTracked(face, stripsCountSuffix)
+	width := col.measureTracked(face, selPrefix) +
+		col.trackedWidth(face, max(digitsIn(s.selRank(sel)), len(selNone))) +
+		col.measureTracked(face, stripsSeparator) +
+		col.trackedWidth(face, digitsIn(total)) +
+		col.measureTracked(face, stripsCountSuffix)
 
 	if sel.hidden {
-		width += measureTracked(face, selFilteredTag)
+		width += col.measureTracked(face, selFilteredTag)
 	}
 
 	if s.filter.active() {
-		width += trackedWidth(face, digitsIn(shown)) + measureTracked(face, stripsOfInfix)
+		width += col.trackedWidth(face, digitsIn(shown)) + col.measureTracked(face, stripsOfInfix)
 	}
 
 	return width
@@ -1024,20 +1042,4 @@ func digitsIn(value int) int {
 	}
 
 	return digits
-}
-
-// measure is one string's width in a face, which is the half of text.Measure
-// every caller here wants.
-func measure(face *psf.Font, value string) int {
-	width, _ := text.Measure(face, value)
-
-	return width
-}
-
-// measureTracked is measure at the scene's label tracking, which every small
-// all-caps label in the scene is set at.
-func measureTracked(face *psf.Font, value string) int {
-	width, _ := text.Measure(face, value, text.WithSpacing(labelTracking))
-
-	return width
 }

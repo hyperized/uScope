@@ -7,9 +7,7 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
-	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
-	"github.com/hyperized/uScope/pkg/text"
 )
 
 // The right column's fixed strings and the caps on what is drawn from a decoded
@@ -82,6 +80,7 @@ func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 		top:    lay.column.Min.Y,
 		bottom: lay.column.Max.Y,
 		labels: lay.labels,
+		scale:  lay.scale,
 	}
 
 	s.drawLegend(&col)
@@ -89,7 +88,7 @@ func (s *Scene) drawColumn(lay *layout, frame source.Frame) {
 	sel := s.selectedPlane(frame)
 
 	s.drawStripStatus(&col, sel, s.shownPlanes(), len(frame.Planes))
-	col.top += lineHeight(s.faces.Small) + rowLead
+	col.top += col.lineHeight(s.faces.Small) + col.px(rowLead)
 
 	s.drawCard(&col, frame, sel)
 	s.drawStrips(&col, frame)
@@ -158,7 +157,7 @@ func (s *Scene) distance(valueNm float64) []byte {
 func (s *Scene) drawLegend(col *layout) {
 	face := s.faces.Small
 
-	height := lineHeight(face)
+	height := col.lineHeight(face)
 	if height == 0 || !col.fits(height) {
 		return
 	}
@@ -171,7 +170,7 @@ func (s *Scene) drawLegend(col *layout) {
 		s.drawBandLegend(col, face, top)
 	}
 
-	col.bottom -= height + blockGap
+	col.bottom -= height + col.px(blockGap)
 }
 
 // drawBandLegend names the three altitude bands.
@@ -182,20 +181,20 @@ func (s *Scene) drawLegend(col *layout) {
 // label is the part that would have run into the margin.
 func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 	pen := col.left
+	side, gap := col.px(swatchSide), col.px(swatchGap)
 
 	for band, entry := range s.legendEntries() {
-		width, _ := text.Measure(face, entry.label, text.WithSpacing(labelTracking))
-		if pen+swatchSide+swatchGap+width > col.right {
+		width := col.measureTracked(face, entry.label)
+		if pen+side+gap+width > col.right {
 			break
 		}
 
-		box := image.Rect(pen, top, pen+swatchSide, top+swatchSide)
+		box := image.Rect(pen, top, pen+side, top+side)
 		col.dst.FillRect(box, entry.col)
-		s.markLegendEntry(col.dst, box, s.filter.marksBand(band))
+		s.markLegendEntry(col, box, s.filter.marksBand(band))
 
-		pen = text.Draw(col.dst, face, box.Max.X+swatchGap, top, entry.label, s.pal.Muted,
-			text.WithSpacing(labelTracking))
-		pen += legendGap
+		pen = col.tracked(face, box.Max.X+gap, top, entry.label, s.pal.Muted)
+		pen += col.px(legendGap)
 	}
 }
 
@@ -208,12 +207,12 @@ func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 // colour to look up.
 //
 //nolint:revive // flag-parameter: marked picks whether to draw, not a mode to branch deeper on.
-func (s *Scene) markLegendEntry(dst *canvas.Canvas, box image.Rectangle, marked bool) {
+func (s *Scene) markLegendEntry(col *layout, box image.Rectangle, marked bool) {
 	if !marked {
 		return
 	}
 
-	dst.Rect(box.Inset(-swatchMark), s.pal.Ink)
+	col.dst.StrokeRect(box.Inset(-col.px(swatchMark)), col.unit(), s.pal.Ink)
 }
 
 // drawAirlineLegend names the operators with the most aircraft on the scope,
@@ -240,51 +239,53 @@ func (s *Scene) drawAirlineLegend(col *layout, face *psf.Font, top int) {
 	width := (col.right - col.left) / slots
 
 	for index := range s.counts.shown {
-		s.drawOperatorEntry(col.dst, face, image.Pt(col.left+index*width, top), width, s.counts.seen[index])
+		s.drawOperatorEntry(col, face, image.Pt(col.left+index*width, top), width, s.counts.seen[index])
 	}
 
 	if s.counts.other {
-		s.drawOtherEntry(col.dst, face, image.Pt(col.left+s.counts.shown*width, top))
+		s.drawOtherEntry(col, face, image.Pt(col.left+s.counts.shown*width, top))
 	}
 }
 
 // drawOperatorEntry sets one airline's swatch, designator and name.
 func (s *Scene) drawOperatorEntry(
-	dst *canvas.Canvas, face *psf.Font, origin image.Point, width int, entry operatorCount,
+	col *layout, face *psf.Font, origin image.Point, width int, entry operatorCount,
 ) {
-	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
-	dst.FillRect(box, s.operatorColour(entry.airline))
-	s.markLegendEntry(dst, box, s.filter.marksOperator(entry.airline.ICAO))
+	side, gap := col.px(swatchSide), col.px(swatchGap)
+	box := image.Rect(origin.X, origin.Y, origin.X+side, origin.Y+side)
+	col.dst.FillRect(box, s.operatorColour(entry.airline))
+	s.markLegendEntry(col, box, s.filter.marksOperator(entry.airline.ICAO))
 
-	pen := text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, entry.airline.ICAO, s.pal.Ink,
-		text.WithSpacing(labelTracking))
-	pen += swatchGap
+	pen := col.tracked(face, box.Max.X+gap, origin.Y, entry.airline.ICAO, s.pal.Ink)
+	pen += gap
 
-	room := origin.X + width - legendGap - pen
-	text.Draw(dst, face, pen, origin.Y, clip(entry.airline.Name, fitRunes(face, room, labelTracking)), s.pal.Muted,
-		text.WithSpacing(labelTracking))
+	room := origin.X + width - col.px(legendGap) - pen
+	col.tracked(face, pen, origin.Y, clip(entry.airline.Name, col.fitRunes(face, room, labelTracking)), s.pal.Muted)
 }
 
 // drawOtherEntry closes the airline legend, standing for every aircraft the
 // database has no colour for.
-func (s *Scene) drawOtherEntry(dst *canvas.Canvas, face *psf.Font, origin image.Point) {
-	box := image.Rect(origin.X, origin.Y, origin.X+swatchSide, origin.Y+swatchSide)
-	dst.FillRect(box, s.pal.Muted)
-	s.markLegendEntry(dst, box, s.filter.marksOther())
+func (s *Scene) drawOtherEntry(col *layout, face *psf.Font, origin image.Point) {
+	side := col.px(swatchSide)
+	box := image.Rect(origin.X, origin.Y, origin.X+side, origin.Y+side)
+	col.dst.FillRect(box, s.pal.Muted)
+	s.markLegendEntry(col, box, s.filter.marksOther())
 
-	text.Draw(dst, face, box.Max.X+swatchGap, origin.Y, legendOther, s.pal.Muted, text.WithSpacing(labelTracking))
+	col.tracked(face, box.Max.X+col.px(swatchGap), origin.Y, legendOther, s.pal.Muted)
 }
 
 // fitRunes is how many glyphs of face fit in width pixels at this tracking.
 // The last glyph carries no gap after it, which is why the tracking is added
 // back before the divide.
-func fitRunes(face *psf.Font, width, tracking int) int {
-	step := glyphWidth(face) + tracking
+func (l *layout) fitRunes(face *psf.Font, width, tracking int) int {
+	gap := l.px(tracking)
+
+	step := l.glyphWidth(face) + gap
 	if step <= 0 {
 		return 0
 	}
 
-	return max((width+tracking)/step, 0)
+	return max((width+gap)/step, 0)
 }
 
 // legendEntries pairs each band with its colour, in the order the bands go up.

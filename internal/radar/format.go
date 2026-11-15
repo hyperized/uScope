@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
@@ -213,15 +212,16 @@ const (
 	placeDecimals = 2
 )
 
-// drawBytes draws a formatted number and returns the x just past it.
+// drawBytes draws a formatted number at the layout's scale and returns the x
+// just past it.
 //
 // It exists so the byte-to-string conversion happens in a function small
 // enough to inline, which is what keeps it off the heap. See the note at the
 // top of this file.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func drawBytes(dst *canvas.Canvas, face *psf.Font, x, y int, value []byte, ink color.RGBA) int {
-	return text.Draw(dst, face, x, y, string(value), ink)
+func (l *layout) drawBytes(face *psf.Font, x, y int, value []byte, ink color.RGBA) int {
+	return text.Draw(l.dst, face, x, y, string(value), ink, l.glyphs())
 }
 
 // drawBytesTracked draws a formatted number at the scene's label tracking and
@@ -229,13 +229,14 @@ func drawBytes(dst *canvas.Canvas, face *psf.Font, x, y int, value []byte, ink c
 // finishes.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func drawBytesTracked(dst *canvas.Canvas, face *psf.Font, x, y int, value []byte, ink color.RGBA) int {
-	return text.Draw(dst, face, x, y, string(value), ink, text.WithSpacing(labelTracking))
+func (l *layout) drawBytesTracked(face *psf.Font, x, y int, value []byte, ink color.RGBA) int {
+	return text.Draw(l.dst, face, x, y, string(value), ink, l.glyphs(), l.tracking(labelTracking))
 }
 
-// measureBytes reports how wide a formatted number will be.
-func measureBytes(face *psf.Font, value []byte) int {
-	width, _ := text.Measure(face, string(value))
+// measureBytes reports how wide a formatted number will be at the layout's
+// scale.
+func (l *layout) measureBytes(face *psf.Font, value []byte) int {
+	width, _ := text.Measure(face, string(value), l.glyphs())
 
 	return width
 }
@@ -243,10 +244,10 @@ func measureBytes(face *psf.Font, value []byte) int {
 // trackedWidth is how wide a run of that many glyphs is at labelTracking. It
 // is the inverse of fitRunes, and it exists so a right-aligned tracked run can
 // be placed from a byte slice without converting it to a string first.
-func trackedWidth(face *psf.Font, runes int) int {
+func (l *layout) trackedWidth(face *psf.Font, runes int) int {
 	if runes <= 0 {
 		return 0
 	}
 
-	return runes*glyphWidth(face) + (runes-1)*labelTracking
+	return runes*l.glyphWidth(face) + (runes-1)*l.px(labelTracking)
 }

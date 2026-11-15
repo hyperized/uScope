@@ -78,7 +78,7 @@ const (
 )
 
 // starClass is one brightness of star: how far it is let off the sky under
-// it, how many pixels across it is, and how many stars in a thousand
+// it, how many layout pixels across it is, and how many stars in a thousand
 // are this bright. Most stars are faint and few are bright, which is how the
 // night sky is.
 type starClass struct {
@@ -207,6 +207,7 @@ type starView struct {
 	focal   float64
 	centerX float64
 	centerY float64
+	unit    int
 
 	rows   []color.RGBA
 	top    int
@@ -223,7 +224,7 @@ type starView struct {
 // The projection is newCamera3's for a point at infinity, so the stars turn
 // with the ground at exactly the ground's rate as the camera orbits, and the
 // horizon they sit on is the row horizonRow works out. Nothing here allocates.
-func (s *Scene) drawStars(window *canvas.Canvas, box image.Rectangle) {
+func (s *Scene) drawStars(window *canvas.Canvas, box image.Rectangle, unit int) {
 	alpha := starsVisibility(s.sky.elevation)
 	if !s.stars || !s.sky.known || alpha <= 0 {
 		return
@@ -242,6 +243,7 @@ func (s *Scene) drawStars(window *canvas.Canvas, box image.Rectangle) {
 		focal:   float64(box.Dx()),
 		centerX: float64(box.Min.X + box.Dx()/2),
 		centerY: float64(box.Min.Y + box.Dy()/2),
+		unit:    max(unit, 1),
 		rows:    rows,
 		top:     window.Bounds().Min.Y,
 		target:  starTarget(s.pal),
@@ -264,7 +266,7 @@ func (v *starView) plot(dst *canvas.Canvas, entry *star) {
 	}
 
 	class := starClasses[entry.class]
-	size := class.size
+	size := class.size * v.unit
 	x, y = x-size/2, y-size/2
 
 	v.paint(dst, image.Rect(x, y, x+size, y+size), class.strength*entry.fade*v.alpha)

@@ -105,7 +105,11 @@ func (s *Scene) waterInk() color.RGBA { return s.fade(s.pal.Data, waterFade) }
 //
 // A nil set draws nothing. That is the normal state when uScope was started
 // without the data rather than a failure, so there is nothing to report.
-func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame) {
+//
+// weight is the layout's scale, which the coastlines are stroked at. It is
+// handed in rather than the layout itself so the closure given to Within does
+// not drag the caller's layout onto the heap with it.
+func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame, weight int) {
 	if s.shoreSet == nil {
 		return
 	}
@@ -126,7 +130,7 @@ func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame) {
 	s.shoreSet.Within(
 		proj.lat0-latSpan, proj.lat0+latSpan,
 		proj.lon0-lonSpan, proj.lon0+lonSpan,
-		func(line shore.Polyline) { s.drawShoreLine(dst, proj, ring, line) },
+		func(line shore.Polyline) { s.drawShoreLine(dst, proj, ring, line, weight) },
 	)
 }
 
@@ -260,7 +264,7 @@ func pixelOf(x, y float64) image.Point {
 // early. The distance test is per axis rather than a hypotenuse: it is off by
 // at most a factor of the square root of two on a diagonal, which for deciding
 // whether a segment is worth a pixel is not worth a square root.
-func (s *Scene) drawShoreLine(dst *canvas.Canvas, proj projector, ring circle, line shore.Polyline) {
+func (s *Scene) drawShoreLine(dst *canvas.Canvas, proj projector, ring circle, line shore.Polyline, weight int) {
 	if len(line) < 2 {
 		return
 	}
@@ -276,7 +280,7 @@ func (s *Scene) drawShoreLine(dst *canvas.Canvas, proj projector, ring circle, l
 		}
 
 		if piece, inside := ring.clip(segment{fromX: fromX, fromY: fromY, toX: toX, toY: toY}); inside {
-			dst.LineAA(piece.fromX, piece.fromY, piece.toX, piece.toY, s.pal.Shore)
+			dst.StrokeLineAA(piece.fromX, piece.fromY, piece.toX, piece.toY, weight, s.pal.Shore)
 		}
 
 		fromX, fromY = toX, toY

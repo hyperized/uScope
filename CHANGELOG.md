@@ -34,6 +34,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - `--theme` defaults to `auto` rather than `night`.
+- The radar's layout scales with the canvas height. A canvas 2160 pixels
+  tall or more draws its type, softkeys, column, markers, sprites and line
+  widths at a whole multiple of the 1080 layout, so `--size 3840x2160` is the
+  1080 picture at twice the size. Anything shorter renders exactly as before.
+
 
 ### Fixed
 

@@ -7,9 +7,7 @@ import (
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
-	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
-	"github.com/hyperized/uScope/pkg/text"
 )
 
 // The small shapes and the stand-in words the flight strips are drawn from.
@@ -104,18 +102,19 @@ func level(rate float64) bool {
 // drawVertMarker draws the climb or descent triangle and returns the x just
 // past it. It is filled in the aircraft's own colour, so the marker says which
 // aeroplane it belongs to as well as which way it is going.
-func (s *Scene) drawVertMarker(dst *canvas.Canvas, left, top int, rate float64, col color.RGBA) int {
-	half := vertMarker / 2
-	middle := top + lineHeight(s.faces.Body)/2
+func (s *Scene) drawVertMarker(lay *layout, left, top int, rate float64, col color.RGBA) int {
+	side := lay.px(vertMarker)
+	half := side / 2
+	middle := top + lay.lineHeight(s.faces.Body)/2
 	apex, base := middle-half, middle+half
 
 	if rate < 0 {
 		apex, base = base, apex
 	}
 
-	dst.FillTriangle(left+half, apex, left, base, left+vertMarker-1, base, col)
+	lay.dst.FillTriangle(left+half, apex, left, base, left+side-1, base, col)
 
-	return left + vertMarker + vertGap
+	return left + side + lay.px(vertGap)
 }
 
 // drawTrend marks a climb or a descent after a level and returns the x just
@@ -133,7 +132,7 @@ func (s *Scene) drawVertMarker(dst *canvas.Canvas, left, top int, rate float64, 
 // function rather than two, because a panel showing a climb the tag has no
 // arrow on would be the same aeroplane contradicting itself on one screen.
 func (s *Scene) drawTrend(
-	dst *canvas.Canvas, face *psf.Font, pen, top int, rate float64, ink color.RGBA,
+	lay *layout, face *psf.Font, pen, top int, rate float64, ink color.RGBA,
 ) int {
 	if level(rate) {
 		return pen
@@ -145,16 +144,16 @@ func (s *Scene) drawTrend(
 	}
 
 	if _, has := face.Glyph(mark); has {
-		return text.Draw(dst, face, pen, top, glyph, ink)
+		return lay.text(face, pen, top, glyph, ink)
 	}
 
-	return s.drawVertMarker(dst, pen, top, rate, ink)
+	return s.drawVertMarker(lay, pen, top, rate, ink)
 }
 
 // arrowWidth is the room the direction arrow takes beside a figure, the gap
 // before it included.
-func (*Scene) arrowWidth() int {
-	return arrowGap + arrowCell
+func (*Scene) arrowWidth(lay *layout) int {
+	return lay.px(arrowGap + arrowCell)
 }
 
 // drawArrow draws the direction arrow at left, pointing at the angle the
@@ -175,9 +174,13 @@ func (*Scene) arrowWidth() int {
 // It is centred on the line rather than set on its baseline, the same way the
 // climb triangle is. It is a shape beside type and not a glyph in it.
 //
+// At a larger scale the corners are worked out at the larger size rather than
+// the small triangle being enlarged, for the reason it is computed at all.
+//
 //nolint:varnamelen // middle is the line's vertical centre, the pixel idiom used throughout uScope.
-func (*Scene) drawArrow(dst *canvas.Canvas, left, middle int, degrees float64, ink color.RGBA) {
-	centreX, centreY := float64(left+arrowCell/2), float64(middle)
+func (*Scene) drawArrow(lay *layout, left, middle int, degrees float64, ink color.RGBA) {
+	centreX, centreY := float64(left+lay.px(arrowCell)/2), float64(middle)
+	apex, base, half := lay.pxf(arrowApex), lay.pxf(arrowBase), lay.pxf(arrowHalf)
 
 	// The compass, on a canvas whose y grows downward: zero points up the
 	// screen and increasing turns clockwise. forward is the way the arrow
@@ -187,13 +190,13 @@ func (*Scene) drawArrow(dst *canvas.Canvas, left, middle int, degrees float64, i
 	forwardX, forwardY := sin, -cos
 	sideX, sideY := cos, sin
 
-	apexX, apexY := centreX+forwardX*arrowApex, centreY+forwardY*arrowApex
-	backX, backY := centreX-forwardX*arrowBase, centreY-forwardY*arrowBase
+	apexX, apexY := centreX+forwardX*apex, centreY+forwardY*apex
+	backX, backY := centreX-forwardX*base, centreY-forwardY*base
 
-	dst.FillTriangle(
+	lay.dst.FillTriangle(
 		round(apexX), round(apexY),
-		round(backX-sideX*arrowHalf), round(backY-sideY*arrowHalf),
-		round(backX+sideX*arrowHalf), round(backY+sideY*arrowHalf),
+		round(backX-sideX*half), round(backY-sideY*half),
+		round(backX+sideX*half), round(backY+sideY*half),
 		ink,
 	)
 }

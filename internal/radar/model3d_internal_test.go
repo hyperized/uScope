@@ -345,8 +345,8 @@ func TestCellCameraIsTheSameEveryRow(t *testing.T) {
 	first := image.Pt(column, firstRow)
 	second := image.Pt(column, secondRow)
 
-	top := posedAt(newCellCamera3(first), point3{}, 41, modelPitchDeg, 0)
-	bottom := posedAt(newCellCamera3(second), point3{}, 41, modelPitchDeg, 0)
+	top := posedAt(newCellCamera3(first, 1), point3{}, 41, modelPitchDeg, 0)
+	bottom := posedAt(newCellCamera3(second, 1), point3{}, 41, modelPitchDeg, 0)
 
 	for index := range modelVertexCount {
 		if !top.posed.seen[index] || !bottom.posed.seen[index] {
@@ -391,7 +391,7 @@ func TestCellModelFacesTheHeading(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			scene := posedAt(newCellCamera3(centre), point3{}, testCase.headingDeg, 0, 0)
+			scene := posedAt(newCellCamera3(centre, 1), point3{}, testCase.headingDeg, 0, 0)
 
 			offX := sign(scene.posed.atX[vertNose] - scene.posed.atX[vertTail])
 			offY := sign(scene.posed.atY[vertNose] - scene.posed.atY[vertTail])
@@ -444,7 +444,7 @@ func TestModelRollDropsTheInsideWing(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			scene := posedAt(newCellCamera3(centre), point3{}, 0, 0, testCase.bankDeg)
+			scene := posedAt(newCellCamera3(centre, 1), point3{}, 0, 0, testCase.bankDeg)
 
 			rightY, leftY := scene.posed.atY[vertWingTipRight], scene.posed.atY[vertWingTipLeft]
 
@@ -466,7 +466,7 @@ func TestModelRollDropsTheInsideWing(t *testing.T) {
 func TestCellCameraDrawsAtTheSpanItWasAsked(t *testing.T) {
 	t.Parallel()
 
-	scene := posedAt(newCellCamera3(image.Pt(100, 100)), point3{}, 0, 0, 0)
+	scene := posedAt(newCellCamera3(image.Pt(100, 100), 1), point3{}, 0, 0, 0)
 
 	got := scene.posed.atX[vertWingTipRight] - scene.posed.atX[vertWingTipLeft]
 

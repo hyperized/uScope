@@ -276,7 +276,7 @@ func (s *Scene) drawKeyBar(lay *layout) {
 		return
 	}
 
-	top := lay.bottom - (reserved - blockGap)
+	top := lay.bottom - (reserved - lay.px(blockGap))
 
 	pen := s.drawCaps(lay, lay.left, top, keyCaps[:])
 
@@ -303,7 +303,7 @@ func (s *Scene) drawKeyBar(lay *layout) {
 // there was more, where stopping short of it just looks like the bar ended.
 func (s *Scene) drawCaps(lay *layout, pen, top int, caps []keyCap) int {
 	for _, entry := range caps {
-		pen = s.drawSoftkey(lay.dst, pen, top, entry) + keyGap
+		pen = s.drawSoftkey(lay, pen, top, entry) + lay.px(keyGap)
 
 		if pen >= lay.right {
 			break
@@ -326,17 +326,17 @@ func (s *Scene) drawCaps(lay *layout, pen, top int, caps []keyCap) int {
 // letter is the taller of the two and it is what the box has to hold; the
 // label is centred against it.
 func (s *Scene) keyBarHeight(lay *layout) int {
-	capHeight := lineHeight(s.faces.BodyBold)
-	if capHeight == 0 || lineHeight(s.faces.Small) == 0 {
+	capHeight := lay.lineHeight(s.faces.BodyBold)
+	if capHeight == 0 || lay.lineHeight(s.faces.Small) == 0 {
 		return 0
 	}
 
-	height := capHeight + 2*keyPadY
+	height := capHeight + 2*lay.px(keyPadY)
 	if !lay.fits(height) {
 		return 0
 	}
 
-	return height + blockGap
+	return height + lay.px(blockGap)
 }
 
 // drawSoftkey draws one key as a softkey and returns the x just past its box.
@@ -353,44 +353,45 @@ func (s *Scene) keyBarHeight(lay *layout) int {
 // are one, two and three characters long and the labels four to eight, so a
 // grid of equal boxes would be sized for TILT and ENVELOPE at once and waste
 // most of the bar on the short ones.
-func (s *Scene) drawSoftkey(dst *canvas.Canvas, left, top int, entry keyCap) int {
+func (s *Scene) drawSoftkey(lay *layout, left, top int, entry keyCap) int {
 	bold, small := s.faces.BodyBold, s.faces.Small
 	word := s.capLabel(entry)
 
-	capWidth, capHeight := text.Measure(bold, entry.key)
-	labelWidth, labelHeight := text.Measure(small, word, text.WithSpacing(labelTracking))
+	padX, padY, capGap := lay.px(keyPadX), lay.px(keyPadY), lay.px(keyCapGap)
+	capWidth, capHeight := text.Measure(bold, entry.key, lay.glyphs())
+	labelWidth, labelHeight := text.Measure(small, word, lay.glyphs(), lay.tracking(labelTracking))
 
 	box := image.Rect(left, top,
-		left+2*keyPadX+capWidth+keyCapGap+labelWidth, top+2*keyPadY+capHeight)
+		left+2*padX+capWidth+capGap+labelWidth, top+2*padY+capHeight)
 
-	dst.FillRect(box, s.pal.Key)
+	lay.dst.FillRect(box, s.pal.Key)
 
-	pen := text.Draw(dst, bold, left+keyPadX, top+keyPadY, entry.key, s.pal.Ink)
+	pen := lay.text(bold, left+padX, top+padY, entry.key, s.pal.Ink)
 
 	// The label rides the middle of the cap letter's line rather than its
 	// baseline. The two faces are four pixels apart in height, and a small
 	// label set on the bold one's baseline sits low enough in the box to read
 	// as a second row.
-	text.Draw(dst, small, pen+keyCapGap, top+keyPadY+(capHeight-labelHeight)/2, word, s.pal.Ink,
-		text.WithSpacing(labelTracking))
+	lay.tracked(small, pen+capGap, top+padY+(capHeight-labelHeight)/2, word, s.pal.Ink)
 
-	s.drawEngaged(dst, box, entry.state)
+	s.drawEngaged(lay, box, entry.state)
 
 	return box.Max.X
 }
 
 // drawEngaged puts the green bar along the inside of a softkey's bottom edge
 // when its setting is on, and nothing at all when it is off.
-func (s *Scene) drawEngaged(dst *canvas.Canvas, box image.Rectangle, which capToggle) {
+func (s *Scene) drawEngaged(lay *layout, box image.Rectangle, which capToggle) {
 	if !s.capEngaged(which) {
 		return
 	}
 
-	bar := box.Max.Y - keyPadY
+	bar := box.Max.Y - lay.px(keyPadY)
+	inset := lay.px(keyEngagedInset)
 
-	dst.FillRect(image.Rect(
-		box.Min.X+keyEngagedInset, bar,
-		box.Max.X-keyEngagedInset, bar+keyEngagedHeight), s.pal.OK)
+	lay.dst.FillRect(image.Rect(
+		box.Min.X+inset, bar,
+		box.Max.X-inset, bar+lay.px(keyEngagedHeight)), s.pal.OK)
 }
 
 // capEngaged reports whether a softkey shows its engaged bar.
@@ -527,8 +528,8 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 		return
 	}
 
-	markHeight := lineHeight(s.faces.BodyBold)
-	band := total - ruleHeight - blockGap
+	markHeight := lay.lineHeight(s.faces.BodyBold)
+	band := total - lay.px(ruleHeight) - lay.px(blockGap)
 	bounds := lay.dst.Bounds()
 	rule := lay.top + band
 
@@ -547,7 +548,7 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	// inside the stack at both ends. TestHeaderTypeIsCentredInTheBand measures
 	// the ink rather than the boxes, which is what would catch a face whose
 	// metrics are not so even.
-	stack := markHeight + rowLead + lineHeight(s.faces.Small)
+	stack := markHeight + lay.px(rowLead) + lay.lineHeight(s.faces.Small)
 	top := bounds.Min.Y + (rule-bounds.Min.Y-stack)/2
 
 	// The right of the band is drawn first because it is the only thing that
@@ -561,12 +562,12 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 	// The receiver line goes down before it, because the sun block on the
 	// right sits across both lines of the left-hand stack and has to stop
 	// short of whichever of the two reaches further.
-	reach := s.drawReceiverLine(lay, top+markHeight+rowLead, frame.Receiver)
+	reach := s.drawReceiverLine(lay, top+markHeight+lay.px(rowLead), frame.Receiver)
 	edge := s.drawHeaderRight(lay, (bounds.Min.Y+rule)/2, frame, reach)
 
-	s.drawWordmark(lay, top, frame, edge-sourceLabelGap)
+	s.drawWordmark(lay, top, frame, edge-lay.px(sourceLabelGap))
 
-	lay.dst.FillRect(image.Rect(bounds.Min.X, rule, bounds.Max.X, rule+ruleHeight), s.pal.Rule)
+	lay.dst.FillRect(image.Rect(bounds.Min.X, rule, bounds.Max.X, rule+lay.px(ruleHeight)), s.pal.Rule)
 
 	lay.top += total
 }
@@ -579,17 +580,17 @@ func (s *Scene) drawHeader(lay *layout, frame source.Frame) {
 // push the scope down by exactly what the header will push it down by, without
 // drawing a band of its own over the one the frame draws.
 func (s *Scene) headerHeight(lay *layout) int {
-	markHeight := lineHeight(s.faces.BodyBold)
-	smallHeight := lineHeight(s.faces.Small)
-	clockHeight := lineHeight(s.faces.Large)
+	markHeight := lay.lineHeight(s.faces.BodyBold)
+	smallHeight := lay.lineHeight(s.faces.Small)
+	clockHeight := lay.lineHeight(s.faces.Large)
 
 	if markHeight == 0 || smallHeight == 0 || clockHeight == 0 {
 		return 0
 	}
 
-	band := max(markHeight+rowLead+smallHeight, clockHeight) + 2*headerPadY
+	band := max(markHeight+lay.px(rowLead)+smallHeight, clockHeight) + 2*lay.px(headerPadY)
 
-	total := band + ruleHeight + blockGap
+	total := band + lay.px(ruleHeight) + lay.px(blockGap)
 	if !lay.fits(total) {
 		return 0
 	}
@@ -612,22 +613,23 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	// Both faces are known to be present: drawHeader drops the whole band
 	// unless all three of its faces loaded, so there is nothing to check here.
 	face := s.faces.Small
-	markHeight := lineHeight(s.faces.BodyBold)
+	markHeight := lay.lineHeight(s.faces.BodyBold)
 
 	pen := text.Draw(lay.dst, s.faces.BodyBold, lay.left, top, appTitle, s.pal.BandInk,
-		text.WithSpacing(headerTracking))
+		lay.glyphs(), lay.tracking(headerTracking))
 
-	pen += sourceGap
+	pen += lay.px(sourceGap)
+	radius := lay.px(dotRadius)
 	middle := top + markHeight/2
 
 	if frame.Source.Connected {
-		lay.dst.FillCircle(pen+dotRadius, middle, dotRadius, s.pal.OnBand(s.pal.OK))
+		lay.dst.FillCircle(pen+radius, middle, radius, s.pal.OnBand(s.pal.OK))
 	} else {
-		lay.dst.Circle(pen+dotRadius, middle, dotRadius, s.pal.OnBand(s.pal.Muted))
+		lay.dst.StrokeCircle(pen+radius, middle, radius, lay.unit(), s.pal.OnBand(s.pal.Muted))
 	}
 
-	pen += 2*dotRadius + dotGap
-	label := top + (markHeight-face.Height())/2
+	pen += 2*radius + lay.px(dotGap)
+	label := top + (markHeight-lay.lineHeight(face))/2
 
 	// The sweep marker takes its room out of the label's budget before the
 	// label is cut rather than being appended after it. Appended, a long
@@ -635,16 +637,15 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 	// the band, which is the one thing sourceLabelGap exists to prevent.
 	reserved := 0
 	if frame.Sweeping {
-		reserved, _ = text.Measure(face, sweepSuffix, text.WithSpacing(labelTracking))
+		reserved = lay.measureTracked(face, sweepSuffix)
 	}
 
-	head, marker := fitLabel(face, frame.Source.Label, limit-pen-reserved)
-	pen = text.Draw(lay.dst, face, pen, label, head, s.pal.OnBand(s.pal.Data), text.WithSpacing(labelTracking))
-	pen = text.Draw(lay.dst, face, pen, label, marker, s.pal.OnBand(s.pal.Data), text.WithSpacing(labelTracking))
+	head, marker := lay.fitLabel(face, frame.Source.Label, limit-pen-reserved)
+	pen = lay.tracked(face, pen, label, head, s.pal.OnBand(s.pal.Data))
+	pen = lay.tracked(face, pen, label, marker, s.pal.OnBand(s.pal.Data))
 
 	if frame.Sweeping {
-		text.Draw(lay.dst, face, pen, label, sweepSuffix, s.pal.OnBand(s.pal.Caution),
-			text.WithSpacing(labelTracking))
+		lay.tracked(face, pen, label, sweepSuffix, s.pal.OnBand(s.pal.Caution))
 	}
 }
 
@@ -659,8 +660,8 @@ func (s *Scene) drawWordmark(lay *layout, top int, frame source.Frame, limit int
 //
 // An empty marker means nothing was cut, so the caller draws the label and
 // then draws nothing, which costs one call that measures zero.
-func fitLabel(face *psf.Font, label string, width int) (string, string) {
-	room := fitRunes(face, width, labelTracking)
+func (l *layout) fitLabel(face *psf.Font, label string, width int) (string, string) {
+	room := l.fitRunes(face, width, labelTracking)
 	if room <= 0 {
 		return "", ""
 	}
@@ -709,24 +710,24 @@ func cutMarker(face *psf.Font) string {
 func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver) int {
 	face := s.faces.Small
 	ink := s.pal.OnBand(s.fixColour(receiver.Mode, s.pal.BandInk))
-	left := text.Draw(lay.dst, face, lay.left, top, locPrefix, s.pal.BandInk)
+	left := lay.text(face, lay.left, top, locPrefix, s.pal.BandInk)
 
 	switch receiver.Label {
 	case source.LabelEstimate:
-		pen := text.Draw(lay.dst, face, left, top, estimatePrefix, ink)
-		pen = drawBytes(lay.dst, face, pen, top, s.whole(receiver.DoubtNm()), ink)
-		pen = text.Draw(lay.dst, face, pen, top, rangeUnit, ink)
-		pen = s.drawBound(lay.dst, face, pen, top, receiver)
+		pen := lay.text(face, left, top, estimatePrefix, ink)
+		pen = lay.drawBytes(face, pen, top, s.whole(receiver.DoubtNm()), ink)
+		pen = lay.text(face, pen, top, rangeUnit, ink)
+		pen = s.drawBound(lay, face, pen, top, receiver)
 
-		return s.drawDoubt(lay.dst, face, pen, top, receiver.Violated)
+		return s.drawDoubt(lay, face, pen, top, receiver.Violated)
 	case source.LabelNone:
-		return text.Draw(lay.dst, face, left, top, noFixText, ink)
+		return lay.text(face, left, top, noFixText, ink)
 	default:
-		pen := text.Draw(lay.dst, face, left, top, modeWord(receiver.Mode), ink) + modeGap
-		pen = drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.OnBand(s.pal.Data))
-		pen = text.Draw(lay.dst, face, pen, top, coordinateSeparator, s.pal.OnBand(s.pal.Data))
+		pen := lay.text(face, left, top, modeWord(receiver.Mode), ink) + lay.px(modeGap)
+		pen = lay.drawBytes(face, pen, top, s.coordinate(receiver.Latitude, 'N', 'S'), s.pal.OnBand(s.pal.Data))
+		pen = lay.text(face, pen, top, coordinateSeparator, s.pal.OnBand(s.pal.Data))
 
-		return drawBytes(lay.dst, face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.OnBand(s.pal.Data))
+		return lay.drawBytes(face, pen, top, s.coordinate(receiver.Longitude, 'E', 'W'), s.pal.OnBand(s.pal.Data))
 	}
 }
 
@@ -737,16 +738,16 @@ func (s *Scene) drawReceiverLine(lay *layout, top int, receiver source.Receiver)
 // shows; see source.Receiver. While the locator has too few observations to
 // measure a spread the two are the same figure, and Receiver.BoundShown is
 // false, so the line stays EST ±97 NM rather than saying it twice.
-func (s *Scene) drawBound(dst *canvas.Canvas, face *psf.Font, pen, top int, receiver source.Receiver) int {
+func (s *Scene) drawBound(lay *layout, face *psf.Font, pen, top int, receiver source.Receiver) int {
 	if !receiver.BoundShown() {
 		return pen
 	}
 
 	quiet := s.bandMuted()
-	pen = text.Draw(dst, face, pen, top, boundPrefix, quiet)
-	pen = drawBytes(dst, face, pen, top, s.whole(receiver.ConfidenceNm), quiet)
+	pen = lay.text(face, pen, top, boundPrefix, quiet)
+	pen = lay.drawBytes(face, pen, top, s.whole(receiver.ConfidenceNm), quiet)
 
-	return text.Draw(dst, face, pen, top, rangeUnit, quiet)
+	return lay.text(face, pen, top, rangeUnit, quiet)
 }
 
 // drawDoubt marks an estimate the self-locator does not fully believe.
@@ -762,12 +763,12 @@ func (s *Scene) drawBound(dst *canvas.Canvas, face *psf.Font, pen, top int, rece
 // already carries, so it reads as part of the same doubt rather than as a
 // second thing to decode. It returns the pen past the marker, or where it
 // would have gone when there is none.
-func (s *Scene) drawDoubt(dst *canvas.Canvas, face *psf.Font, pen, top, violated int) int {
+func (s *Scene) drawDoubt(lay *layout, face *psf.Font, pen, top, violated int) int {
 	if violated == 0 {
 		return pen
 	}
 
-	return text.Draw(dst, face, pen, top, doubtMarker, s.pal.OnBand(s.pal.Caution))
+	return lay.text(face, pen, top, doubtMarker, s.pal.OnBand(s.pal.Caution))
 }
 
 // modeWord opens the receiver line when there are coordinates after it.
@@ -901,17 +902,17 @@ func (s *Scene) bandMuted() color.RGBA {
 func (s *Scene) drawHeaderRight(lay *layout, middle int, frame source.Frame, reach int) int {
 	pen := lay.right
 	if left, drawn := s.drawBattery(lay, pen, middle); drawn {
-		pen = left - clockGap
+		pen = left - lay.px(clockGap)
 	}
 
 	local := frame.Now.AppendFormat(s.clock[:0], clockFormat)
-	pen = s.drawClock(lay, pen, middle, labelLocal, s.faces.Large, local) - clockGap
+	pen = s.drawClock(lay, pen, middle, labelLocal, s.faces.Large, local) - lay.px(clockGap)
 
 	utc := append(frame.Now.UTC().AppendFormat(s.clock[:0], clockFormat), utcSuffix)
 	pen = s.drawClock(lay, pen, middle, labelUTC, s.faces.Body, utc)
 
-	limit := max(lay.left+s.wordmarkWidth(frame), reach+sourceLabelGap)
-	if left, drawn := s.drawSunBlock(lay, pen-clockGap, middle, limit); drawn {
+	limit := max(lay.left+s.wordmarkWidth(lay, frame), reach+lay.px(sourceLabelGap))
+	if left, drawn := s.drawSunBlock(lay, pen-lay.px(clockGap), middle, limit); drawn {
 		pen = left
 	}
 
@@ -931,13 +932,13 @@ func (s *Scene) drawClock(
 ) int {
 	small := s.faces.Small
 
-	labelWidth, labelHeight := text.Measure(small, label, text.WithSpacing(labelTracking))
-	valueWidth := measureBytes(face, value)
-	left := rightX - labelWidth - clockLabelGap - valueWidth
+	labelWidth, labelHeight := text.Measure(small, label, lay.glyphs(), lay.tracking(labelTracking))
+	valueWidth := lay.measureBytes(face, value)
+	gap := lay.px(clockLabelGap)
+	left := rightX - labelWidth - gap - valueWidth
 
-	text.Draw(lay.dst, small, left, middle-labelHeight/2, label, s.bandMuted(), text.WithSpacing(labelTracking))
-	drawBytes(lay.dst, face, left+labelWidth+clockLabelGap, middle-lineHeight(face)/2, value,
-		s.pal.OnBand(s.pal.Data))
+	lay.tracked(small, left, middle-labelHeight/2, label, s.bandMuted())
+	lay.drawBytes(face, left+labelWidth+gap, middle-lay.lineHeight(face)/2, value, s.pal.OnBand(s.pal.Data))
 
 	return left
 }
@@ -961,38 +962,42 @@ func (s *Scene) drawBattery(lay *layout, rightX, middle int) (int, bool) {
 	}
 
 	face := s.faces.Small
-	fieldWidth, fieldHeight := text.Measure(face, batteryField)
+	fieldWidth, fieldHeight := text.Measure(face, batteryField, lay.glyphs())
 
-	left := rightX - fieldWidth - batteryGap - batteryWidth - batteryNubW
-	top := middle - batteryHeight/2
+	left := rightX - fieldWidth - lay.px(batteryGap) - lay.px(batteryWidth) - lay.px(batteryNubW)
+	top := middle - lay.px(batteryHeight/2)
 
-	s.drawBatteryShell(lay.dst, left, top)
+	s.drawBatteryShell(lay, left, top)
 
-	inner := image.Rect(left+batteryInset, top+batteryInset,
-		left+batteryWidth-batteryInset, top+batteryHeight-batteryInset)
+	inset := lay.px(batteryInset)
+	inner := image.Rect(left+inset, top+inset,
+		left+lay.px(batteryWidth)-inset, top+lay.px(batteryHeight)-inset)
 
 	if s.battery.IsCharging() {
-		s.drawChargingBolt(lay.dst, inner)
+		s.drawChargingBolt(lay, inner)
 	} else {
 		s.drawBatteryLevel(lay.dst, inner, int(percent))
 	}
 
-	pen := drawBytes(lay.dst, face, rightX-fieldWidth, middle-fieldHeight/2, s.count(int(percent)),
+	pen := lay.drawBytes(face, rightX-fieldWidth, middle-fieldHeight/2, s.count(int(percent)),
 		s.pal.OnBand(s.pal.Data))
-	text.Draw(lay.dst, face, pen, middle-fieldHeight/2, percentSign, s.pal.OnBand(s.pal.Data))
+	lay.text(face, pen, middle-fieldHeight/2, percentSign, s.pal.OnBand(s.pal.Data))
 
 	return left, true
 }
 
 // drawBatteryShell draws the cell and its nub, which is the part that looks
 // the same whatever the battery is doing.
-func (s *Scene) drawBatteryShell(dst *canvas.Canvas, left, top int) {
+func (s *Scene) drawBatteryShell(lay *layout, left, top int) {
 	outline := s.bandMuted()
+	width, height := lay.px(batteryWidth), lay.px(batteryHeight)
+	nubW, nubH := lay.px(batteryNubW), lay.px(batteryNubH)
 
-	dst.Rect(image.Rect(left, top, left+batteryWidth, top+batteryHeight), outline)
-	dst.FillRect(image.Rect(
-		left+batteryWidth, top+(batteryHeight-batteryNubH)/2,
-		left+batteryWidth+batteryNubW, top+(batteryHeight+batteryNubH)/2), outline)
+	lay.dst.StrokeRect(
+		image.Rect(left, top, left+width, top+height), lay.unit(), outline)
+	lay.dst.FillRect(image.Rect(
+		left+width, top+(height-nubH)/2,
+		left+width+nubW, top+(height+nubH)/2), outline)
 }
 
 // drawBatteryLevel fills the cell in proportion to the charge left.
@@ -1027,13 +1032,18 @@ func (s *Scene) batteryInk(percent int) color.RGBA {
 }
 
 // drawChargingBolt draws the lightning mark inside a charging battery.
-func (s *Scene) drawChargingBolt(dst *canvas.Canvas, inner image.Rectangle) {
+//
+// The strokes are stamped a design pixel wide rather than drawn as hairlines at
+// any scale. At eleven pixels the bolt is a pixel drawing, and the same drawing
+// enlarged is what it should look like on a bigger canvas.
+func (s *Scene) drawChargingBolt(lay *layout, inner image.Rectangle) {
 	ink := s.pal.OnBand(s.pal.OK)
-	topX := inner.Min.X + inner.Dx()/2 + boltInset
-	waistX := inner.Min.X + inner.Dx()/2 - boltInset
-	waistY := inner.Min.Y + boltWaist
+	weight := lay.unit()
+	topX := inner.Min.X + inner.Dx()/2 + lay.px(boltInset)
+	waistX := inner.Min.X + inner.Dx()/2 - lay.px(boltInset)
+	waistY := inner.Min.Y + lay.px(boltWaist)
 
-	dst.Line(topX, inner.Min.Y, waistX, waistY, ink)
-	dst.Line(waistX, waistY, topX, waistY, ink)
-	dst.Line(topX, waistY, waistX, inner.Max.Y-1, ink)
+	lay.dst.StrokeLine(topX, inner.Min.Y, waistX, waistY, weight, ink)
+	lay.dst.StrokeLine(waistX, waistY, topX, waistY, weight, ink)
+	lay.dst.StrokeLine(topX, waistY, waistX, inner.Max.Y-weight, weight, ink)
 }

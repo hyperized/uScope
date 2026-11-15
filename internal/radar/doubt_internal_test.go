@@ -126,10 +126,10 @@ func TestReceiverLineWritesTheBoundBesideTheSpread(t *testing.T) {
 	quiet := scene.bandMuted()
 	pen := text.Draw(reference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
 	pen = text.Draw(reference, faces.Small, pen, top, estimatePrefix, ink)
-	pen = drawBytes(reference, faces.Small, pen, top, scene.whole(measured.SpreadNm), ink)
+	pen = (&layout{dst: reference}).drawBytes(faces.Small, pen, top, scene.whole(measured.SpreadNm), ink)
 	pen = text.Draw(reference, faces.Small, pen, top, rangeUnit, ink)
 	pen = text.Draw(reference, faces.Small, pen, top, boundPrefix, quiet)
-	pen = drawBytes(reference, faces.Small, pen, top, scene.whole(measured.ConfidenceNm), quiet)
+	pen = (&layout{dst: reference}).drawBytes(faces.Small, pen, top, scene.whole(measured.ConfidenceNm), quiet)
 	text.Draw(reference, faces.Small, pen, top, rangeUnit, quiet)
 
 	if !samePixels(got, reference, reference.Bounds()) {
@@ -139,7 +139,7 @@ func TestReceiverLineWritesTheBoundBesideTheSpread(t *testing.T) {
 	plainReference := lineCanvas(t)
 	pen = text.Draw(plainReference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
 	pen = text.Draw(plainReference, faces.Small, pen, top, estimatePrefix, ink)
-	pen = drawBytes(plainReference, faces.Small, pen, top, scene.whole(unmeasured.ConfidenceNm), ink)
+	pen = (&layout{dst: plainReference}).drawBytes(faces.Small, pen, top, scene.whole(unmeasured.ConfidenceNm), ink)
 	text.Draw(plainReference, faces.Small, pen, top, rangeUnit, ink)
 
 	if !samePixels(plain, plainReference, plainReference.Bounds()) {

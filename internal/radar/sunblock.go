@@ -104,9 +104,9 @@ func (s *Scene) drawSunBlock(lay *layout, rightX, middle, limit int) (int, bool)
 	word := s.daylight.condition.String()
 	times := s.daylight.times
 
-	width, _ := text.Measure(small, word, text.WithSpacing(labelTracking))
+	width := lay.measureTracked(small, word)
 	if len(times) > 0 {
-		width += clockLabelGap + measureBytes(small, times)
+		width += lay.px(clockLabelGap) + lay.measureBytes(small, times)
 	}
 
 	left := rightX - width
@@ -114,11 +114,11 @@ func (s *Scene) drawSunBlock(lay *layout, rightX, middle, limit int) (int, bool)
 		return rightX, false
 	}
 
-	top := middle - lineHeight(small)/2
-	pen := text.Draw(lay.dst, small, left, top, word, s.pal.BandInk, text.WithSpacing(labelTracking))
+	top := middle - lay.lineHeight(small)/2
+	pen := lay.tracked(small, left, top, word, s.pal.BandInk)
 
 	if len(times) > 0 {
-		drawBytes(lay.dst, small, pen+clockLabelGap, top, times, s.bandMuted())
+		lay.drawBytes(small, pen+lay.px(clockLabelGap), top, times, s.bandMuted())
 	}
 
 	return left, true
@@ -129,17 +129,16 @@ func (s *Scene) drawSunBlock(lay *layout, rightX, middle, limit int) (int, bool)
 // runs, plus the gap the label keeps from whatever is on its right.
 //
 // The sun block measures against it so it gives way before the label is cut.
-func (s *Scene) wordmarkWidth(frame source.Frame) int {
+func (s *Scene) wordmarkWidth(lay *layout, frame source.Frame) int {
 	small := s.faces.Small
 
-	title, _ := text.Measure(s.faces.BodyBold, appTitle, text.WithSpacing(headerTracking))
-	label, _ := text.Measure(small, frame.Source.Label, text.WithSpacing(labelTracking))
+	title, _ := text.Measure(s.faces.BodyBold, appTitle, lay.glyphs(), lay.tracking(headerTracking))
 
-	width := title + sourceGap + 2*dotRadius + dotGap + label + sourceLabelGap
+	width := title + lay.px(sourceGap) + 2*lay.px(dotRadius) + lay.px(dotGap)
+	width += lay.measureTracked(small, frame.Source.Label) + lay.px(sourceLabelGap)
 
 	if frame.Sweeping {
-		sweep, _ := text.Measure(small, sweepSuffix, text.WithSpacing(labelTracking))
-		width += sweep
+		width += lay.measureTracked(small, sweepSuffix)
 	}
 
 	return width

@@ -112,6 +112,12 @@ type scene3 struct {
 	// deciding whether a piece of coast is worth drawing is close enough.
 	minSegNm float64
 
+	// weight is the line weight every stroke in the view is drawn at: the
+	// layout's scale, so the rings, the bowl, the coast and the trails thicken
+	// with the type while still being drawn at the canvas's own resolution.
+	// Zero draws a hairline, the same as one.
+	weight int
+
 	plottable bool
 }
 
@@ -192,6 +198,10 @@ func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration
 		return scene3{}, false
 	}
 
+	// The model is sized in pixels through the camera, so it grows with the
+	// scale the way the sprite does on the flat scope.
+	cam.modelSpan = lay.pxf(modelSpanPx)
+
 	origin := s.origin3(frame.Receiver)
 
 	return scene3{
@@ -203,6 +213,7 @@ func (s *Scene) measure3D(lay *layout, frame source.Frame, elapsed time.Duration
 		azimuth:   azimuth,
 		upScale:   upScale,
 		minSegNm:  2 * scopeNm * shoreMinSegment / (ringSpan * float64(lay.scope.Dx())),
+		weight:    lay.unit(),
 		plottable: positioned(origin.lat, origin.lon),
 	}, true
 }
@@ -264,7 +275,7 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 	// view it is the frame's only clear and a frame with no camera to draw
 	// still has to be cleared.
 	s.paintSky(window, lay.scope)
-	s.drawStars(window, lay.scope)
+	s.drawStars(window, lay.scope, lay.unit())
 
 	view, drawable := s.measure3D(lay, frame, elapsed)
 	if !drawable {
@@ -339,7 +350,7 @@ func (s *Scene) drawGround3(lay *layout, view scene3, receiver source.Receiver) 
 // against.
 func (s *Scene) drawGroundMarks3(lay *layout, view scene3, receiver source.Receiver) {
 	if s.bare() {
-		s.drawReceiver3(lay.dst, view, receiver)
+		s.drawReceiver3(lay, view, receiver)
 
 		return
 	}
@@ -381,22 +392,22 @@ func (s *Scene) drawDoubt3(
 // to check for by hand.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (s *Scene) drawReceiver3(dst *canvas.Canvas, view scene3, receiver source.Receiver) {
+func (s *Scene) drawReceiver3(lay *layout, view scene3, receiver source.Receiver) {
 	if !positioned(receiver.Latitude, receiver.Longitude) {
 		return
 	}
 
 	at := view.ground(receiver.Latitude, receiver.Longitude)
 
-	s.drawDoubt3(dst, view, at, receiver, view.reachNm)
+	s.drawDoubt3(lay.dst, view, at, receiver, view.reachNm)
 
 	x, y, ok := view.cam.at(at)
 	if !ok {
 		return
 	}
 
-	dst.Circle(x, y, receiverRadius, s.fixColour(receiver.Mode, s.pal.Muted))
-	dst.FillCircle(x, y, 1, s.pal.Muted)
+	lay.dst.StrokeCircle(x, y, lay.px(receiverRadius), lay.unit(), s.fixColour(receiver.Mode, s.pal.Muted))
+	lay.dst.FillCircle(x, y, lay.unit(), s.pal.Muted)
 }
 
 // drawRings3 draws the same range rings the scope view does, projected onto
@@ -436,7 +447,7 @@ func (*Scene) drawCircle3(
 		})
 
 		if ok && prevOK && (step-1)%dash.period < dash.on {
-			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y), col)
+			dst.StrokeLineAA(float64(prevX), float64(prevY), float64(x), float64(y), view.weight, col)
 		}
 
 		prevX, prevY, prevOK = x, y, ok
@@ -459,7 +470,7 @@ func (s *Scene) drawCardinals3(lay *layout, view scene3) {
 			continue
 		}
 
-		text.DrawCentered(lay.dst, face, x, y-face.Height()/2, mark.letter, s.pal.Muted)
+		text.DrawCentered(lay.dst, face, x, y-lay.lineHeight(face)/2, mark.letter, s.pal.Muted, lay.glyphs())
 	}
 }
 
@@ -538,7 +549,7 @@ func (s *Scene) drawShoreSegment3(dst *canvas.Canvas, view scene3, ring circle, 
 	endX, endY, endOK := view.cam.at(point3{east: piece.toX, north: piece.toY})
 
 	if startOK && endOK {
-		dst.LineAA(float64(startX), float64(startY), float64(endX), float64(endY), s.pal.Shore)
+		dst.StrokeLineAA(float64(startX), float64(startY), float64(endX), float64(endY), view.weight, s.pal.Shore)
 	}
 }
 
@@ -561,11 +572,7 @@ func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airpor
 			continue
 		}
 
-		lay.dst.Rect(image.Rect(x-airportHalf, y-airportHalf, x+airportHalf+1, y+airportHalf+1), s.pal.Rule)
-
-		if lay.labels && face != nil {
-			text.Draw(lay.dst, face, x+airportLabelGap, y-face.Height()/2, field.ICAO, s.pal.Muted)
-		}
+		s.drawAirportMark(lay, x, y, face, field.ICAO)
 	}
 }
 
@@ -643,7 +650,7 @@ func (s *Scene) drawPath3(
 		x, y, ok := view.project(fixes[index].Latitude, fixes[index].Longitude, fixes[index].Altitude)
 
 		if ok && prevOK {
-			dst.LineAA(float64(prevX), float64(prevY), float64(x), float64(y),
+			dst.StrokeLineAA(float64(prevX), float64(prevY), float64(x), float64(y), view.weight,
 				s.fade(col, segmentAlpha(plan.floor, index, span)))
 		}
 
@@ -680,7 +687,7 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot, 
 	col := s.aircraftColour(plane)
 
 	centre := view.world(plane.Latitude, plane.Longitude, plane.Altitude)
-	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col)
+	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col, view.weight)
 
 	if !s.bare() && plane.ICAO == s.selICAO {
 		s.drawSelection(lay, x, y, plane, receiver)
@@ -703,5 +710,5 @@ func (s *Scene) drawStalk3(dst *canvas.Canvas, view scene3, plane airplane.Snaps
 		return
 	}
 
-	dst.LineAA(float64(baseX), float64(baseY), float64(topX), float64(topY), s.pal.Muted)
+	dst.StrokeLineAA(float64(baseX), float64(baseY), float64(topX), float64(topY), view.weight, s.pal.Muted)
 }

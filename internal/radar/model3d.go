@@ -289,7 +289,11 @@ func (c camera3) spanScale(world point3) float64 {
 // pixel before spanScale is applied and the arithmetic in the cell comes out
 // in pixels throughout. The cull limits are a cell wide because a model that
 // landed further out than that has nothing to do with this row.
-func newCellCamera3(centre image.Point) camera3 {
+//
+// scale is the layout's, which the cell and the model in it are multiplied by.
+func newCellCamera3(centre image.Point, scale int) camera3 {
+	size := max(scale, 1)
+
 	sinEl, cosEl := math.Sincos(defaultElevation * math.Pi / halfCircle)
 
 	return camera3{
@@ -300,9 +304,9 @@ func newCellCamera3(centre image.Point) camera3 {
 		focal:     attDepthNm,
 		centerX:   centre.X,
 		centerY:   centre.Y,
-		limitX:    attCell,
-		limitY:    attCell,
-		modelSpan: attSpanPx,
+		limitX:    float64(attCell * size),
+		limitY:    float64(attCell * size),
+		modelSpan: attSpanPx * float64(size),
 	}
 }
 
@@ -401,14 +405,15 @@ func signedTurn(degrees float64) float64 {
 // the row cell from the middle of the cell itself.
 func (s *Scene) drawShape3(
 	dst *canvas.Canvas, cam camera3, plane airplane.Snapshot, centre point3, at image.Point, col color.RGBA,
+	weight int,
 ) {
 	if !knownHeading(plane.Heading) {
-		dst.FillCircle(at.X, at.Y, modelDiscRadius, col)
+		dst.FillCircle(at.X, at.Y, modelDiscRadius*max(weight, 1), col)
 
 		return
 	}
 
-	s.drawModel3(dst, cam, plane, centre, col)
+	s.drawModel3(dst, cam, plane, centre, col, weight)
 }
 
 // drawModel3 paints one aircraft as a solid shape: the far wing shaded, then
@@ -419,7 +424,7 @@ func (s *Scene) drawShape3(
 // caller has already had that camera accept the point, which is what spanScale
 // relies on.
 func (s *Scene) drawModel3(
-	dst *canvas.Canvas, cam camera3, plane airplane.Snapshot, centre point3, col color.RGBA,
+	dst *canvas.Canvas, cam camera3, plane airplane.Snapshot, centre point3, col color.RGBA, weight int,
 ) {
 	orient := newOrient3(
 		plane.Heading,
@@ -439,7 +444,7 @@ func (s *Scene) drawModel3(
 	s.fillFaces3(dst, modelFin[:], col)
 	s.fillFaces3(dst, modelFuselage[:], col)
 	s.fillFaces3(dst, near[:], col)
-	s.strokeEdges3(dst, col)
+	s.strokeEdges3(dst, col, weight)
 }
 
 // projectModel3 puts every vertex of the model on the canvas and works out
@@ -482,16 +487,16 @@ func (s *Scene) fillFaces3(dst *canvas.Canvas, faces []modelTriangle, col color.
 }
 
 // strokeEdges3 draws the model's lines over the fills that are already down.
-func (s *Scene) strokeEdges3(dst *canvas.Canvas, col color.RGBA) {
+func (s *Scene) strokeEdges3(dst *canvas.Canvas, col color.RGBA, weight int) {
 	for _, edge := range modelEdges {
 		if !s.posed.seen[edge.from] || !s.posed.seen[edge.to] {
 			continue
 		}
 
-		dst.LineAA(
+		dst.StrokeLineAA(
 			float64(s.posed.atX[edge.from]), float64(s.posed.atY[edge.from]),
 			float64(s.posed.atX[edge.to]), float64(s.posed.atY[edge.to]),
-			col,
+			weight, col,
 		)
 	}
 }

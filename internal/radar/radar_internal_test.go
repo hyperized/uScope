@@ -487,8 +487,8 @@ func TestLineHeight(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := lineHeight(testCase.face); got != testCase.want {
-				t.Errorf("lineHeight(...) = %d, want %d", got, testCase.want)
+			if got := design().lineHeight(testCase.face); got != testCase.want {
+				t.Errorf("design().lineHeight(...) = %d, want %d", got, testCase.want)
 			}
 		})
 	}
@@ -513,8 +513,8 @@ func TestGlyphWidth(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := glyphWidth(testCase.face); got != testCase.want {
-				t.Errorf("glyphWidth(...) = %d, want %d", got, testCase.want)
+			if got := design().glyphWidth(testCase.face); got != testCase.want {
+				t.Errorf("design().glyphWidth(...) = %d, want %d", got, testCase.want)
 			}
 		})
 	}
@@ -587,7 +587,7 @@ func TestGeometry(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			geom, ok := geometry(testCase.box, testCase.inset)
+			geom, ok := geometry(testCase.box, testCase.inset, ringInset)
 			if ok != testCase.wantOK {
 				t.Fatalf("geometry(...) ok = %v, want %v", ok, testCase.wantOK)
 			}
@@ -603,8 +603,8 @@ func TestGeometry(t *testing.T) {
 
 		box := image.Rect(0, 0, geometryBoxSide, geometryBoxSide)
 
-		withLabels, _ := geometry(box, insetWithLabels)
-		withoutLabels, _ := geometry(box, insetWithoutLabels)
+		withLabels, _ := geometry(box, insetWithLabels, ringInset)
+		withoutLabels, _ := geometry(box, insetWithoutLabels, ringInset)
 
 		if withLabels.rangeR >= withoutLabels.rangeR {
 			t.Errorf("rangeR with labels = %d, want less than without labels (%d)",
@@ -1618,7 +1618,7 @@ func TestPlanStrips(t *testing.T) {
 	t.Parallel()
 
 	scene := &Scene{faces: layerTestFaces(t)}
-	widths := scene.stripWidths()
+	widths := scene.stripWidths(design())
 
 	full := stripPlanWithout(widths, 0)
 	noPos := stripPlanWithout(widths, 1)
@@ -1665,7 +1665,7 @@ func TestPlanStrips(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			plan, ok := scene.planStrips(left, testCase.right)
+			plan, ok := scene.planStrips(design(), left, testCase.right)
 			if ok != testCase.wantOK {
 				t.Fatalf("planStrips(...) ok = %v, want %v", ok, testCase.wantOK)
 			}
@@ -1714,7 +1714,7 @@ func TestFitRunes(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := fitRunes(testCase.face, testCase.width, testCase.tracking); got != testCase.want {
+			if got := design().fitRunes(testCase.face, testCase.width, testCase.tracking); got != testCase.want {
 				t.Errorf("fitRunes(_, %d, %d) = %d, want %d", testCase.width, testCase.tracking, got, testCase.want)
 			}
 		})
@@ -1842,7 +1842,7 @@ func TestPlanStripsWithoutFaces(t *testing.T) {
 			testCase.blank(&faces)
 
 			scene := &Scene{faces: faces}
-			if _, ok := scene.planStrips(0, stripProbeWidth); ok {
+			if _, ok := scene.planStrips(design(), 0, stripProbeWidth); ok {
 				t.Error("planStrips reported a plan without every face")
 			}
 		})
@@ -1996,7 +1996,7 @@ func TestDrawStripLevelUsesTheBand(t *testing.T) {
 			plan.on[fieldLevel] = true
 			plan.left[fieldLevel] = levelFieldX
 
-			pen := stripPen{dst: canv, plan: plan, value: levelValueY}
+			pen := stripPen{lay: &layout{dst: canv}, plan: plan, value: levelValueY}
 			plane := airplane.Snapshot{Altitude: testCase.altitude, Callsign: sampleCallsign}
 
 			scene.drawStripLevel(pen, plane)
@@ -2033,7 +2033,7 @@ func TestDrawStripsRefusesAColumnTooShortForTheBoard(t *testing.T) {
 		Receiver: source.Receiver{Latitude: coordinateSampleLat, Longitude: stripsLon},
 	}
 
-	need := scene.boardHeadHeight() + scene.halfStripHeight()
+	need := scene.boardHeadHeight(design()) + scene.halfStripHeight(design())
 
 	draw := func(bottom int) int {
 		canv, err := canvas.New(stripsColumnWidth, bottom+stripsMargin)
@@ -2070,7 +2070,7 @@ func TestDrawStripStatusRefusesWhenTooNarrow(t *testing.T) {
 	)
 
 	scene := &Scene{faces: layerTestFaces(t), pal: theme.Night}
-	widest := measureTracked(scene.faces.Small, widestStatus)
+	widest := design().measureTracked(scene.faces.Small, widestStatus)
 
 	draw := func(right int) int {
 		canv, err := canvas.New(right+1, countCanvasHeight)
@@ -2136,7 +2136,7 @@ func TestStripFieldDrawersSkipWhenDroppedFromThePlan(t *testing.T) {
 			}
 
 			canv.Clear(theme.Night.Field)
-			testCase.draw(stripPen{dst: canv})
+			testCase.draw(stripPen{lay: &layout{dst: canv}})
 
 			if got := filterPainted(canv); got != 0 {
 				t.Errorf("%s drawer painted %d pixels with its field off the plan, want none", testCase.name, got)
@@ -2172,7 +2172,7 @@ func TestDrawHalfCodesShowsTheWarningBoxOnAnEmergency(t *testing.T) {
 		canv.Clear(theme.Night.Field)
 
 		plane := airplane.Snapshot{ICAO: icaoFirst, Emergency: emergency}
-		scene.drawHalfCodes(stripPen{dst: canv, small: halfCodesRowY}, 0, plane)
+		scene.drawHalfCodes(stripPen{lay: &layout{dst: canv}, small: halfCodesRowY}, 0, plane)
 
 		return canv
 	}
@@ -2254,7 +2254,7 @@ func TestDrawTagTrend(t *testing.T) {
 	// here uses, in the scene's own body face and in the accent, so a case says
 	// which rate it is about and nothing else.
 	trend := func(scene *Scene, canv *canvas.Canvas, rate float64) int {
-		return scene.drawTrend(canv, scene.faces.Body, trendPenX, trendTopY, rate, theme.Night.Accent)
+		return scene.drawTrend(&layout{dst: canv}, scene.faces.Body, trendPenX, trendTopY, rate, theme.Night.Accent)
 	}
 
 	t.Run("level draws no arrow and returns the pen unchanged", func(t *testing.T) {
@@ -2341,7 +2341,7 @@ func TestDrawTagWhere(t *testing.T) {
 		}
 
 		canv.Clear(theme.Night.Field)
-		scene.drawTagWhere(canv, wherePenX, whereTopY, plane, receiver)
+		scene.drawTagWhere(&layout{dst: canv}, wherePenX, whereTopY, plane, receiver)
 
 		return filterPainted(canv)
 	}
@@ -2996,7 +2996,7 @@ func TestDrawShoreLineDecimation(t *testing.T) {
 			t.Fatalf("canvas.New: %v", err)
 		}
 
-		scene.drawShoreLine(canv, proj, ring, nil)
+		scene.drawShoreLine(canv, proj, ring, nil, 1)
 
 		if got := colourCount(canv, canv.Bounds(), theme.Night.Shore); got != 0 {
 			t.Errorf("drawShoreLine with a nil polyline painted %d pixels, want 0", got)
@@ -3017,7 +3017,7 @@ func TestDrawShoreLineDecimation(t *testing.T) {
 		// which is what draws the line this test looks for.
 		line := shore.Polyline{{Lat: 0, Lon: 0}, {Lat: 0, Lon: 0.0001}, {Lat: 0, Lon: 0.5}}
 
-		scene.drawShoreLine(canv, proj, ring, line)
+		scene.drawShoreLine(canv, proj, ring, line, 1)
 
 		if got := colourCount(canv, canv.Bounds(), theme.Night.Shore); got == 0 {
 			t.Error("drawShoreLine with folded points painted 0 pixels, want the line to the last point")
@@ -3349,7 +3349,7 @@ func TestFitLabel(t *testing.T) {
 
 	glyph := small.Width()
 	step := glyph + labelTracking
-	whole := trackedWidth(small, len([]rune(label)))
+	whole := design().trackedWidth(small, len([]rune(label)))
 
 	for _, testCase := range []struct {
 		name       string
@@ -3372,7 +3372,7 @@ func TestFitLabel(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			head, marker := fitLabel(small, label, testCase.width)
+			head, marker := design().fitLabel(small, label, testCase.width)
 			if head != testCase.wantHead || marker != testCase.wantMarker {
 				t.Errorf("fitLabel(%q, %d) = (%q, %q), want (%q, %q)",
 					label, testCase.width, head, marker, testCase.wantHead, testCase.wantMarker)
@@ -3407,7 +3407,7 @@ func TestTrackedWidth(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := trackedWidth(small, testCase.runes); got != testCase.want {
+			if got := design().trackedWidth(small, testCase.runes); got != testCase.want {
 				t.Errorf("trackedWidth(%d) = %d, want %d", testCase.runes, got, testCase.want)
 			}
 		})
@@ -4298,7 +4298,7 @@ func arrowCanvas(tb testing.TB, degrees float64) (*canvas.Canvas, int, int) {
 
 	// drawArrow takes the left edge of the cell and centres the arrow in it,
 	// so the left edge is half a cell back from where the middle is wanted.
-	scene.drawArrow(canv, middle-arrowCell/2, middle, degrees, theme.Night.Ink)
+	scene.drawArrow(&layout{dst: canv}, middle-arrowCell/2, middle, degrees, theme.Night.Ink)
 
 	return canv, middle, middle
 }
@@ -4662,7 +4662,7 @@ func TestReceiverLineDoubtMarker(t *testing.T) {
 	ink := scene.fixColour(source.FixEstimated, theme.Night.BandInk)
 	pen := text.Draw(reference, faces.Small, left, top, locPrefix, theme.Night.BandInk)
 	pen = text.Draw(reference, faces.Small, pen, top, estimatePrefix, ink)
-	pen = drawBytes(reference, faces.Small, pen, top, scene.whole(receiverDoubts.ConfidenceNm), ink)
+	pen = (&layout{dst: reference}).drawBytes(faces.Small, pen, top, scene.whole(receiverDoubts.ConfidenceNm), ink)
 	pen = text.Draw(reference, faces.Small, pen, top, rangeUnit, ink)
 
 	markerWidth, markerHeight := text.Measure(faces.Small, doubtMarker)
@@ -4708,7 +4708,7 @@ func TestDrawDoubt(t *testing.T) {
 		}
 
 		canv.Clear(theme.Night.Field)
-		scene.drawDoubt(canv, face, pen, top, 0)
+		scene.drawDoubt(&layout{dst: canv}, face, pen, top, 0)
 
 		clean, err := canvas.New(side, side)
 		if err != nil {
@@ -4733,7 +4733,7 @@ func TestDrawDoubt(t *testing.T) {
 		}
 
 		canv.Clear(theme.Night.Field)
-		scene.drawDoubt(canv, face, pen, top, violated)
+		scene.drawDoubt(&layout{dst: canv}, face, pen, top, violated)
 
 		reference, err := canvas.New(side, side)
 		if err != nil {

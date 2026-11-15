@@ -8,7 +8,6 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uAirwaves/pkg/airplanes"
 	"github.com/hyperized/uScope/internal/source"
-	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
@@ -177,19 +176,19 @@ var cardShapes = [...]cardPlan{
 // the strips' own track field does: the block already has one needle on it, a
 // second beside a figure eight pixels away would read as a pair of directions
 // to reconcile rather than as one bearing to fly.
-func (s *Scene) cardWidths() [cardFigures]int {
+func (s *Scene) cardWidths(col *layout) [cardFigures]int {
 	large, small := s.faces.Large, s.faces.Small
 
 	widths := [cardFigures]int{
-		cardLevel:   measure(large, widestCardLevel),
-		cardSpeed:   measure(large, widestCardSpeed),
-		cardTrack:   measure(large, widestCardTrack),
-		cardRange:   measure(large, widestCardRange),
-		cardBearing: measure(large, widestCardBear) + s.arrowWidth(),
+		cardLevel:   col.measure(large, widestCardLevel),
+		cardSpeed:   col.measure(large, widestCardSpeed),
+		cardTrack:   col.measure(large, widestCardTrack),
+		cardRange:   col.measure(large, widestCardRange),
+		cardBearing: col.measure(large, widestCardBear) + s.arrowWidth(col),
 	}
 
 	for index := range cardFigures {
-		widths[index] = max(widths[index], measureTracked(small, cardLabels[index]))
+		widths[index] = max(widths[index], col.measureTracked(small, cardLabels[index]))
 	}
 
 	return widths
@@ -203,32 +202,33 @@ func (s *Scene) cardWidths() [cardFigures]int {
 // instead of leaving a hole under them. The warning box takes the squawk's own
 // line, after the code: an aircraft squawking 7700 is squawking a code, and
 // the box is what that code means.
-func (s *Scene) cardIdentWidth(scale int) int {
+func (s *Scene) cardIdentWidth(col *layout, scale int) int {
 	body, small := s.faces.Body, s.faces.Small
 
-	warning := measure(small, emergencyText) + 2*emergencyPadX
+	warning := col.measure(small, emergencyText) + 2*col.px(emergencyPadX)
 	codes := max(
-		measure(body, widestICAO),
-		measure(body, widestSquawk)+stripGap+warning,
+		col.measure(body, widestICAO),
+		col.measure(body, widestSquawk)+col.px(stripGap)+warning,
 	)
 
-	return scale*measure(s.faces.Large, widestCallsign) + cardCellGap + codes
+	return scale*col.measure(s.faces.Large, widestCallsign) + col.px(cardCellGap) + codes
 }
 
 // cardRowWidth is how wide one row of figures is, the gaps between them
 // included.
-func cardRowWidth(row int, widths [cardFigures]int) int {
+func cardRowWidth(row, gap int, widths [cardFigures]int) int {
 	sum := 0
 
 	for index := cardRowStart[row]; index < cardRowStart[row+1]; index++ {
 		sum += widths[index]
 	}
 
-	return sum + (cardRowStart[row+1]-cardRowStart[row]-1)*cardCellGap
+	return sum + (cardRowStart[row+1]-cardRowStart[row]-1)*gap
 }
 
-// place puts each figure of each drawn row at its own left edge.
-func (p *cardPlan) place(left int, widths [cardFigures]int) {
+// place puts each figure of each drawn row at its own left edge, gap pixels
+// apart.
+func (p *cardPlan) place(left, gap int, widths [cardFigures]int) {
 	p.width = widths
 
 	for row := range p.rows {
@@ -236,37 +236,37 @@ func (p *cardPlan) place(left int, widths [cardFigures]int) {
 
 		for index := cardRowStart[row]; index < cardRowStart[row+1]; index++ {
 			p.left[index] = pen
-			pen += widths[index] + cardCellGap
+			pen += widths[index] + gap
 		}
 	}
 }
 
 // width is the least room the block needs: the widest of its identity row and
 // the rows of figures under it, with the rule and its margin in front.
-func (s *Scene) cardWidth(plan cardPlan, widths [cardFigures]int) int {
-	need := s.cardIdentWidth(plan.scale)
+func (s *Scene) cardWidth(col *layout, plan cardPlan, widths [cardFigures]int) int {
+	need := s.cardIdentWidth(col, plan.scale)
 
 	for row := range plan.rows {
-		need = max(need, cardRowWidth(row, widths))
+		need = max(need, cardRowWidth(row, col.px(cardCellGap), widths))
 	}
 
-	return cardRule + cardPadX + need
+	return col.px(cardRule) + col.px(cardPadX) + need
 }
 
 // figureRowHeight is one row of figures and the word under it, and
 // identHeight the callsign's own row at this scale.
-func (s *Scene) figureRowHeight() int {
-	return lineHeight(s.faces.Large) + lineHeight(s.faces.Small)
+func (s *Scene) figureRowHeight(col *layout) int {
+	return col.lineHeight(s.faces.Large) + col.lineHeight(s.faces.Small)
 }
 
-func (s *Scene) identHeight(scale int) int {
-	return scale * lineHeight(s.faces.Large)
+func (s *Scene) identHeight(col *layout, scale int) int {
+	return scale * col.lineHeight(s.faces.Large)
 }
 
 // blockHeight is the accent rule's own length: the identity row and the rows
 // of figures under it.
-func (s *Scene) blockHeight(plan cardPlan) int {
-	return s.identHeight(plan.scale) + plan.rows*(cardLead+s.figureRowHeight())
+func (s *Scene) blockHeight(col *layout, plan cardPlan) int {
+	return s.identHeight(col, plan.scale) + plan.rows*(col.px(cardLead)+s.figureRowHeight(col))
 }
 
 // cardHeight is the whole panel: the word over the block, the block, the
@@ -278,11 +278,12 @@ func (s *Scene) blockHeight(plan cardPlan) int {
 // first line of the list. Four pixels rather than the sixteen the legend is
 // held off by: sixteen is half a strip, and a board is worth more than the air
 // around it.
-func (s *Scene) cardHeight(plan cardPlan) int {
-	height := lineHeight(s.faces.Small) + rowLead + s.blockHeight(plan) + rowLead
+func (s *Scene) cardHeight(col *layout, plan cardPlan) int {
+	lead := col.px(rowLead)
+	height := col.lineHeight(s.faces.Small) + lead + s.blockHeight(col, plan) + lead
 
 	if plan.plain {
-		height += rowLead + lineHeight(s.faces.Small)
+		height += lead + col.lineHeight(s.faces.Small)
 	}
 
 	return height
@@ -295,19 +296,19 @@ func (s *Scene) cardHeight(plan cardPlan) int {
 // rather than a squeezed one. The strips under it still draw, and every figure
 // the panel would have carried is on the selected aircraft's own strip: the
 // panel is the one block in the column that repeats what is already there.
-func (s *Scene) planCard(width, room int) (cardPlan, bool) {
+func (s *Scene) planCard(col *layout, width, room int) (cardPlan, bool) {
 	if s.faces.Small == nil || s.faces.Body == nil || s.faces.Large == nil {
 		return cardPlan{}, false
 	}
 
-	widths := s.cardWidths()
+	widths := s.cardWidths(col)
 
 	for _, plan := range cardShapes {
-		if s.cardWidth(plan, widths) > width || s.cardHeight(plan) > room {
+		if s.cardWidth(col, plan, widths) > width || s.cardHeight(col, plan) > room {
 			continue
 		}
 
-		plan.place(cardRule+cardPadX, widths)
+		plan.place(col.px(cardRule)+col.px(cardPadX), col.px(cardCellGap), widths)
 
 		return plan, true
 	}
@@ -323,27 +324,28 @@ func (s *Scene) planCard(width, room int) (cardPlan, bool) {
 // changed height every time the last contact left range would be worse to look
 // at than one with a gap in it.
 func (s *Scene) drawCard(col *layout, frame source.Frame, sel selection) {
-	plan, drawable := s.planCard(col.right-col.left, col.bottom-col.top)
+	plan, drawable := s.planCard(col, col.right-col.left, col.bottom-col.top)
 	if !drawable {
 		return
 	}
 
-	s.drawCardLabel(col.dst, col.left, col.top, sel)
+	s.drawCardLabel(col, col.left, col.top, sel)
 
-	top := col.top + lineHeight(s.faces.Small) + rowLead
-	left := col.left + cardRule + cardPadX
+	top := col.top + col.lineHeight(s.faces.Small) + col.px(rowLead)
+	left := col.left + col.px(cardRule) + col.px(cardPadX)
 
 	if sel.found {
-		col.dst.FillRect(image.Rect(col.left, top, col.left+cardRule, top+s.blockHeight(plan)), s.pal.Accent)
-		s.drawCardIdent(col.dst, plan, left, top, sel.plane)
+		col.dst.FillRect(image.Rect(col.left, top, col.left+col.px(cardRule), top+s.blockHeight(col, plan)),
+			s.pal.Accent)
+		s.drawCardIdent(col, plan, left, top, sel.plane)
 	} else {
-		text.Draw(col.dst, s.faces.Large, left, top, noTraffic, s.pal.Muted)
+		col.text(s.faces.Large, left, top, noTraffic, s.pal.Muted)
 	}
 
 	s.drawCardFigures(col, plan, frame, sel)
 	s.drawCardPlain(col, plan, frame, sel)
 
-	col.top += s.cardHeight(plan)
+	col.top += s.cardHeight(col, plan)
 }
 
 // drawCardLabel names the block, and says when the filter is hiding the
@@ -353,13 +355,13 @@ func (s *Scene) drawCard(col *layout, frame source.Frame, sel selection) {
 // it is a caution and not a heading: the panel is about an aeroplane that is
 // not on the field, which is a state the operator has to notice before
 // wondering where the strip went.
-func (s *Scene) drawCardLabel(dst *canvas.Canvas, left, top int, sel selection) {
+func (s *Scene) drawCardLabel(col *layout, left, top int, sel selection) {
 	face := s.faces.Small
 
-	pen := text.Draw(dst, face, left, top, cardLabel, s.pal.Data, text.WithSpacing(labelTracking))
+	pen := col.tracked(face, left, top, cardLabel, s.pal.Data)
 
 	if sel.hidden {
-		text.Draw(dst, face, pen, top, cardFiltered, s.pal.Caution, text.WithSpacing(labelTracking))
+		col.tracked(face, pen, top, cardFiltered, s.pal.Caution)
 	}
 }
 
@@ -369,16 +371,16 @@ func (s *Scene) drawCardLabel(dst *canvas.Canvas, left, top int, sel selection) 
 // The callsign takes the operator's colour in airline mode, the same as it does
 // on the strip and on the tag. A name in three places in three colours would be
 // three aeroplanes to reconcile.
-func (s *Scene) drawCardIdent(dst *canvas.Canvas, plan cardPlan, left, top int, plane airplane.Snapshot) {
+func (s *Scene) drawCardIdent(col *layout, plan cardPlan, left, top int, plane airplane.Snapshot) {
 	body := s.faces.Body
 
-	text.Draw(dst, s.faces.Large, left, top, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane),
-		text.WithScale(plan.scale))
+	text.Draw(col.dst, s.faces.Large, left, top, clip(callsignOf(plane), maxCallsign), s.callsignInk(plane),
+		col.glyphsAt(plan.scale))
 
-	codes := left + plan.scale*measure(s.faces.Large, widestCallsign) + cardCellGap
-	first := top + (s.identHeight(plan.scale)-2*lineHeight(body))/2
+	codes := left + plan.scale*col.measure(s.faces.Large, widestCallsign) + col.px(cardCellGap)
+	first := top + (s.identHeight(col, plan.scale)-2*col.lineHeight(body))/2
 
-	text.Draw(dst, body, codes, first, clip(plane.ICAO, maxICAO), s.pal.Muted)
+	col.text(body, codes, first, clip(plane.ICAO, maxICAO), s.pal.Muted)
 
 	code := clip(plane.Squawk, maxSquawk)
 	if code == "" {
@@ -388,11 +390,11 @@ func (s *Scene) drawCardIdent(dst *canvas.Canvas, plan cardPlan, left, top int, 
 	// The prefix and the code are two draws rather than one concatenation: a
 	// string built on the draw path is an allocation per frame, which is the
 	// one thing this scene promises never to make.
-	second := first + lineHeight(body)
-	pen := text.Draw(dst, body, codes, second, squawkPrefix, s.pal.Muted)
-	pen = text.Draw(dst, body, pen, second, code, s.pal.Muted)
+	second := first + col.lineHeight(body)
+	pen := col.text(body, codes, second, squawkPrefix, s.pal.Muted)
+	pen = col.text(body, pen, second, code, s.pal.Muted)
 
-	s.drawEmergency(dst, pen+stripGap, second+(lineHeight(body)-lineHeight(s.faces.Small))/2, plane)
+	s.drawEmergency(col, pen+col.px(stripGap), second+(col.lineHeight(body)-col.lineHeight(s.faces.Small))/2, plane)
 }
 
 // drawCardFigures sets the block's rows of big figures and the words under
@@ -402,17 +404,17 @@ func (s *Scene) drawCardIdent(dst *canvas.Canvas, plan cardPlan, left, top int, 
 // them. They are what the block is, and a panel that lost its own structure
 // when the sky went quiet would read as a panel that had broken.
 func (s *Scene) drawCardFigures(col *layout, plan cardPlan, frame source.Frame, sel selection) {
-	top := col.top + lineHeight(s.faces.Small) + rowLead + s.identHeight(plan.scale)
+	top := col.top + col.lineHeight(s.faces.Small) + col.px(rowLead) + s.identHeight(col, plan.scale)
 
 	for row := range plan.rows {
-		top += cardLead
+		top += col.px(cardLead)
 
 		if sel.found {
 			s.drawCardValues(col, plan, row, top, frame, sel.plane)
 		}
 
-		s.drawCardLabels(col, plan, row, top+lineHeight(s.faces.Large))
-		top += s.figureRowHeight()
+		s.drawCardLabels(col, plan, row, top+col.lineHeight(s.faces.Large))
+		top += s.figureRowHeight(col)
 	}
 }
 
@@ -427,22 +429,21 @@ func (s *Scene) drawCardValues(
 	col *layout, plan cardPlan, row, top int, frame source.Frame, plane airplane.Snapshot,
 ) {
 	if row == cardTopRow {
-		s.drawCardLevel(col.dst, col.left+plan.left[cardLevel], top, plane)
-		drawBytes(col.dst, s.faces.Large, col.left+plan.left[cardSpeed], top, s.speed(plane.Velocity), s.pal.Ink)
-		s.drawCardTrack(col.dst, col.left+plan.left[cardTrack], top, plane)
+		s.drawCardLevel(col, col.left+plan.left[cardLevel], top, plane)
+		col.drawBytes(s.faces.Large, col.left+plan.left[cardSpeed], top, s.speed(plane.Velocity), s.pal.Ink)
+		s.drawCardTrack(col, col.left+plan.left[cardTrack], top, plane)
 
 		return
 	}
 
-	s.drawCardRange(col.dst, col.left+plan.left[cardRange], top, frame.Receiver, plane)
-	s.drawCardBearing(col.dst, col.left+plan.left[cardBearing], top, frame.Receiver, plane)
+	s.drawCardRange(col, col.left+plan.left[cardRange], top, frame.Receiver, plane)
+	s.drawCardBearing(col, col.left+plan.left[cardBearing], top, frame.Receiver, plane)
 }
 
 // drawCardLabels writes the small word under each figure of one row.
 func (s *Scene) drawCardLabels(col *layout, plan cardPlan, row, top int) {
 	for index := cardRowStart[row]; index < cardRowStart[row+1]; index++ {
-		text.Draw(col.dst, s.faces.Small, col.left+plan.left[index], top, cardLabels[index], s.pal.Data,
-			text.WithSpacing(labelTracking))
+		col.tracked(s.faces.Small, col.left+plan.left[index], top, cardLabels[index], s.pal.Data)
 	}
 }
 
@@ -452,51 +453,51 @@ func (s *Scene) drawCardLabels(col *layout, plan cardPlan, row, top int) {
 // The band colour rather than the reading ink, because it is the one figure on
 // the block the scope beside it also says: the aeroplane out there is that
 // colour, and the level is why.
-func (s *Scene) drawCardLevel(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+func (s *Scene) drawCardLevel(col *layout, left, top int, plane airplane.Snapshot) {
 	band := s.bandColour(plane.Altitude)
 
-	pen := drawBytes(dst, s.faces.Large, left, top, s.flightLevel(plane.Altitude), band)
-	s.drawTrend(dst, s.faces.Large, pen, top, plane.VertRate, band)
+	pen := col.drawBytes(s.faces.Large, left, top, s.flightLevel(plane.Altitude), band)
+	s.drawTrend(col, s.faces.Large, pen, top, plane.VertRate, band)
 }
 
 // drawCardTrack writes the course the aircraft is flying, or dashes when
 // nobody has decoded one.
-func (s *Scene) drawCardTrack(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) {
+func (s *Scene) drawCardTrack(col *layout, left, top int, plane airplane.Snapshot) {
 	if !knownHeading(plane.Heading) {
-		text.Draw(dst, s.faces.Large, left, top, trackUnknown, s.pal.Muted)
+		col.text(s.faces.Large, left, top, trackUnknown, s.pal.Muted)
 
 		return
 	}
 
-	drawBytes(dst, s.faces.Large, left, top, s.degrees(plane.Heading), s.pal.Ink)
+	col.drawBytes(s.faces.Large, left, top, s.degrees(plane.Heading), s.pal.Ink)
 }
 
 // drawCardRange writes how far the aircraft is from the receiver.
 func (s *Scene) drawCardRange(
-	dst *canvas.Canvas, left, top int, receiver source.Receiver, plane airplane.Snapshot,
+	col *layout, left, top int, receiver source.Receiver, plane airplane.Snapshot,
 ) {
 	away := airplanes.HaversineDistance(receiver.Latitude, receiver.Longitude, plane.Latitude, plane.Longitude)
 
-	drawBytes(dst, s.faces.Large, left, top, s.distance(away), s.pal.Ink)
+	col.drawBytes(s.faces.Large, left, top, s.distance(away), s.pal.Ink)
 }
 
 // drawCardBearing writes the bearing from the receiver with the needle turned
 // to it, which is the one figure on the block that is a direction to look in
 // rather than a reading to note.
 func (s *Scene) drawCardBearing(
-	dst *canvas.Canvas, left, top int, receiver source.Receiver, plane airplane.Snapshot,
+	col *layout, left, top int, receiver source.Receiver, plane airplane.Snapshot,
 ) {
 	face := s.faces.Large
 
 	bearing, known := bearingTo(receiver, plane)
 	if !known {
-		text.Draw(dst, face, left, top, detailUnknown, s.pal.Muted)
+		col.text(face, left, top, detailUnknown, s.pal.Muted)
 
 		return
 	}
 
-	pen := drawBytes(dst, face, left, top, s.degrees(bearing), s.pal.Ink)
-	s.drawArrow(dst, pen+arrowGap, top+lineHeight(face)/2, bearing, s.pal.Ink)
+	pen := col.drawBytes(face, left, top, s.degrees(bearing), s.pal.Ink)
+	s.drawArrow(col, pen+col.px(arrowGap), top+col.lineHeight(face)/2, bearing, s.pal.Ink)
 }
 
 // drawCardPlain writes the sentence under the block, in three clauses.
@@ -512,33 +513,33 @@ func (s *Scene) drawCardPlain(col *layout, plan cardPlan, frame source.Frame, se
 	}
 
 	face := s.faces.Small
-	left := col.left + cardRule + cardPadX
-	top := col.top + lineHeight(face) + rowLead + s.blockHeight(plan) + rowLead
+	left := col.left + col.px(cardRule) + col.px(cardPadX)
+	top := col.top + col.lineHeight(face) + col.px(rowLead) + s.blockHeight(col, plan) + col.px(rowLead)
 
-	if left+measure(face, widestPlainLevel) > col.right {
+	if left+col.measure(face, widestPlainLevel) > col.right {
 		return
 	}
 
-	pen := s.drawPlainLevel(col.dst, left, top, sel.plane)
+	pen := s.drawPlainLevel(col, left, top, sel.plane)
 
-	pen, drawn := s.drawPlainPlace(col.dst, pen, top, col.right, sel.plane)
+	pen, drawn := s.drawPlainPlace(col, pen, top, col.right, sel.plane)
 	if !drawn {
 		return
 	}
 
-	s.drawPlainSeen(col.dst, pen, top, col.right, frame.Now, sel.plane)
+	s.drawPlainSeen(col, pen, top, col.right, frame.Now, sel.plane)
 }
 
 // drawPlainLevel writes the first clause: the altitude in feet and what the
 // aircraft is doing with it.
-func (s *Scene) drawPlainLevel(dst *canvas.Canvas, left, top int, plane airplane.Snapshot) int {
+func (s *Scene) drawPlainLevel(col *layout, left, top int, plane airplane.Snapshot) int {
 	face := s.faces.Small
 
-	pen := s.drawPlainFeet(dst, left, top, plane.Altitude)
-	pen = text.Draw(dst, face, pen, top, plainFeet, s.pal.Muted)
+	pen := s.drawPlainFeet(col, left, top, plane.Altitude)
+	pen = col.text(face, pen, top, plainFeet, s.pal.Muted)
 
 	if level(plane.VertRate) {
-		return text.Draw(dst, face, pen, top, plainLevelWord, s.pal.Muted)
+		return col.text(face, pen, top, plainLevelWord, s.pal.Muted)
 	}
 
 	word := plainClimbing
@@ -546,10 +547,10 @@ func (s *Scene) drawPlainLevel(dst *canvas.Canvas, left, top int, plane airplane
 		word = plainDescending
 	}
 
-	pen = text.Draw(dst, face, pen, top, word, s.pal.Muted)
-	pen = drawBytes(dst, face, pen, top, s.thousands(math.Abs(plane.VertRate)), s.pal.Muted)
+	pen = col.text(face, pen, top, word, s.pal.Muted)
+	pen = col.drawBytes(face, pen, top, s.thousands(math.Abs(plane.VertRate)), s.pal.Muted)
 
-	return text.Draw(dst, face, pen, top, plainRate, s.pal.Muted)
+	return col.text(face, pen, top, plainRate, s.pal.Muted)
 }
 
 // drawPlainFeet writes the altitude itself, or dashes for one nobody has
@@ -558,14 +559,14 @@ func (s *Scene) drawPlainLevel(dst *canvas.Canvas, left, top int, plane airplane
 // An altitude of zero is undecoded rather than sea level, which is the reading
 // flightLevel gives it and the one bandColour and the 3D view's height both
 // work from.
-func (s *Scene) drawPlainFeet(dst *canvas.Canvas, left, top int, altitudeFt float64) int {
+func (s *Scene) drawPlainFeet(col *layout, left, top int, altitudeFt float64) int {
 	face := s.faces.Small
 
 	if math.IsNaN(altitudeFt) || math.IsInf(altitudeFt, 0) || altitudeFt <= 0 {
-		return text.Draw(dst, face, left, top, detailUnknown, s.pal.Muted)
+		return col.text(face, left, top, detailUnknown, s.pal.Muted)
 	}
 
-	return drawBytes(dst, face, left, top, s.thousands(altitudeFt), s.pal.Muted)
+	return col.drawBytes(face, left, top, s.thousands(altitudeFt), s.pal.Muted)
 }
 
 // drawPlainPlace writes the second clause, where the aeroplane is, and reports
@@ -576,33 +577,33 @@ func (s *Scene) drawPlainFeet(dst *canvas.Canvas, left, top int, altitudeFt floa
 // rather than about seeing it. A clause dropped for want of room stops the
 // line there instead.
 func (s *Scene) drawPlainPlace(
-	dst *canvas.Canvas, left, top, right int, plane airplane.Snapshot,
+	col *layout, left, top, right int, plane airplane.Snapshot,
 ) (int, bool) {
 	if !hasPosition(plane) {
 		return left, true
 	}
 
 	face := s.faces.Small
-	if left+measure(face, widestPlainPlace) > right {
+	if left+col.measure(face, widestPlainPlace) > right {
 		return left, false
 	}
 
-	pen := text.Draw(dst, face, left, top, plainSeparator, s.pal.Muted)
-	pen = drawBytes(dst, face, pen, top, s.place(plane.Latitude, 'N', 'S'), s.pal.Muted)
-	pen = text.Draw(dst, face, pen, top, plainSlash, s.pal.Muted)
+	pen := col.text(face, left, top, plainSeparator, s.pal.Muted)
+	pen = col.drawBytes(face, pen, top, s.place(plane.Latitude, 'N', 'S'), s.pal.Muted)
+	pen = col.text(face, pen, top, plainSlash, s.pal.Muted)
 
-	return drawBytes(dst, face, pen, top, s.place(plane.Longitude, 'E', 'W'), s.pal.Muted), true
+	return col.drawBytes(face, pen, top, s.place(plane.Longitude, 'E', 'W'), s.pal.Muted), true
 }
 
 // drawPlainSeen closes the sentence with how long ago the contact was heard.
 func (s *Scene) drawPlainSeen(
-	dst *canvas.Canvas, left, top, right int, now time.Time, plane airplane.Snapshot,
+	col *layout, left, top, right int, now time.Time, plane airplane.Snapshot,
 ) {
 	face := s.faces.Small
-	if left+measure(face, widestPlainSeen) > right {
+	if left+col.measure(face, widestPlainSeen) > right {
 		return
 	}
 
-	pen := text.Draw(dst, face, left, top, plainSeparator+plainSeen, s.pal.Muted)
-	text.Draw(dst, face, pen, top, seenBucket(now.Sub(plane.LastUpdate)), s.pal.Muted)
+	pen := col.text(face, left, top, plainSeparator+plainSeen, s.pal.Muted)
+	col.text(face, pen, top, seenBucket(now.Sub(plane.LastUpdate)), s.pal.Muted)
 }
