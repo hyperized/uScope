@@ -48,6 +48,7 @@ func lostTrail(plane airplane.Snapshot, ago time.Duration) source.Trail {
 // altitude mode.
 const (
 	pressFilterLow  = 1
+	pressFilterMid  = 2
 	pressFilterHigh = 3
 )
 

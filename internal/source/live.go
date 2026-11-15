@@ -145,6 +145,11 @@ type Live struct {
 	// goroutine and read on the one that draws, and mu is already held across
 	// work neither of those should wait for.
 	coverage *coverageCache
+
+	// corridorField and corridorHalfLife are what the options asked of the
+	// corridor exposure, read once by NewLive and handed to the ghost ring.
+	corridorField    string
+	corridorHalfLife time.Duration
 }
 
 // LiveOption configures a Live at construction.
@@ -280,6 +285,25 @@ func WithEstimateInterval(interval time.Duration) LiveOption {
 	}
 }
 
+// WithCorridorField pins the airfield lost tracks are classified against, by
+// its ICAO code as the embedded airport list spells it. NewLive refuses a code
+// the list does not have with ErrUnknownAirfield. The empty string, the
+// default, takes the field nearest the first trusted receiver position.
+func WithCorridorField(icao string) LiveOption {
+	return func(l *Live) { l.corridorField = icao }
+}
+
+// WithCorridorHalfLife replaces how long a lost track takes to fade to half
+// its strength. A value CheckCorridorHalfLife refuses, zero included, leaves
+// the default.
+func WithCorridorHalfLife(halfLife time.Duration) LiveOption {
+	return func(l *Live) {
+		if CheckCorridorHalfLife(halfLife) == nil {
+			l.corridorHalfLife = halfLife
+		}
+	}
+}
+
 // NewLive builds the live source. It opens nothing: the radio, the socket or
 // the file is opened by Start, on the goroutine that runs the ingest.
 func NewLive(opts ...LiveOption) (*Live, error) {
@@ -290,6 +314,7 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 		stderr:           os.Stderr,
 		estimateInterval: defaultEstimateInterval,
 		coverage:         newCoverage(),
+		corridorHalfLife: DefaultCorridorHalfLife,
 		openDongle:       rtl2832u.Open,
 		newGPS:           newGPSWatcher,
 	}
@@ -302,6 +327,12 @@ func NewLive(opts ...LiveOption) (*Live, error) {
 		return nil, err
 	}
 
+	exposure, err := newCorridors(live.corridorHalfLife, live.corridorField)
+	if err != nil {
+		return nil, err
+	}
+
+	live.ghosts.corridors = exposure
 	live.loc = live.newLocation()
 
 	// Without a position from the operator there is nothing to centre on, so
@@ -355,18 +386,23 @@ func (l *Live) Frame() Frame {
 
 	supported, enabled := l.in.BiasTeeState()
 	snapshot, grid := l.coverage.snapshot(now)
+	lost := l.observe(planes, receiver, now)
 
 	return Frame{
-		Planes:   planes,
-		Ghosts:   l.observe(planes, now),
-		Receiver: receiver,
-		Source:   l.in.Source(),
-		Stats:    l.in.Stats(),
-		Now:      now,
-		BiasTee:  BiasTeeState{Supported: supported, Enabled: enabled},
-		Sweeping: l.in.Sweeping(),
-		Coverage: snapshot,
-		Grid:     grid,
+		Planes:          planes,
+		Ghosts:          lost.trails,
+		GhostGeneration: lost.generation,
+		Routes:          lost.routes,
+		RouteGeneration: lost.routeGeneration,
+		Receiver:        receiver,
+		Source:          l.in.Source(),
+		Stats:           l.in.Stats(),
+		Now:             now,
+		BiasTee:         BiasTeeState{Supported: supported, Enabled: enabled},
+		Sweeping:        l.in.Sweeping(),
+		Coverage:        snapshot,
+		Grid:            grid,
+		Corridors:       lost.corridors,
 	}
 }
 
@@ -411,17 +447,17 @@ func (l *Live) Close() error {
 	return nil
 }
 
-// observe folds the frame's aircraft into the ghost ring, stamping anything
-// lost on this frame with now.
+// observe folds the frame's aircraft into the ghost ring and reads back what
+// the frame carries off it: the ghosts, the routes and the corridor field.
 //
 // It takes mu in a section of its own rather than holding it across the whole
 // of Frame, because receiver above reaches applyEstimate, which takes the
 // same lock on its own way past.
-func (l *Live) observe(planes airplanes.List, now time.Time) []Trail {
+func (l *Live) observe(planes airplanes.List, receiver Receiver, now time.Time) ghostFrame {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return l.ghosts.observe(planes, now)
+	return l.ghosts.frame(planes, receiver, now)
 }
 
 // validate range-checks what the options collected.

@@ -10,7 +10,6 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airports"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/canvas"
-	"github.com/hyperized/uScope/pkg/shore"
 	"github.com/hyperized/uScope/pkg/text"
 )
 
@@ -287,6 +286,10 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 
 	s.drawGround3(&clipped, view, frame.Receiver)
 
+	if view.plottable {
+		s.drawExposure3(window, view)
+	}
+
 	if s.envelopeDrawn() {
 		s.drawBowl3(window, view)
 		s.drawMeasured3(window, view, &frame.Grid)
@@ -471,85 +474,6 @@ func (s *Scene) drawCardinals3(lay *layout, view scene3) {
 		}
 
 		text.DrawCentered(lay.dst, face, x, y-lay.lineHeight(face)/2, mark.letter, s.pal.Muted, lay.glyphs())
-	}
-}
-
-// drawShore3 paints the water, the land and the coastlines on the floor of the
-// world, in that order.
-//
-// It is drawShore in perspective, down to the order: the fill goes down first
-// and the outlines over it, so the join between sea and land is covered by the
-// line that describes it and the jagged edge the fill leaves never shows.
-// fillGround3 is the first half and the call to Within below is the second.
-//
-// The box handed to the shore set is the same one both halves use, around the
-// origin at whatever the view reaches to. The full view never recentres, so
-// that origin is the receiver; the bare one follows the traffic and reaches
-// two range radii, which is why the span is measured off the view rather than
-// off the range.
-func (s *Scene) drawShore3(dst *canvas.Canvas, view scene3) {
-	if s.shoreSet == nil {
-		return
-	}
-
-	latSpan := view.reachNm / nmPerDegree
-	lonSpan := latSpan / max(view.cosLat0, minCosLat)
-
-	s.fillGround3(dst, view, latSpan, lonSpan)
-
-	s.shoreSet.Within(
-		view.origin.lat-latSpan, view.origin.lat+latSpan,
-		view.origin.lon-lonSpan, view.origin.lon+lonSpan,
-		func(line shore.Polyline) { s.drawShoreLine3(dst, view, line) },
-	)
-}
-
-// drawShoreLine3 projects one coastline and draws the part of it inside the
-// range.
-//
-// The thinning and the clipping are the scope view's, moved a step earlier in
-// the pipeline. Both happen in nautical miles on the ground rather than in
-// pixels on the canvas, because in perspective the range is an ellipse and a
-// circle of pixels would cut the coast in the wrong place. circle.clip does
-// not care which units it is handed, so it is the same function doing the same
-// arithmetic.
-func (s *Scene) drawShoreLine3(dst *canvas.Canvas, view scene3, line shore.Polyline) {
-	if len(line) < 2 {
-		return
-	}
-
-	ring := circle{radius: view.reachNm}
-	from := view.ground(line[0].Lat, line[0].Lon)
-
-	for index := 1; index < len(line); index++ {
-		next := view.ground(line[index].Lat, line[index].Lon)
-
-		// The last point is always drawn, however short the run to it, so a
-		// coastline reaches its own end rather than stopping one segment early.
-		if index < len(line)-1 &&
-			math.Abs(next.east-from.east) < view.minSegNm && math.Abs(next.north-from.north) < view.minSegNm {
-			continue
-		}
-
-		s.drawShoreSegment3(dst, view, ring, from, next)
-
-		from = next
-	}
-}
-
-// drawShoreSegment3 trims one piece of coast to the range and draws whatever
-// is left of it.
-func (s *Scene) drawShoreSegment3(dst *canvas.Canvas, view scene3, ring circle, from, to point3) {
-	piece, inside := ring.clip(segment{fromX: from.east, fromY: from.north, toX: to.east, toY: to.north})
-	if !inside {
-		return
-	}
-
-	startX, startY, startOK := view.cam.at(point3{east: piece.fromX, north: piece.fromY})
-	endX, endY, endOK := view.cam.at(point3{east: piece.toX, north: piece.toY})
-
-	if startOK && endOK {
-		dst.StrokeLineAA(float64(startX), float64(startY), float64(endX), float64(endY), view.weight, s.pal.Shore)
 	}
 }
 

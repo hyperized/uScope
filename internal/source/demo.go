@@ -207,7 +207,8 @@ type craft struct {
 
 // Demo is a synthetic source: twelve invented aircraft on straight tracks
 // around a fixed receiver, one of which goes quiet after ninety seconds and
-// is never heard from again.
+// is never heard from again, over two hours of invented tracks already lost
+// for the corridor exposure to draw.
 //
 // It exists so the radar can be built and looked at on a machine with no
 // receiver in it, and so the render path has something deterministic to draw
@@ -252,6 +253,11 @@ type Demo struct {
 	// puts its aircraft in adjacent sectors and the arcs join up, lopsided,
 	// which is what a directional antenna looks like.
 	coverage *coverageCache
+
+	// corridorField and corridorHalfLife are what the options asked of the
+	// corridor exposure, read once by NewDemo and handed to the ghost ring.
+	corridorField    string
+	corridorHalfLife time.Duration
 }
 
 // DemoOption configures a Demo at construction.
@@ -292,6 +298,24 @@ func WithDemoSector() DemoOption {
 	return func(d *Demo) { d.sector = true }
 }
 
+// WithDemoCorridorField pins the corridor exposure's airfield, the way
+// WithCorridorField does for Live. Without it the field is the one nearest
+// the invented receiver, which around Schiphol is EHAM.
+func WithDemoCorridorField(icao string) DemoOption {
+	return func(d *Demo) { d.corridorField = icao }
+}
+
+// WithDemoCorridorHalfLife replaces the corridor half-life, the way
+// WithCorridorHalfLife does for Live, and leaves the default alone for any
+// value CheckCorridorHalfLife refuses.
+func WithDemoCorridorHalfLife(halfLife time.Duration) DemoOption {
+	return func(d *Demo) {
+		if CheckCorridorHalfLife(halfLife) == nil {
+			d.corridorHalfLife = halfLife
+		}
+	}
+}
+
 // NewDemo builds the fleet and back-fills every trail, so the first frame
 // already has something on it.
 func NewDemo(opts ...DemoOption) (*Demo, error) {
@@ -302,6 +326,8 @@ func NewDemo(opts ...DemoOption) (*Demo, error) {
 		lat:      demoLatitude,
 		lon:      demoLongitude,
 		coverage: newCoverage(),
+
+		corridorHalfLife: DefaultCorridorHalfLife,
 	}
 
 	for _, opt := range opts {
@@ -311,6 +337,13 @@ func NewDemo(opts ...DemoOption) (*Demo, error) {
 	if err := demo.validate(); err != nil {
 		return nil, err
 	}
+
+	exposure, err := newCorridors(demo.corridorHalfLife, demo.corridorField)
+	if err != nil {
+		return nil, err
+	}
+
+	demo.ghosts.corridors = exposure
 
 	demo.fleet = demo.build()
 	demo.list = make(airplanes.List, 0, len(demo.fleet))
@@ -324,24 +357,40 @@ func (d *Demo) Frame() Frame {
 	defer d.mu.Unlock()
 
 	now := d.now()
+	first := d.last.IsZero()
 	d.advance(now)
 	d.ticks++
 
 	planes := d.snapshot(now)
 	snapshot, grid := d.coverage.snapshot(now)
+	receiver := Receiver{
+		Latitude: d.lat, Longitude: d.lon, HasFix: true,
+		Label: LabelManual, Mode: FixManual,
+	}
+
+	// The field has to be known before the history is invented around it, and
+	// the frame's own observe would only find it after the seeding had been
+	// skipped.
+	if first {
+		d.ghosts.corridors.resolve(receiver)
+		d.seedExposure(now)
+	}
+
+	lost := d.ghosts.frame(planes, receiver, now)
 
 	return Frame{
-		Planes: planes,
-		Ghosts: d.ghosts.observe(planes, now),
-		Receiver: Receiver{
-			Latitude: d.lat, Longitude: d.lon, HasFix: true,
-			Label: LabelManual, Mode: FixManual,
-		},
-		Source:   adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
-		Stats:    d.stats(),
-		Now:      now,
-		Coverage: snapshot,
-		Grid:     grid,
+		Planes:          planes,
+		Ghosts:          lost.trails,
+		GhostGeneration: lost.generation,
+		Routes:          lost.routes,
+		RouteGeneration: lost.routeGeneration,
+		Receiver:        receiver,
+		Source:          adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
+		Stats:           d.stats(),
+		Now:             now,
+		Coverage:        snapshot,
+		Grid:            grid,
+		Corridors:       lost.corridors,
 	}
 }
 

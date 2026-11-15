@@ -81,13 +81,33 @@ type landSpan struct {
 // have to be re-picked every time a scene found a new use for one.
 func (s *Scene) waterInk() color.RGBA { return s.fade(s.pal.Data, waterFade) }
 
-// drawShore paints the water, the land and the coastlines that fall on the
-// scope, in that order.
+// landInk is what the land is filled with, which is the field: the sea is
+// the one side of a coastline that carries a tint. It has a name because the
+// tilted views' haze fades the land and the sea through one call, and a
+// literal Field there would hide that the two are the same kind of thing.
+func (s *Scene) landInk() color.RGBA { return s.pal.Field }
+
+// drawGround paints what lies on the flat views' ground: the shore when the
+// view on screen has it on, with the corridor exposure between its fill and
+// its outlines, or the exposure on its own.
+func (s *Scene) drawGround(lay *layout, view scopeFrame) {
+	if s.shoreDrawn() {
+		s.drawShore(lay, view)
+
+		return
+	}
+
+	s.drawExposure(lay.dst, view.proj, lay.unit())
+}
+
+// drawShore paints the water, the land, the corridor exposure and the
+// coastlines that fall on the scope, in that order.
 //
 // The fill goes down first and the outlines over it, so the join between sea
 // and land is covered by the line that describes it and the jagged edge the
 // fill leaves never shows. fillGround is the first half; everything below the
-// call to it is the second.
+// call to it is the second. The exposure goes between the two so the coast
+// stays legible over a corridor that crosses it.
 //
 // Both the box and the clipping circle are taken off the projection rather
 // than off the receiver and the range ring. The two are the same thing in the
@@ -103,14 +123,13 @@ func (s *Scene) waterInk() color.RGBA { return s.fade(s.pal.Data, waterFade) }
 // box around a circle, so it asks for a little more than the scope shows and
 // the clipping throws the rest away.
 //
-// A nil set draws nothing. That is the normal state when uScope was started
-// without the data rather than a failure, so there is nothing to report.
-//
-// weight is the layout's scale, which the coastlines are stroked at. It is
-// handed in rather than the layout itself so the closure given to Within does
-// not drag the caller's layout onto the heap with it.
-func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame, weight int) {
+// A nil set draws no shore, only the exposure. That is the normal state when
+// uScope was started without the data rather than a failure, so there is
+// nothing to report.
+func (s *Scene) drawShore(lay *layout, view scopeFrame) {
 	if s.shoreSet == nil {
+		s.drawExposure(lay.dst, view.proj, lay.unit())
+
 		return
 	}
 
@@ -125,7 +144,13 @@ func (s *Scene) drawShore(dst *canvas.Canvas, view scopeFrame, weight int) {
 		radius:  proj.limitNm * proj.scale,
 	}
 
+	// The closure takes the canvas and the weight rather than the layout, so
+	// that handing it to Within does not drag the caller's layout onto the
+	// heap with it.
+	dst, weight := lay.dst, lay.unit()
+
 	s.fillGround(dst, proj, ring, latSpan, lonSpan)
+	s.drawExposure(dst, proj, weight)
 
 	s.shoreSet.Within(
 		proj.lat0-latSpan, proj.lat0+latSpan,
@@ -300,6 +325,30 @@ func (s *Scene) drawShoreLine(dst *canvas.Canvas, proj projector, ring circle, l
 // 4 out of the formula and leaves the same roots. Whatever part of [0, 1] sits
 // between them is the piece that is inside.
 func (c circle) clip(seg segment) (segment, bool) {
+	enter, leave, inside := c.span(seg)
+	if !inside {
+		return segment{}, false
+	}
+
+	runX, runY := seg.toX-seg.fromX, seg.toY-seg.fromY
+
+	return segment{
+		fromX: seg.fromX + enter*runX,
+		fromY: seg.fromY + enter*runY,
+		toX:   seg.fromX + leave*runX,
+		toY:   seg.fromY + leave*runY,
+	}, true
+}
+
+// span is clip without the cutting: how far along the segment it enters the
+// circle and how far it leaves it, as fractions from 0 at its start to 1 at its
+// end, and whether any of it is inside at all.
+//
+// The tilted view needs the fractions rather than the piece, because the parts
+// of a coastline outside the range are drawn too, in the haze's colour, and
+// telling whether there is a part outside off the piece would mean comparing
+// floats that differ only in the last bit.
+func (c circle) span(seg segment) (float64, float64, bool) {
 	runX, runY := seg.toX-seg.fromX, seg.toY-seg.fromY
 	offX, offY := seg.fromX-c.centerX, seg.fromY-c.centerY
 
@@ -308,14 +357,14 @@ func (c circle) clip(seg segment) (segment, bool) {
 
 	// A segment of no length is one point, so it is in or out as a whole.
 	if span == 0 {
-		return seg, outside <= 0
+		return 0, 1, outside <= 0
 	}
 
 	half := offX*runX + offY*runY
 
 	discriminant := half*half - span*outside
 	if discriminant < 0 {
-		return segment{}, false
+		return 0, 0, false
 	}
 
 	root := math.Sqrt(discriminant)
@@ -323,13 +372,8 @@ func (c circle) clip(seg segment) (segment, bool) {
 	leave := min((-half+root)/span, 1)
 
 	if enter >= leave {
-		return segment{}, false
+		return 0, 0, false
 	}
 
-	return segment{
-		fromX: seg.fromX + enter*runX,
-		fromY: seg.fromY + enter*runY,
-		toX:   seg.fromX + leave*runX,
-		toY:   seg.fromY + leave*runY,
-	}, true
+	return enter, leave, true
 }

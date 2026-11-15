@@ -12,20 +12,23 @@ import (
 // having them: the band an aircraft is painted in and the band the f key
 // selects have to be one answer to one question, or the scope would hide an
 // aeroplane whose own colour said it belonged on screen.
+//
+// They are the source's bands rather than a copy of them, so the one set of
+// thresholds lives where the altitudes come from.
 const (
-	bandLow = iota
-	bandMid
-	bandHigh
+	bandLow  = source.BandLow
+	bandMid  = source.BandMid
+	bandHigh = source.BandHigh
 
 	// bandCount is how many bands there are, which is what every loop over
 	// them runs to. The legend names exactly these three.
-	bandCount
+	bandCount = source.BandCount
 
 	// bandUnknown is an altitude nobody has decoded, which is not a band.
 	// It is painted muted, and no filter value selects it: the legend has
 	// three entries and none of them is "not known", so an aircraft with no
 	// altitude goes off the field as soon as a band is picked.
-	bandUnknown
+	bandUnknown = bandCount
 )
 
 // The words the F cap shows for the value it is on.
@@ -143,20 +146,16 @@ func (f filterState) marksOther() bool { return f.kind == filterOther }
 
 // bandOf is which altitude band an aircraft is in.
 //
-// An altitude of zero means nobody has decoded one yet, not sea level: a
-// Snapshot starts at zero and stays there until an altitude message arrives.
-// Those come back bandUnknown, which is what bandColour paints muted.
+// The thresholds are source.AltitudeBandOf's. An altitude of zero means
+// nobody has decoded one yet, not sea level, and a NaN means the same; both
+// come back bandUnknown, which is what bandColour paints muted.
 func bandOf(altitude float64) int {
-	switch {
-	case altitude <= 0:
+	band, known := source.AltitudeBandOf(altitude)
+	if !known {
 		return bandUnknown
-	case altitude < lowCeiling:
-		return bandLow
-	case altitude < midCeiling:
-		return bandMid
-	default:
-		return bandHigh
 	}
+
+	return band
 }
 
 // visible reports whether one aircraft passes the filter.

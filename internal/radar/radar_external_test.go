@@ -2,6 +2,7 @@ package radar_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/fonts"
 	"github.com/hyperized/uScope/pkg/psf"
+	"github.com/hyperized/uScope/pkg/shore"
 )
 
 // The canvas the panel runs at, which is what the layout is designed against.
@@ -49,12 +51,23 @@ const (
 
 // fakeSource hands back one prepared frame for ever, so a test measures the
 // scene and not the thing feeding it.
+//
+// bump moves the ghost generation on every frame, which is a source losing a
+// track every frame: the flat views' layer is then rebuilt each time, and a
+// benchmark of it prices the rebuild rather than the copy.
 type fakeSource struct {
 	frame  source.Frame
 	closed int
+	bump   bool
 }
 
-func (f *fakeSource) Frame() source.Frame { return f.frame }
+func (f *fakeSource) Frame() source.Frame {
+	if f.bump {
+		f.frame.GhostGeneration++
+	}
+
+	return f.frame
+}
 
 func (f *fakeSource) Close() error {
 	f.closed++
@@ -278,32 +291,47 @@ func sizedFor(tb testing.TB, panel *canvas.Canvas, uhd bool) *canvas.Canvas {
 }
 
 // sceneFor is benchScene, or benchSceneWith a frame carrying the bench
-// ghosts when ghosts is true. Both the allocation test and the benchmark
-// pick their scene through it, so the ghosts fixture is built in one place.
+// ghosts when ghosts is true and a corridor exposure when exposure asks for
+// one. Both the allocation test and the benchmark pick their scene through
+// it, so each fixture is built in one place.
 //
-//nolint:revive // flag-parameter: ghosts picks which of two fixtures to build, not a mode to branch deeper on.
-func sceneFor(tb testing.TB, ghosts bool) (*radar.Scene, *canvas.Canvas) {
+//nolint:revive // flag-parameter: ghosts picks a fixture to build, not a mode to branch deeper on.
+func sceneFor(tb testing.TB, ghosts bool, exposure exposureKind) (*radar.Scene, *canvas.Canvas) {
 	tb.Helper()
 
-	if !ghosts {
+	if !ghosts && exposure == exposureNone {
 		return benchScene(tb)
 	}
 
 	frame := benchFrame()
-	frame.Ghosts = ghostFleet(benchGhosts, benchGhostHistory)
 
-	return benchSceneWith(tb, frame)
+	if ghosts {
+		frame.Ghosts = ghostFleet(benchGhosts, benchGhostHistory)
+	}
+
+	exposeFrame(tb, &frame, exposure)
+
+	canv, err := canvas.New(panelWidth, panelHeight)
+	if err != nil {
+		tb.Fatalf("canvas.New: %v", err)
+	}
+
+	src := &fakeSource{frame: frame, bump: exposure == exposureRingMoving}
+
+	return radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(60))), canv
 }
 
 // drawAllocCase is one row of TestDrawAllocations.
 type drawAllocCase struct {
-	name    string
-	set     radar.Settings
-	presses int
-	ghosts  bool
-	wide    bool
-	uhd     bool
-	reveal  bool
+	name     string
+	set      radar.Settings
+	presses  int
+	filters  int
+	ghosts   bool
+	exposure exposureKind
+	wide     bool
+	uhd      bool
+	reveal   bool
 
 	// coast picks one of coast.go's fixtures instead, drawn at the render
 	// clock at; see coastAllocScene.
@@ -314,7 +342,7 @@ type drawAllocCase struct {
 // drawAllocCases is TestDrawAllocations' table, kept out of the test so the
 // test body stays short enough to read.
 func drawAllocCases() []drawAllocCase {
-	return []drawAllocCase{
+	return append([]drawAllocCase{
 		{name: "altitude mode", set: radar.Settings{Colour: radar.ColourAltitude}},
 		{name: "airline mode", set: radar.Settings{Colour: radar.ColourAirline}},
 		{name: "a coasting fleet", coast: coastAllocCoasting},
@@ -400,6 +428,81 @@ func drawAllocCases() []drawAllocCase {
 			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
 			uhd:  true,
 		},
+	}, corridorAllocCases()...)
+}
+
+// corridorAllocCases is the corridor exposure's rows of TestDrawAllocations'
+// table.
+func corridorAllocCases() []drawAllocCase {
+	return []drawAllocCase{
+		{
+			name:     "the scope with the exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "minimal with the exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the 3D view with the exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the bare 3D view with the exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the bare 3D view with the exposure at 3840x2160",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			exposure: exposureDemo,
+			uhd:      true,
+		},
+		{
+			name:     "the scope with the exposure in the mid band",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			filters:  pressFilterMid,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the 3D view with the exposure in the mid band",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			filters:  pressFilterMid,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "the scope rebuilding a full ring every frame",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			exposure: exposureRingMoving,
+		},
+		{
+			name:     "the 3D view with a full ring",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			exposure: exposureRing,
+		},
+		{
+			name:     "the bare 3D view with a full ring",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			exposure: exposureRing,
+		},
+		{
+			name:     "the scope with tubes at the caps",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			exposure: exposureTubeCap,
+		},
+		{
+			name:     "the 3D view with tubes at the caps",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			exposure: exposureTubeCap,
+		},
+		{
+			name:     "the bare 3D view with tubes at the caps",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			exposure: exposureTubeCap,
+		},
 	}
 }
 
@@ -450,11 +553,19 @@ func drawAllocCases() []drawAllocCase {
 // tilted, half a fleet still fading in, and a fleet held inside the band
 // filter's dead band.
 //
+// The corridor cases carry the demo's invented history, a ring of five
+// hundred lost tracks of two hundred fixes, or routes at the source's caps.
+// The flat ones build the exposure onto the layer in the warm-up frame and
+// copy it after, except the one whose source loses a track every frame and so
+// rebuilds the layer on each; the tilted ones skin every tube on every frame.
+// Two read the tracks through the band filter, which is the per-segment band
+// test.
+//
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range drawAllocCases() {
 		t.Run(testCase.name, func(t *testing.T) {
-			scene, canv := sceneFor(t, testCase.ghosts)
+			scene, canv := sceneFor(t, testCase.ghosts, testCase.exposure)
 			if testCase.coast != coastAllocNone {
 				scene, canv = coastAllocScene(t, testCase.coast, testCase.set)
 			} else {
@@ -465,15 +576,89 @@ func TestDrawAllocations(t *testing.T) {
 			pressTrails(t, scene, testCase.presses)
 			pressWide(t, scene, testCase.wide)
 			pressReveal(scene, testCase.reveal)
+			pressFilter(t, scene, testCase.filters)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.
 			scene.Draw(canv, testCase.at)
 
-			if got := testing.AllocsPerRun(50, func() { scene.Draw(canv, testCase.at) }); got != 0 {
+			if got := testing.AllocsPerRun(allocRuns, func() { scene.Draw(canv, testCase.at) }); got != 0 {
 				t.Errorf("Draw allocated %.1f times per frame in %s, want 0", got, testCase.name)
 			}
 		})
+	}
+}
+
+// allocRuns is how many frames each case of TestDrawAllocations averages
+// over. Any allocation at all fails the test, so one frame would do; the
+// extra frames catch a scratch that grows every few frames. Fifty was the
+// figure until the tube cases at the caps came in, and under the race
+// detector those alone took minutes at fifty.
+const allocRuns = 8
+
+// drawBenchCase is one row of BenchmarkDraw.
+type drawBenchCase struct {
+	name     string
+	set      radar.Settings
+	pal      theme.Palette
+	presses  int
+	ghosts   bool
+	exposure exposureKind
+	wide     bool
+	uhd      bool
+}
+
+// exposureBenchCases is the corridor exposure's rows of BenchmarkDraw.
+func exposureBenchCases() []drawBenchCase {
+	return []drawBenchCase{
+		{
+			name:     "exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			pal:      theme.Night,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "exposure-rebuild",
+			set:      radar.Settings{Colour: radar.ColourAltitude},
+			pal:      theme.Night,
+			exposure: exposureRingMoving,
+		},
+		{
+			name:     "3d-exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			pal:      theme.Night,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "3d-exposure-ring",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			pal:      theme.Night,
+			exposure: exposureRing,
+		},
+		{
+			name:     "minimal3d-exposure-ring",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			pal:      theme.Night,
+			exposure: exposureRing,
+		},
+		{
+			name:     "minimal3d-exposure",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			pal:      theme.Night,
+			exposure: exposureDemo,
+		},
+		{
+			name:     "3d-tube-cap",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
+			pal:      theme.Night,
+			exposure: exposureTubeCap,
+		},
+		{
+			name:     "minimal3d-tube-cap",
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D},
+			pal:      theme.Night,
+			exposure: exposureTubeCap,
+		},
 	}
 }
 
@@ -503,16 +688,17 @@ func TestDrawAllocations(t *testing.T) {
 //
 // The two 3840x2160 cases are the 4K case: the same frames on a canvas nine
 // times the panel's area, drawn at a scale of two.
+//
+// The exposure cases carry the demo's invented history, its seventy tracks
+// mostly bundled into tubes, or a ring of five hundred tracks of two hundred
+// fixes, a hundred thousand segments, with no routes. The flat ones draw onto
+// a layer that stays warm, so they should cost the copy and nothing more,
+// except exposure-rebuild, whose source loses a track every frame: that one
+// prices the layer rebuilt with the whole ring on it. The 3D ones skin every
+// tube every frame. The tube-cap cases hand the scene sixty-four routes of a
+// hundred and sixty stations, the most the source will ever carry.
 func BenchmarkDraw(b *testing.B) {
-	for _, testCase := range []struct {
-		name    string
-		set     radar.Settings
-		pal     theme.Palette
-		presses int
-		ghosts  bool
-		wide    bool
-		uhd     bool
-	}{
+	for _, testCase := range append([]drawBenchCase{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
 		{name: "altitude/day", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Day},
 		{name: "airline/night", set: radar.Settings{Colour: radar.ColourAirline}, pal: theme.Night},
@@ -564,9 +750,9 @@ func BenchmarkDraw(b *testing.B) {
 			pal:  theme.Night,
 			uhd:  true,
 		},
-	} {
+	}, exposureBenchCases()...) {
 		b.Run(testCase.name, func(b *testing.B) {
-			scene, canv := sceneFor(b, testCase.ghosts)
+			scene, canv := sceneFor(b, testCase.ghosts, testCase.exposure)
 			canv = sizedFor(b, canv, testCase.uhd)
 
 			scene.Apply(testCase.set)
@@ -631,6 +817,53 @@ func TestParseRecentre(t *testing.T) {
 
 			if _, err := radar.ParseRecentre(testCase.in); !errors.Is(err, radar.ErrRecentre) {
 				t.Errorf("ParseRecentre(%q) error = %v, want ErrRecentre", testCase.in, err)
+			}
+		})
+	}
+}
+
+// BenchmarkDraw3DBare4K prices a 4K frame: the bare 3D view at 3840x2160
+// over the demo fleet and the real embedded coastline, with the shore on the
+// way --minimal-shore turns it on, which is the hazed ground and the
+// coastline faded out across it to the far edge. tilt-10 is a shallow tilt
+// and puts the most ground near the horizon; tilt-35 is the default camera,
+// where the far side of the ground is still on the picture.
+//
+// The demo's clock is pinned, so every iteration draws the same frame rather
+// than a fleet that moves under the measurement.
+func BenchmarkDraw3DBare4K(b *testing.B) {
+	set, err := shore.Load()
+	if err != nil {
+		b.Fatalf("shore.Load: %v", err)
+	}
+
+	pinned := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
+
+	for _, tilt := range []float64{10, 35} {
+		b.Run(fmt.Sprintf("tilt-%g", tilt), func(b *testing.B) {
+			demo, err := source.NewDemo(
+				source.WithDemoLocation(schipholLat, schipholLon),
+				source.WithDemoClock(func() time.Time { return pinned }),
+			)
+			if err != nil {
+				b.Fatalf("source.NewDemo: %v", err)
+			}
+
+			canv, err := canvas.New(uhdWidth, uhdHeight)
+			if err != nil {
+				b.Fatalf("canvas.New: %v", err)
+			}
+
+			scene := radar.New(testFaces(b), demo, scope.New(), radar.WithShore(set))
+			scene.Apply(radar.Settings{View: radar.ViewMinimal3D, MinimalShore: true, Tilt: tilt})
+			scene.SetPalette(theme.Night)
+			scene.Draw(canv, 0)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				scene.Draw(canv, 0)
 			}
 		})
 	}

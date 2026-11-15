@@ -83,6 +83,12 @@ const (
 	flagMinBar     = "--minimal-bar"
 	flagLights     = "--lights"
 	flagStars      = "--stars"
+	flagCorridors  = "--corridors"
+	flagCorrField  = "--corridor-field"
+	flagHalfLife   = "--corridor-half-life"
+
+	// fieldEHAM is Schiphol, a busy field with traffic both ways.
+	fieldEHAM      = "EHAM"
 	flagRange      = "--range"
 	flagMinimal    = "--minimal"
 	flagRecenter   = "--recenter"
@@ -184,6 +190,7 @@ func defaultConfig() config {
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
 		stars:      radar.ToggleOn,
+		corridors:  radar.ToggleOn,
 		recentre:   radar.DefaultRecentre,
 		view:       radar.ViewScope,
 		exaggerate: radar.DefaultExaggerate,
@@ -193,6 +200,8 @@ func defaultConfig() config {
 
 		lights:          true,
 		minimalAirports: true,
+
+		corridorHalfLife: source.DefaultCorridorHalfLife,
 	}
 }
 
@@ -3304,6 +3313,143 @@ func TestParseFlagsCameraPlacementRejections(t *testing.T) {
 			_, err := parseFlags(testCase.args)
 			if !errors.Is(err, testCase.wantErr) {
 				t.Errorf("parseFlags(%v) error = %v, want errors.Is(%v)", testCase.args, err, testCase.wantErr)
+			}
+		})
+	}
+}
+
+// TestRadarSettingsCarriesTheCorridors checks that --corridors reaches the
+// scene and not only the source, which is where it used to stop.
+func TestRadarSettingsCarriesTheCorridors(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagCorridors, offValue})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if got := radarSettings(cfg).Corridors; got != radar.ToggleOff {
+		t.Errorf("radarSettings().Corridors = %q, want %q", got, radar.ToggleOff)
+	}
+}
+
+// TestParseFlagsCorridors covers the three corridor flags: the exposure's switch,
+// the airfield it is drawn around and how fast it fades. The ICAO code is
+// upper-cased before it is checked, so eham and EHAM are the same field.
+func TestParseFlagsCorridors(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		edit    func(*config)
+		wantErr error
+	}{
+		{name: caseDefault, edit: func(*config) {}},
+		{name: offValue, args: []string{flagCorridors, offValue}, edit: func(c *config) {
+			c.corridors = radar.ToggleOff
+		}},
+		{name: "on", args: []string{flagCorridors, defaultOn}, edit: func(*config) {}},
+		{name: "switch in the wrong case", args: []string{flagCorridors, "ON"}, wantErr: errCorridors},
+		{name: "field", args: []string{flagCorrField, fieldEHAM}, edit: func(c *config) {
+			c.corridorField = fieldEHAM
+		}},
+		{name: "field in lower case", args: []string{flagCorrField, "eham"}, edit: func(c *config) {
+			c.corridorField = fieldEHAM
+		}},
+		{name: "field too short", args: []string{flagCorrField, "EHA"}, wantErr: errCorrField},
+		{name: "field too long", args: []string{flagCorrField, "EHAMX"}, wantErr: errCorrField},
+		{name: "field with a digit", args: []string{flagCorrField, "EH4M"}, wantErr: errCorrField},
+		{name: "field with a multibyte letter", args: []string{flagCorrField, "EHÄ"}, wantErr: errCorrField},
+		{name: "half-life", args: []string{flagHalfLife, "90m"}, edit: func(c *config) {
+			c.corridorHalfLife = 90 * time.Minute
+		}},
+		{name: "half-life at the floor", args: []string{flagHalfLife, "10m"}, edit: func(c *config) {
+			c.corridorHalfLife = 10 * time.Minute
+		}},
+		{name: "half-life at the ceiling", args: []string{flagHalfLife, "24h"}, edit: func(c *config) {
+			c.corridorHalfLife = 24 * time.Hour
+		}},
+		{name: "half-life too short", args: []string{flagHalfLife, "9m"}, wantErr: errHalfLife},
+		{name: "half-life zero", args: []string{flagHalfLife, "0"}, wantErr: errHalfLife},
+		{name: "half-life not a duration", args: []string{flagHalfLife, "forever"}, wantErr: errHalfLife},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags(testCase.args)
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("parseFlags(%v) error = %v, want %v", testCase.args, err, testCase.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseFlags(%v) unexpected error: %v", testCase.args, err)
+			}
+
+			want := defaultConfig()
+			testCase.edit(&want)
+
+			checkConfig(t, got, want)
+		})
+	}
+}
+
+// TestCorridorHalfLifeDefaultMatchesTheSource holds the flag's spelling of the
+// default to the source's own, so the two cannot drift apart.
+func TestCorridorHalfLifeDefaultMatchesTheSource(t *testing.T) {
+	t.Parallel()
+
+	got, err := time.ParseDuration(defaultCorridorHalfLife)
+	if err != nil || got != source.DefaultCorridorHalfLife {
+		t.Errorf("defaultCorridorHalfLife = %q, want %s", defaultCorridorHalfLife, source.DefaultCorridorHalfLife)
+	}
+}
+
+// TestSourceForPinsTheCorridorField checks --corridor-field reaches both kinds
+// of source, and that an airfield the list does not know stops the start with
+// an error naming the flag rather than only the airfield.
+func TestSourceForPinsTheCorridorField(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		cfg  config
+	}{
+		{name: "a beast feed", cfg: config{source: sourceBeast, beast: beastAddr}},
+		{name: demoValue, cfg: config{source: sourceDemo}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			pinned := testCase.cfg
+			pinned.corridorField, pinned.corridorHalfLife = fieldEHAM, time.Hour
+
+			src, err := sourceFor(pinned, linuxGOOS, io.Discard)
+			if err != nil {
+				t.Fatalf("sourceFor: %v", err)
+			}
+
+			defer func() { _ = src.Close() }()
+
+			exposure := src.Frame().Corridors
+			if exposure.Field.ICAO != fieldEHAM || exposure.HalfLife != time.Hour {
+				t.Errorf("corridors = %+v, want EHAM at an hour", exposure)
+			}
+
+			unknown := testCase.cfg
+			unknown.corridorField = "ZZZZ"
+
+			refused, err := sourceFor(unknown, linuxGOOS, io.Discard)
+			if !errors.Is(err, errCorrField) || !errors.Is(err, source.ErrUnknownAirfield) {
+				t.Fatalf("sourceFor error = %v, want errCorrField wrapping source.ErrUnknownAirfield", err)
+			}
+
+			if refused != nil {
+				t.Error("sourceFor returned a source alongside an error")
 			}
 		})
 	}

@@ -1242,27 +1242,26 @@ func TestView3DGuards(t *testing.T) {
 		canv := blankCanvas(t)
 		blank := blankCanvas(t)
 
-		scene.drawShoreLine3(canv, view, shore.Polyline{{Lat: layerBaseLat, Lon: layerBaseLon}})
+		drawCoastLine3(scene, canv, view, shore.Polyline{{Lat: layerBaseLat, Lon: layerBaseLon}})
 
 		if !identicalPixels(canv, blank) {
 			t.Error("a one-point coastline drew something, want nothing")
 		}
 	})
 
-	t.Run("a coastline outside the range draws nothing", func(t *testing.T) {
+	t.Run("a coastline past the haze draws nothing", func(t *testing.T) {
 		t.Parallel()
 
 		canv := blankCanvas(t)
 		blank := blankCanvas(t)
 
-		const wayOut = 1000.0
+		wayOut := 2 * view.haze().far
 
-		ring := circle{radius: view.scopeNm}
-		scene.drawShoreSegment3(canv, view, ring,
+		drawCoastSegment3(scene, canv, view, circle{radius: view.scopeNm},
 			point3{east: wayOut, north: wayOut}, point3{east: wayOut + 1, north: wayOut})
 
 		if !identicalPixels(canv, blank) {
-			t.Error("a coastline outside the range drew something, want nothing")
+			t.Error("a coastline past the haze drew something, want nothing")
 		}
 	})
 
@@ -1278,7 +1277,7 @@ func TestView3DGuards(t *testing.T) {
 		const wideRingNm = 1e6
 
 		ring := circle{radius: wideRingNm}
-		scene.drawShoreSegment3(canv, view, ring, point3{north: -wideRingNm / 2}, point3{north: -wideRingNm / 3})
+		drawCoastSegment3(scene, canv, view, ring, point3{north: -wideRingNm / 2}, point3{north: -wideRingNm / 3})
 
 		if !identicalPixels(canv, blank) {
 			t.Error("a coastline behind the camera drew something, want nothing")
@@ -1320,8 +1319,8 @@ func TestView3DThinsADenseCoastline(t *testing.T) {
 
 		line = append(line, shore.Point{Lat: layerBaseLat + 0.2, Lon: layerBaseLon})
 
-		scene.drawShoreLine3(canv, view, line)
-		scene.drawShoreLine3(dense, view, shore.Polyline{line[0], line[len(line)-1]})
+		drawCoastLine3(scene, canv, view, line)
+		drawCoastLine3(scene, dense, view, shore.Polyline{line[0], line[len(line)-1]})
 
 		if identicalPixels(canv, blankCanvas(t)) {
 			t.Fatal("the thinned coastline drew nothing at all, so this proves nothing")

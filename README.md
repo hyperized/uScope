@@ -79,12 +79,16 @@ becomes a small model banked into its turn, and the camera orbits the receiver
 once every two minutes. `e` draws the receiving envelope: the theoretical
 radio horizon as a dashed bowl, and the measured one as a mesh built from
 where the antenna has actually heard something, which is what shows a
-directional antenna or a chimney in the way.
+directional antenna or a chimney in the way. The sea, the land and the
+coastline carry on past the outer ring and fade towards the horizon instead of
+ending at an edge.
 
 Once the receiver's position is known, the sky above the horizon follows the
 sun there: black at night, a band of deep blue in nautical twilight, an orange
 horizon under a dark zenith around sunrise and sunset, gold with the sun low,
-and pale blue by day. Dawn and dusk look the same. Phosphor paints the sky
+and pale blue by day. With the coastline on, the ground fades into the same
+horizon colour, so at shallow tilts there is no line where the map stops and
+the sky starts. Dawn and dusk look the same. Phosphor paints the sky
 green, mono paints it grey, and the night palettes keep it dark. At the
 default tilt the horizon is above the top of the picture; `[` or `--tilt 10`
 brings the camera down until the sky comes into view. `--orbit off` and
@@ -117,6 +121,64 @@ along the bottom for four seconds, drawn over the picture so nothing moves,
 showing only the keys that work there.
 
 ![Minimal mode following a fleet that is all to the north-west](docs/minimal.png)
+
+### Corridors
+
+Every aircraft that drops out of range leaves its track behind, and uScope
+keeps it for a while. Tracks that flew the same way are bundled into a route,
+and each arrival and departure route is drawn as a tube: the bundle's average
+path down the middle, and its spread as the width. Arrivals come in from
+several directions and all end on the same runway, so an arrival route is a
+cone that narrows onto it. A departure route opens out the other way. A route
+grows stronger as more tracks join it, and every track fades by half every two
+hours, or whatever `--corridor-half-life` says, so a runway change shows as one
+set of tubes fading out while the next one builds up.
+
+Each track is sorted once, when it is lost, by where it began and ended
+relative to one airfield: the nearest within 150 nm of the receiver, or the
+one you name with `--corridor-field`. In the glass look a route of tracks that
+ended within 10 nm of the field is cyan, an arrival. One whose tracks began
+there and ended somewhere else is amber, a departure. Everything else is grey,
+traffic passing through, and gets no tube: through traffic cruises at 17,000
+to 25,000 ft, and in the 3D views its bundle floated thirty miles above its
+own ground track as a wide grey sheet. The flat views still draw its tracks as
+thin lines.
+
+The flat views draw each tube as a translucent band on the ground. The 3D
+views draw it in the air at the route's average altitude, as tall as the
+bundle's spread in altitude, so arrivals slope down to the runway and
+departures climb away from it. The tube is shaded like glass, dense along its
+outline and thin where it faces you, with its back wall showing through and a
+hairline down each side where it turns away. It has one ring, round its mouth
+at the field. At the other end it fades out over its last four stations, and
+it does the same wherever the filter or the edge of the view cuts it, so a
+tube never seems to stop dead in mid-air. On the flat views a track that
+shares its route with nobody is drawn on its own as a thin line. The 3D views
+draw the tubes and no lines: lost tracks at eight times their real height were
+a tangle that hid the tubes.
+
+A tube only runs as far as its tracks agree. It starts at the runway and goes
+outwards until fewer than three tracks have flown a stretch or until they are
+spread more than 4 nm apart. Arrivals that share a final often come from entry
+points tens of miles apart, and one tube drawn round all of them out there
+comes out wide and twisted, which is not a path anybody flies. On the flat
+views each track carries on past the end of its tube as a thin line, so the
+fan-out stays on screen.
+
+The `f` filter cuts a tube where its average altitude leaves the band on show.
+A stretch whose altitude was never decoded is not drawn under any filter. In
+airline colouring every route stays, since a filter on one airline's live
+traffic says nothing about the corridors.
+
+Nothing appears until there is an airfield, which takes a receiver position (a
+GPS fix, `--lat` and `--lon`, or a self-locate estimate that has settled to
+within 10 nm) or `--corridor-field`, and until the first aircraft is lost.
+`--demo` starts with seventy invented tracks around Schiphol from the last two
+hours, so there is something to look at. `u` or `--corridors off` hides the
+corridors in every view. The `U TUBES` cap is on the flat views' key bar and
+the bare views' reveal. The 3D view's bar has no room for it, but the key
+works there too. The lost tracks live in memory, so a restart starts the
+corridors from nothing.
 
 ### Looks and themes
 
@@ -269,6 +331,7 @@ true at once and the answer is a compromise.
 | `a` | airfield markers on or off |
 | `m` | coastline and water on or off |
 | `s` | the aircraft lights on or off, in every view |
+| `u` | the corridor tubes on or off, in every view |
 | `h` | bare views: the bar across the top on or off |
 | `c` | colour by altitude or by airline |
 | `f` | filter to one entry of the legend, then back to all |
@@ -285,7 +348,7 @@ true at once and the answer is a compromise.
 Shifted letters do the same as unshifted, because caps lock is easy to hit on
 the uConsole's keyboard. The key bar along the bottom shows every key that
 does something in the view on screen, with its current state. The full 3D
-view's bar has no room for `z`; the bare 3D view's has. The bare views hide
+view's bar has no room for `z` or `u`; the bare 3D view's has. The bare views hide
 the bar until a key is pressed, then show it for four seconds; another press
 starts the four seconds again.
 
@@ -313,6 +376,9 @@ starts the four seconds again.
 | `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d`; `h` still flips it |
 | `--lights` | `on` | the aircraft lights: red and green wingtips, white tail, strobes and the beacon; `s` still flips them |
 | `--stars` | `on` | stars in the 3D views' night sky; `z` flips them |
+| `--corridors` | `on` | draw the routes lost aircraft flew as tubes, fading with age, see "Corridors"; `u` flips them |
+| `--corridor-field` | | the airfield tracks are sorted into arrivals and departures by, as an ICAO code; empty takes the nearest within 150 nm of the receiver |
+| `--corridor-half-life` | `2h` | how long a lost track takes to count for half as much in its route, `10m` to `24h` |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--zoom` | `0` | range steps inside the `auto` fit, `-5` to `5`; negative widens, the view keeps following the traffic, `+` and `-` still turn auto off, and a fixed `--range` ignores it |
 | `--tilt` | `35` | the 3D camera's starting elevation in degrees, 10 to 80; `[` and `]` step from it |

@@ -452,9 +452,9 @@ func TestBandColour(t *testing.T) {
 		{name: "zero reads as unknown, not sea level", altitude: 0, want: pal.Muted},
 		{name: "negative also reads as unknown", altitude: negativeAltitude, want: pal.Muted},
 		{name: "just under the low ceiling", altitude: justBelowLowBand, want: pal.AltLow},
-		{name: "exactly the low ceiling moves into the mid band", altitude: lowCeiling, want: pal.AltMid},
+		{name: "exactly the low ceiling moves into the mid band", altitude: source.LowCeilingFt, want: pal.AltMid},
 		{name: "just under the mid ceiling", altitude: justBelowMidBand, want: pal.AltMid},
-		{name: "exactly the mid ceiling moves into the high band", altitude: midCeiling, want: pal.AltHigh},
+		{name: "exactly the mid ceiling moves into the high band", altitude: source.MidCeilingFt, want: pal.AltHigh},
 		{name: "well above the mid ceiling", altitude: wellAboveMidBand, want: pal.AltHigh},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

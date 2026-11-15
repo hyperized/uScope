@@ -14,8 +14,10 @@ const keyBarHold = 4 * time.Second
 // bareCaps is the key legend a bare view reveals.
 //
 // It is keyCaps with the keys that do nothing in a bare view taken out and
-// the one only a bare view binds put in. S LIGHTS stays, because the lights
-// are drawn in every view. The select arrows go because the selection has
+// the one only a bare view binds put in. S LIGHTS and U TUBES stay, because
+// the lights and the tubes are drawn in every view. U sits after M here rather
+// than on a tail of its own as in the full views, because the bare rows have
+// no select arrows, W or E to pay for. The select arrows go because the selection has
 // nothing to show on a bare field: no ring and no card. W goes because
 // toggleWide refuses there. H comes in, after V, because it is the bare
 // views' own switch for the bar across the top. A and M stay and read the
@@ -29,6 +31,7 @@ var bareCaps = [...]keyCap{
 	{key: "T", label: trailBarLabel, state: capTrails},
 	{key: "A", label: "AIRPORTS", state: capAirports},
 	{key: "M", label: "SHORE", state: capShore},
+	{key: "U", label: tubesBarLabel, state: capCorridors},
 	{key: "S", label: "LIGHTS", state: capLights},
 	{key: "C", label: "COLOUR", state: capColour},
 	{key: "F", label: filterBarLabel, state: capFilter},
@@ -112,5 +115,5 @@ func (s *Scene) drawRevealedKeyBar(lay *layout, elapsed time.Duration) {
 	lay.dst.FillRect(image.Rect(bounds.Min.X, edge, bounds.Max.X, bounds.Max.Y), s.pal.Field)
 	lay.dst.FillRect(image.Rect(bounds.Min.X, edge, bounds.Max.X, edge+lay.px(ruleHeight)), s.pal.Rule)
 
-	s.drawCapRow(lay, top, bareCaps[:], bare3DCaps[:])
+	s.drawCapRow(lay, top, bareCaps[:], nil, bare3DCaps[:])
 }

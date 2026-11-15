@@ -68,9 +68,9 @@ func TestBandOf(t *testing.T) {
 		{name: caseZero + " is not a band", altitude: 0, want: bandUnknown},
 		{name: caseNegative + " is not a band either", altitude: negativeAltitude, want: bandUnknown},
 		{name: "just under the low ceiling", altitude: justBelowLowBand, want: bandLow},
-		{name: "exactly the low ceiling moves up", altitude: lowCeiling, want: bandMid},
+		{name: "exactly the low ceiling moves up", altitude: source.LowCeilingFt, want: bandMid},
 		{name: "just under the mid ceiling", altitude: justBelowMidBand, want: bandMid},
-		{name: "exactly the mid ceiling moves up", altitude: midCeiling, want: bandHigh},
+		{name: "exactly the mid ceiling moves up", altitude: source.MidCeilingFt, want: bandHigh},
 		{name: "well above the mid ceiling", altitude: wellAboveMidBand, want: bandHigh},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

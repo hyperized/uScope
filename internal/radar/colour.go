@@ -209,6 +209,13 @@ type Settings struct {
 	// orbit turning.
 	Stars Toggle
 
+	// Corridors is whether the tracks of lost aircraft are drawn as a long
+	// exposure, fading with age: cyan for the ones that ended at the nearest
+	// airfield, amber for the ones that began there, grey for the rest. Zero
+	// reads as on, the way Stars does, because the tracks are faint enough to
+	// leave on and a source with no airfield draws none whatever this says.
+	Corridors Toggle
+
 	// Azimuth is where the 3D camera stands, in degrees clockwise from north:
 	// the bearing Left and Right step. With Orbit on it is where the turning
 	// starts from, and with Orbit off it is where the camera stays. Values
@@ -252,6 +259,7 @@ func (s *Scene) Apply(set Settings) {
 	s.applyTilt(set.Tilt)
 	s.applyOrbit(set.Orbit.On(), set.Azimuth)
 	s.stars = set.Stars.On()
+	s.corridors = set.Corridors.On()
 }
 
 // applyOrbit sets whether the camera turns and where it stands.

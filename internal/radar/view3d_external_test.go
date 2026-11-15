@@ -610,9 +610,11 @@ var (
 	turnCapBox     = image.Rect(940, 682, 996, 704)
 	tiltCapBox     = image.Rect(1001, 682, 1065, 704)
 
-	// scopeBarTail is the part of the bar row the thirteen shared caps never
-	// reach, which is where all four of the boxes above sit.
-	scopeBarTail = image.Rect(799, 682, 1280, 704)
+	// tubesCapBox is the flat views' U cap, which takes the place the orbit
+	// cap has in the 3D view, and scopeBarTail the part of the bar row the
+	// flat scope never reaches, past it.
+	tubesCapBox  = image.Rect(799, 682, 854, 704)
+	scopeBarTail = image.Rect(859, 682, 1280, 704)
 
 	// orbitEngagedBar is the strip along the inside of orbitCapBox's bottom
 	// edge the engaged bar is drawn in, worked out the way autoEngagedBar in
@@ -631,7 +633,7 @@ var (
 // read the README, which is not where anyone looks while holding the device.
 // The other half matters just as much. A cap for a key that does nothing in
 // the view on screen is furniture pretending to be a control, so the scope's
-// bar has to stop after VIEW.
+// bar has to stop after U, the one cap only the flat views carry.
 func TestView3DKeyBarListsTheCameraKeys(t *testing.T) {
 	t.Parallel()
 
@@ -660,18 +662,18 @@ func TestView3DKeyBarListsTheCameraKeys(t *testing.T) {
 			if got := painted(perspectiveCanvas, testCase.box); got == 0 {
 				t.Errorf("the 3D bar drew nothing in the %s cap's box, want a cap there", testCase.name)
 			}
-
-			if got := painted(flatCanvas, testCase.box); got != 0 {
-				t.Errorf("the scope bar drew %d pixels in the %s cap's box, want none", got, testCase.name)
-			}
 		})
 	}
 
-	// Nothing at all past VIEW on the flat scope, which is the stronger claim:
-	// the four boxes above could each be blank while a fifth cap nobody asked
-	// for sat between them.
+	// The flat scope ends with U where the 3D view starts its camera caps.
+	if got := painted(flatCanvas, tubesCapBox); got == 0 {
+		t.Error("the scope bar drew nothing in the U cap's box, want a cap there")
+	}
+
+	// Nothing at all past U on the flat scope: no camera cap, and no fifth cap
+	// nobody asked for.
 	if got := painted(flatCanvas, scopeBarTail); got != 0 {
-		t.Errorf("the scope bar drew %d pixels past VIEW, want the bar to stop there", got)
+		t.Errorf("the scope bar drew %d pixels past U, want the bar to stop there", got)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/radar"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
 	"github.com/hyperized/uScope/pkg/rotate"
@@ -39,6 +40,10 @@ const (
 	defaultRange    = "auto"
 	defaultRecentre = "3m"
 	defaultView     = "scope"
+
+	// defaultCorridorHalfLife is source.DefaultCorridorHalfLife spelled the
+	// way the flag is typed. A test holds the two together.
+	defaultCorridorHalfLife = "2h"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
@@ -66,6 +71,9 @@ const (
 	// maxDimension is a sanity ceiling for --size, not a hardware limit. It
 	// exists so a typo allocates a rejected flag instead of 40 GB of canvas.
 	minDimension, maxDimension = 1, 8192
+
+	// icaoLength is how long an airfield's ICAO code is.
+	icaoLength = 4
 
 	// The coordinate limits --lat and --lon are checked against. internal/source
 	// checks them again, because it is a library entry point and a caller that
@@ -116,6 +124,9 @@ var (
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
 	errStars      = errors.New(appName + ": --stars must be on or off")
+	errCorridors  = errors.New(appName + ": --corridors must be on or off")
+	errCorrField  = errors.New(appName + ": --corridor-field must be an airfield's four-letter ICAO code, or empty")
+	errHalfLife   = errors.New(appName + ": --corridor-half-life must be an interval from 10m to 24h")
 	errMinShore   = errors.New(appName + ": --minimal-shore must be on or off")
 	errMinAirport = errors.New(appName + ": --minimal-airports must be on or off")
 	errMinBar     = errors.New(appName + ": --minimal-bar must be on or off")
@@ -164,6 +175,7 @@ type config struct {
 	minimalBar      bool
 	lights          bool
 	stars           radar.Toggle
+	corridors       radar.Toggle
 	rangeNm         float64
 	recentre        time.Duration
 	view            radar.View
@@ -202,6 +214,16 @@ type config struct {
 	// for something that only matters if a later choice makes it apply.
 	demoSector bool
 
+	// corridorField is the airfield --corridor-field pinned, upper-cased and
+	// four letters long, and empty to let the source find the nearest one.
+	// Whether the list knows it is the source's question, answered when it is
+	// built; see sourceError.
+	corridorField string
+
+	// corridorHalfLife is how long a lost track takes to fade to half its
+	// strength, already inside the source's bounds.
+	corridorHalfLife time.Duration
+
 	// biasTee powers an LNA over the coax and autoSweep walks the gain grid
 	// once before the first frame. Both only apply when uScope is driving the
 	// radio itself, and both are inert rather than an error anywhere else,
@@ -231,6 +253,9 @@ type rawFlags struct {
 	minBar      string
 	lights      string
 	stars       string
+	corridors   string
+	corrField   string
+	halfLife    string
 	scopeRange  string
 	battery     string
 	beast       string
@@ -344,10 +369,24 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"receiver latitude in degrees, -90 to 90; needs --lon as well")
 	set.StringVar(&raw.longitude, "lon", "",
 		"receiver longitude in degrees, -180 to 180; needs --lat as well")
+	bindCorridors(set, raw)
 	set.IntVar(&raw.frames, "frames", 0,
 		"stop after this many frames, 0 to run until quit, up to 1000")
 
 	return raw
+}
+
+// bindCorridors declares the corridor flags. The switch is the radar's and
+// the other two are the source's, but they are one feature and read better
+// together in --help.
+func bindCorridors(set *flag.FlagSet, raw *rawFlags) {
+	set.StringVar(&raw.corridors, "corridors", defaultOn,
+		"draw the routes lost aircraft flew as tubes, fading with age and coloured by arrival or departure: "+
+			"on or off. u flips it while it runs")
+	set.StringVar(&raw.corrField, "corridor-field", "",
+		"the airfield lost tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm")
+	set.StringVar(&raw.halfLife, "corridor-half-life", defaultCorridorHalfLife,
+		"how long a lost track takes to fade to half its strength, 10m to 24h")
 }
 
 // bindCamera declares the 3D views' flags: the camera's placement and the
@@ -471,6 +510,7 @@ func (raw rawFlags) display() (display, error) {
 			MinimalBar:      overlays.MinimalBar,
 			Lights:          overlays.Lights,
 			Stars:           overlays.Stars,
+			Corridors:       overlays.Corridors,
 
 			View:       view,
 			Exaggerate: camera.Exaggerate,
@@ -564,6 +604,11 @@ func (raw rawFlags) validated() (config, error) {
 		return config{}, err
 	}
 
+	field, halfLife, err := raw.corridorSource()
+	if err != nil {
+		return config{}, err
+	}
+
 	return config{
 		fbPath:      raw.fb,
 		rotation:    show.rotation,
@@ -586,6 +631,7 @@ func (raw rawFlags) validated() (config, error) {
 		minimalBar:      show.radar.MinimalBar,
 		lights:          show.radar.Lights,
 		stars:           show.radar.Stars,
+		corridors:       show.radar.Corridors,
 		rangeNm:         show.radar.RangeNm,
 		recentre:        show.radar.Recentre,
 		view:            show.radar.View,
@@ -607,7 +653,47 @@ func (raw rawFlags) validated() (config, error) {
 		demoSector:  raw.demoSector,
 		biasTee:     raw.biasTee,
 		autoSweep:   raw.autoSweep,
+
+		corridorField:    field,
+		corridorHalfLife: halfLife,
 	}, nil
+}
+
+// corridorSource reads the two corridor flags that go to the source rather
+// than to the scene: which airfield, and how fast the tracks fade.
+//
+// The ICAO code is upper-cased first, because airport codes are written both
+// ways and the list stores them in capitals, and then held to four letters.
+// That is the shape of every code in uAirwaves' list, so anything else is a
+// typo the operator should hear about now rather than as an unknown airfield
+// from the source a moment later.
+func (raw rawFlags) corridorSource() (string, time.Duration, error) {
+	field := strings.ToUpper(raw.corrField)
+	if field != "" && !icaoCode(field) {
+		return "", 0, fmt.Errorf("%w: got %q", errCorrField, raw.corrField)
+	}
+
+	halfLife, err := source.ParseCorridorHalfLife(raw.halfLife)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: %w", errHalfLife, err)
+	}
+
+	return field, halfLife, nil
+}
+
+// icaoCode reports whether text is four ASCII capitals.
+func icaoCode(text string) bool {
+	if len(text) != icaoLength {
+		return false
+	}
+
+	for index := range len(text) {
+		if text[index] < 'A' || text[index] > 'Z' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // location is the receiver position the operator typed in, if any.
@@ -810,9 +896,9 @@ func parseShore(text string) (radar.Toggle, error) {
 	return toggle, nil
 }
 
-// overlays parses the seven on/off switches, the scope's pair, the bare
-// views' pair and bar, the aircraft lights and the stars, into the Settings
-// fields they fill. They are one helper so display stays a flat list of
+// overlays parses the eight on/off switches, the scope's pair, the bare
+// views' pair and bar, the aircraft lights, the stars and the corridors, into
+// the Settings fields they fill. They are one helper so display stays a flat list of
 // parses rather than growing past funlen.
 func (raw rawFlags) overlays() (radar.Settings, error) {
 	airports, err := parseAirports(raw.airports)
@@ -840,7 +926,13 @@ func (raw rawFlags) overlays() (radar.Settings, error) {
 		return radar.Settings{}, fmt.Errorf("%w: %w", errStars, err)
 	}
 
+	corridors, err := radar.ParseToggle(raw.corridors)
+	if err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errCorridors, err)
+	}
+
 	minimal.Airports, minimal.Shore, minimal.Lights, minimal.Stars = airports, shoreToggle, lights, stars
+	minimal.Corridors = corridors
 
 	return minimal, nil
 }

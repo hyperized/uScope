@@ -30,7 +30,7 @@ const stitchICAO = "ABC123"
 // heard is one frame with that aircraft in it, carrying the given history.
 func heard(tracker *ghosts, fixes []airplane.PositionEntry, now time.Time) airplanes.List {
 	planes := airplanes.List{{ICAO: stitchICAO, PositionHistory: fixes, Latitude: 52, Longitude: 4, Heading: 90}}
-	tracker.observe(planes, now)
+	tracker.observe(planes, Receiver{}, now)
 
 	return planes
 }
@@ -45,7 +45,7 @@ func TestStitchJoinsTheTwoLives(t *testing.T) {
 	tracker := newGhosts()
 	heard(&tracker, fixesFrom(0, 5), stitchEpoch)
 
-	lost := tracker.observe(nil, stitchEpoch.Add(time.Second))
+	lost := tracker.observe(nil, Receiver{}, stitchEpoch.Add(time.Second))
 	if len(lost) != 1 || lost[0].Heading != 90 || lost[0].Latitude != 52 {
 		t.Fatalf("ghost after the loss = %+v, want one carrying the last heading and position", lost)
 	}
@@ -64,7 +64,7 @@ func TestStitchJoinsTheTwoLives(t *testing.T) {
 		t.Errorf("ring after the revival = %d trails, want the ghost gone", len(got))
 	}
 
-	again := tracker.observe(nil, stitchEpoch.Add(2*time.Minute))
+	again := tracker.observe(nil, Receiver{}, stitchEpoch.Add(2*time.Minute))
 	if len(again) != 1 || len(again[0].Points) != 8 {
 		t.Fatalf("ring after the second loss = %+v, want one trail of 8 fixes", again)
 	}
@@ -81,7 +81,7 @@ func TestStitchDropsADuplicateSeamFix(t *testing.T) {
 
 	tracker := newGhosts()
 	heard(&tracker, fixesFrom(0, 3), stitchEpoch)
-	tracker.observe(nil, stitchEpoch)
+	tracker.observe(nil, Receiver{}, stitchEpoch)
 
 	planes := heard(&tracker, fixesFrom(2, 3), stitchEpoch.Add(time.Minute))
 
@@ -111,10 +111,10 @@ func TestStitchGivesUpThePrefix(t *testing.T) {
 
 			tracker := newGhosts()
 			heard(&tracker, fixesFrom(0, 10), stitchEpoch)
-			tracker.observe(nil, stitchEpoch)
+			tracker.observe(nil, Receiver{}, stitchEpoch)
 			// The prefix is taken on a frame inside the window, then read on
 			// one that may not be.
-			tracker.observe(airplanes.List{{ICAO: stitchICAO}}, stitchEpoch.Add(time.Second))
+			tracker.observe(airplanes.List{{ICAO: stitchICAO}}, Receiver{}, stitchEpoch.Add(time.Second))
 
 			planes := heard(&tracker, fixesFrom(1000, testCase.fresh), stitchEpoch.Add(testCase.after))
 
@@ -133,7 +133,7 @@ func TestStitchSkipsALossPastTheWindow(t *testing.T) {
 
 	tracker := newGhosts()
 	heard(&tracker, fixesFrom(0, 4), stitchEpoch)
-	tracker.observe(nil, stitchEpoch)
+	tracker.observe(nil, Receiver{}, stitchEpoch)
 
 	planes := heard(&tracker, fixesFrom(100, 2), stitchEpoch.Add(stitchFor+time.Minute))
 
