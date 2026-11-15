@@ -1,9 +1,9 @@
 # uScope
 
 An ADS-B radar scope for BEAST feeds, drawn pixel by pixel. Point it at
-readsb, dump1090 or anything else that speaks Mode S BEAST and it shows the
-traffic in your terminal, or straight on a Linux framebuffer. One static
-binary, keyboard driven, `q` to get back to the prompt.
+[demod1090](https://github.com/hyperized/demod1090) and it shows the traffic in
+your terminal, or straight on a Linux framebuffer. One static binary, keyboard
+driven, `q` to get back to the prompt.
 
 ![The scope at night, twelve invented aircraft around Schiphol](docs/radar.png)
 
@@ -16,12 +16,19 @@ go run . --demo
 ```
 
 That flies twelve invented aircraft around Schiphol. Press `v` to cycle the
-views, `c` to change what the colours mean, and `q` to quit. With a feed of
-your own:
+views, `c` to change what the colours mean, and `q` to quit.
+
+For real traffic, run [demod1090](https://github.com/hyperized/demod1090) next to
+an RTL-SDR and point uScope at it:
 
 ```sh
-go run . --beast HOST:30005
+demod1090 --auto-gain --beast-listen :30005   # on the machine with the dongle
+go run . --beast HOST:30005                   # anywhere that can reach it
 ```
+
+demod1090 is the demodulator from the same pure-Go stack, and it is what
+uScope's own local radio path runs on. Any other Mode S BEAST source works
+too, readsb and dump1090 included.
 
 uScope started on the ClockworkPi uConsole and still runs there on the panel,
 where it can also read a local RTL-SDR without a feed in between. See
@@ -313,7 +320,7 @@ stays on night until the receiver has a position. The `L` cap reads
 | Flag | Source |
 |---|---|
 | none | the local RTL-SDR on Linux, opened through uAirwaves' own driver; the demo fleet anywhere else |
-| `--beast HOST:PORT` | a Mode S BEAST feed over TCP, from readsb, dump1090 or `demod1090 --beast-listen` |
+| `--beast HOST:PORT` | a Mode S BEAST feed over TCP, from [demod1090](https://github.com/hyperized/demod1090) with `--beast-listen`, or from readsb or dump1090 |
 | `--replay-iq PATH` | a captured IQ file played back through the same demodulator |
 | `--demo` | twelve invented aircraft on straight tracks, one of which goes quiet after ninety seconds |
 
