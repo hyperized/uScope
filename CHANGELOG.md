@@ -185,6 +185,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `--help` exits with status 0. It used to print the usage and then exit 1
+  with "flag: help requested" on stderr, as if asking were an error.
 - The tilted views no longer draw a faint dashed line down the 5 degree east
   meridian. Land is stored in five degree cells, and two cells' pieces now
   walk their shared boundary in the same edges, so the fill closes over it.

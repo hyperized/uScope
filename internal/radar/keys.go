@@ -75,9 +75,8 @@ func (s *Scene) handleKey(key input.Key) bool {
 // a bar across the top of the two that do not, j gives the bare 3D view its
 // strip board, and anything not bound here falls through to the camera keys, which only the 3D view takes.
 //
-// s turns the aircraft lights on and off in every view. A scene starts
-// without them, so a press is how they come on without restarting with
-// --lights on.
+// s turns the aircraft lights on and off in every view. They start on unless
+// --lights off says otherwise, so a press is how they go without a restart.
 //
 // u turns the corridor tubes on and off in every view, on the one switch
 // --corridors sets. There is no bare pair the way there is for a and m: the

@@ -283,8 +283,8 @@ type Settings struct {
 
 	// Lights is whether the aircraft carry their exterior lights: red and
 	// green on the wingtips, white on the tail, the strobes and the beacon.
-	// A plain bool like the bare views' pair, because the lights start off
-	// and a Toggle's zero value reads as on.
+	// A plain bool like the bare views' pair. The default lives in the flag,
+	// which is on, so a Settings built by hand has them off until it says so.
 	Lights bool
 
 	// RangeNm pins the scope to a range in nautical miles and turns auto range
