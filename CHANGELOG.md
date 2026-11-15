@@ -8,6 +8,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Aircraft no longer blink out at the edge of coverage. When uAirwaves drops
+  one, the scope keeps drawing it for a minute where it was last heard, at its
+  last heading, with its trail, fading to nothing, in every view and every
+  trail mode. It has no lights or selection and is left out of the rows, the
+  strips and the aircraft count. Heard again, it carries its old track in
+  front of the new one, so the trail does not regrow from a dot.
+- New aircraft fade in over two seconds. The first frame, `--png` included,
+  and the first frame after the filter changes draw everything at full
+  strength. Lights come on when the fade is done.
+- The altitude filter stops hold 500 ft either side of each edge, so an
+  aircraft cruising at FL250 under `>25K` stays put instead of switching on
+  and off with every altitude report.
 - `pkg/sun`: the sun's elevation at a position, whether it is above the
   horizon, the twilight it is in (`ConditionOf`, with `CivilLimit`,
   `NauticalLimit` and `AstronomicalLimit`), and the day's sunrise and sunset

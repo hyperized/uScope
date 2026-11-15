@@ -163,7 +163,7 @@ func (s *Scene) toggleWide() bool {
 // any more.
 func (s *Scene) cycleColour() {
 	s.colour = s.colour.Next()
-	s.filter = filterState{}
+	s.setFilter(filterState{})
 }
 
 // toggleBiasTee asks for the dongle's LNA power to flip, which is what b

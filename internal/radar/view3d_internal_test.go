@@ -1369,7 +1369,7 @@ func TestView3DMoreGuards(t *testing.T) {
 		// aircraft itself.
 		behind := airplane.Snapshot{Latitude: layerBaseLat - 100, Longitude: layerBaseLon}
 
-		scene.drawStalk3(canv, view, behind, cameraSide/2, cameraSide/2)
+		scene.drawStalk3(canv, view, behind, cameraSide/2, cameraSide/2, scene.pal.Muted)
 
 		if !identicalPixels(canv, blank) {
 			t.Error("a stalk with its base behind the camera drew something, want nothing")

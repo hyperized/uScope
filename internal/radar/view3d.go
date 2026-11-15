@@ -577,9 +577,10 @@ func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airpor
 }
 
 // drawTraffic3 paints the ghosts, then the live trails, then the aircraft on
-// top of them, which is the order the scope view draws them in and for the
-// same reason: live traffic is never hidden under the track of something that
-// is no longer there.
+// top of them, with the coasting aircraft's trails and models each under
+// their live counterparts. That is the order the scope view draws them in and
+// for the same reason: live traffic is never hidden under the track of
+// something that is no longer there.
 //
 // The selection keeps its ring and its label in the full view, because the
 // column beside the picture is still on screen for them to refer to, and loses
@@ -590,9 +591,22 @@ func (s *Scene) drawAirports3(lay *layout, view scene3, fields []airports.Airpor
 // no stalk, no model and no label. It asks the same predicate the flat scope
 // asks, which is what stops v from changing which aeroplanes are on screen.
 func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
+	coast := coastStart(frame.Ghosts, frame.Now)
+
 	if s.trail.ghostsDrawn() {
-		for _, ghost := range frame.Ghosts {
-			s.drawTrail3(lay.dst, view, ghost.Points, s.ghostColour(ghost))
+		for index := range frame.Ghosts[:coast] {
+			ghost := &frame.Ghosts[index]
+			s.drawTrail3(lay.dst, view, ghost.Points, s.ghostColour(*ghost))
+		}
+	}
+
+	coasting := frame.Ghosts[coast:]
+	for index := range coasting {
+		ghost := &coasting[index]
+
+		share, _ := coastShare(ghost, frame.Now)
+		if s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+			s.drawTrail3(lay.dst, view, ghost.Points, s.fade(s.ghostColour(*ghost), share))
 		}
 	}
 
@@ -601,7 +615,12 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 			continue
 		}
 
-		s.drawTrail3(lay.dst, view, plane.PositionHistory, s.aircraftColour(plane))
+		col := s.faded(s.aircraftColour(plane), s.presence(plane.ICAO))
+		s.drawTrail3(lay.dst, view, plane.PositionHistory, col)
+	}
+
+	for index := range coasting {
+		s.drawCoasting3(lay, view, &coasting[index], frame.Now)
 	}
 
 	for _, plane := range frame.Planes {
@@ -611,6 +630,19 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 
 		s.drawContact3(lay, view, plane, frame.Receiver)
 	}
+}
+
+// drawCoasting3 is drawCoastHead in perspective: the model held where the
+// aircraft was last heard, stalk and all, faded with its trail, and with no
+// lights and no selection.
+func (s *Scene) drawCoasting3(lay *layout, view scene3, ghost *source.Trail, now time.Time) {
+	share, _ := coastShare(ghost, now)
+	if !positioned(ghost.Latitude, ghost.Longitude) ||
+		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign) {
+		return
+	}
+
+	s.drawBody3(lay, view, coastPlane(ghost), s.fade(s.ghostColour(*ghost), share), s.fade(s.pal.Muted, share))
 }
 
 // drawTrail3 draws one run of fixes under whatever the t key has the trails
@@ -672,32 +704,50 @@ func (s *Scene) drawPath3(
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot, receiver source.Receiver) {
-	x, y, ok := view.project(plane.Latitude, plane.Longitude, plane.Altitude)
+	share := s.presence(plane.ICAO)
+
+	x, y, ok := s.drawBody3(lay, view, plane,
+		s.faded(s.aircraftColour(plane), share), s.faded(s.pal.Muted, share))
 	if !ok {
 		return
 	}
 
-	// The bare 3D view draws no stalks: with nothing else on screen the trails
-	// already say where each aircraft has been, and a forest of verticals under
-	// them was the one thing the user asked to have taken away.
-	if !s.bare() {
-		s.drawStalk3(lay.dst, view, plane, x, y)
-	}
-
-	col := s.aircraftColour(plane)
-
-	centre := view.world(plane.Latitude, plane.Longitude, plane.Altitude)
-	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col, view.weight)
-
 	// After the shape, so the lights sit on top of it, and only on a model:
-	// the disc has no wingtips to put them on.
-	if knownHeading(plane.Heading) {
+	// the disc has no wingtips to put them on. They wait for the fade-in for
+	// the reason drawContact gives.
+	if share >= 1 && knownHeading(plane.Heading) {
 		s.drawLights3(lay.dst, view.cam, plane)
 	}
 
 	if !s.bare() && plane.ICAO == s.selICAO {
 		s.drawSelection(lay, x, y, plane, receiver)
 	}
+}
+
+// drawBody3 draws the stalk and the shape of one aircraft in the colours it is
+// handed, and reports where the shape landed, or false when the camera cannot
+// see it.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawBody3(
+	lay *layout, view scene3, plane airplane.Snapshot, col, stalk color.RGBA,
+) (int, int, bool) {
+	x, y, ok := view.project(plane.Latitude, plane.Longitude, plane.Altitude)
+	if !ok {
+		return 0, 0, false
+	}
+
+	// The bare 3D view draws no stalks: with nothing else on screen the trails
+	// already say where each aircraft has been, and a forest of verticals under
+	// them was the one thing the user asked to have taken away.
+	if !s.bare() {
+		s.drawStalk3(lay.dst, view, plane, x, y, stalk)
+	}
+
+	centre := view.world(plane.Latitude, plane.Longitude, plane.Altitude)
+	s.drawShape3(lay.dst, view.cam, plane, centre, image.Pt(x, y), col, view.weight)
+
+	return x, y, true
 }
 
 // drawStalk3 draws the thin line from an aircraft's position on the ground up
@@ -710,11 +760,13 @@ func (s *Scene) drawContact3(lay *layout, view scene3, plane airplane.Snapshot, 
 // which.
 //
 //nolint:varnamelen // topX, topY name a pixel, the idiom used throughout uScope.
-func (s *Scene) drawStalk3(dst *canvas.Canvas, view scene3, plane airplane.Snapshot, topX, topY int) {
+func (*Scene) drawStalk3(
+	dst *canvas.Canvas, view scene3, plane airplane.Snapshot, topX, topY int, col color.RGBA,
+) {
 	baseX, baseY, ok := view.cam.at(view.ground(plane.Latitude, plane.Longitude))
 	if !ok {
 		return
 	}
 
-	dst.StrokeLineAA(float64(baseX), float64(baseY), float64(topX), float64(topY), view.weight, s.pal.Muted)
+	dst.StrokeLineAA(float64(baseX), float64(baseY), float64(topX), float64(topY), view.weight, col)
 }

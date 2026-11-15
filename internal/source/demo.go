@@ -332,7 +332,7 @@ func (d *Demo) Frame() Frame {
 
 	return Frame{
 		Planes: planes,
-		Ghosts: d.ghosts.observe(planes),
+		Ghosts: d.ghosts.observe(planes, now),
 		Receiver: Receiver{
 			Latitude: d.lat, Longitude: d.lon, HasFix: true,
 			Label: LabelManual, Mode: FixManual,

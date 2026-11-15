@@ -237,7 +237,7 @@ type Settings struct {
 // carries a filter, so there is nothing to put back in its place.
 func (s *Scene) Apply(set Settings) {
 	s.colour = set.Colour
-	s.filter = filterState{}
+	s.setFilter(filterState{})
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
 	s.minimalShore = set.MinimalShore

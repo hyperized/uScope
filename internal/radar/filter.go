@@ -168,21 +168,30 @@ func bandOf(altitude float64) int {
 // about which aeroplanes are on the field, which is the rule trailMode.plan
 // already follows for the trails.
 //
-// Ghosts never go through it. A ghost is the track of an aircraft that has
-// stopped transmitting, so there is no live aircraft to test: its altitude is
-// whatever it last reported and its callsign is whatever it last said. Hiding
-// a track on a reading that old would be a decision nobody could check against
-// the picture.
+// The band filter remembers its last answer for each aircraft and holds it
+// inside a dead band either side of the edge; see inBand. Asking twice in one
+// frame gets the same answer twice, because the band an answer is held in
+// always contains the altitude that produced it.
+//
+// A coasting aircraft goes through passes, the same rule by its parts, on the
+// altitude and callsign it was last heard with. Ghosts past their coast do
+// not go through it at all: hiding a track on a reading that old would be a
+// decision nobody could check against the picture.
 func (s *Scene) visible(plane airplane.Snapshot) bool {
+	return s.passes(plane.ICAO, plane.Altitude, plane.Callsign)
+}
+
+// admits is the filter's decision, given what the table remembers.
+func (s *Scene) admits(altitude float64, callsign string, entry *seenEntry) bool {
 	switch s.filter.kind {
 	case filterBand:
-		return bandOf(plane.Altitude) == s.filter.band
+		return s.inBand(altitude, entry)
 	case filterOperator:
-		airline, known := airlines.Lookup(plane.Callsign)
+		airline, known := airlines.Lookup(callsign)
 
 		return known && airline.ICAO == s.filter.icao
 	case filterOther:
-		_, known := airlines.Lookup(plane.Callsign)
+		_, known := airlines.Lookup(callsign)
 
 		return !known
 	case filterAll:
@@ -201,12 +210,12 @@ func (s *Scene) visible(plane airplane.Snapshot) bool {
 // the legend.
 func (s *Scene) cycleFilter() {
 	if s.colour == ColourAirline {
-		s.filter = s.nextOperatorFilter()
+		s.setFilter(s.nextOperatorFilter())
 
 		return
 	}
 
-	s.filter = nextBandFilter(s.filter)
+	s.setFilter(nextBandFilter(s.filter))
 }
 
 // nextBandFilter is the value after this one in altitude mode's cycle.
