@@ -6,6 +6,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-15
+
 ### Added
 
 - `--filter all|low|mid|high|below-high|in|out|other` starts the run on one
@@ -181,7 +183,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as the sea. The flat scope paints the field back over the corners between
   its range ring and the square the land is filled in, so no land shows
   outside the ring.
-
 
 ### Fixed
 
