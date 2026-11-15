@@ -1,9 +1,9 @@
 # uScope
 
-An ADS-B radar scope for the ClockworkPi uConsole, drawn pixel by pixel on
-the panel. One static binary, started from the shell, keyboard driven, `q` to
-get back to the prompt. It runs in a terminal on any other machine too, which
-is how the pictures on this page were made.
+An ADS-B radar scope for BEAST feeds, drawn pixel by pixel. Point it at
+readsb, dump1090 or anything else that speaks Mode S BEAST and it shows the
+traffic in your terminal, or straight on a Linux framebuffer. One static
+binary, keyboard driven, `q` to get back to the prompt.
 
 ![The scope at night, twelve invented aircraft around Schiphol](docs/radar.png)
 
@@ -16,7 +16,16 @@ go run . --demo
 ```
 
 That flies twelve invented aircraft around Schiphol. Press `v` to cycle the
-views, `c` to change what the colours mean, and `q` to quit.
+views, `c` to change what the colours mean, and `q` to quit. With a feed of
+your own:
+
+```sh
+go run . --beast HOST:30005
+```
+
+uScope started on the ClockworkPi uConsole and still runs there on the panel,
+where it can also read a local RTL-SDR without a feed in between. See
+[On the uConsole](#on-the-uconsole).
 
 uScope is the sister of [uAirwaves](https://github.com/hyperized/uAirwaves),
 which does the same job in character cells with tview. uAirwaves is also where
