@@ -75,6 +75,7 @@ const (
 	flagLat        = "--lat"
 	flagLon        = "--lon"
 	flagColour     = "--colour"
+	flagFilter     = "--filter"
 	flagBattery    = "--battery"
 	flagAirports   = "--airports"
 	flagShore      = "--shore"
@@ -190,6 +191,7 @@ func defaultConfig() config {
 		theme:      theme.KindAuto,
 		look:       theme.LookGlass,
 		colour:     radar.ColourAltitude,
+		filter:     radar.FilterAll,
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
 		stars:      radar.ToggleOn,
@@ -1384,6 +1386,46 @@ func TestParseFlagsColourRejections(t *testing.T) {
 			// flag that was wrong and the value that was rejected.
 			if !errors.Is(err, radar.ErrColour) {
 				t.Errorf("parseFlags(%v) error = %v, want radar.ErrColour wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestParseFlagsFilter covers --filter: the default, every spelling, and the
+// refusals, which carry radar's own sentinel inside the flag's.
+func TestParseFlagsFilter(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []radar.BandFilter{
+		radar.FilterAll, radar.FilterLow, radar.FilterMid, radar.FilterHigh, radar.FilterBelowHigh,
+		radar.FilterIn, radar.FilterOut, radar.FilterOther,
+	} {
+		t.Run(string(want), func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags([]string{flagFilter, string(want)})
+			if err != nil {
+				t.Fatalf("parseFlags(%s %s) unexpected error: %v", flagFilter, want, err)
+			}
+
+			expected := defaultConfig()
+			expected.filter = want
+
+			checkConfig(t, got, expected)
+
+			if settings := radarSettings(got); settings.Filter != want {
+				t.Errorf("radarSettings().Filter = %q, want %q", settings.Filter, want)
+			}
+		})
+	}
+
+	for _, text := range []string{"", "Low", "<25K"} {
+		t.Run("refuses "+text, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags([]string{flagFilter, text})
+			if !errors.Is(err, errFilter) || !errors.Is(err, radar.ErrFilter) {
+				t.Fatalf("parseFlags(%s %q) error = %v, want errFilter wrapping radar.ErrFilter", flagFilter, text, err)
 			}
 		})
 	}

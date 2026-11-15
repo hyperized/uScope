@@ -193,6 +193,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func radarSettings(cfg config) radar.Settings {
 	return radar.Settings{
 		Colour:   cfg.colour,
+		Filter:   cfg.filter,
 		Airports: cfg.airports,
 		Shore:    cfg.shore,
 

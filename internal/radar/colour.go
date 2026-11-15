@@ -78,6 +78,92 @@ func (m ColourMode) Next() ColourMode {
 	}
 }
 
+// BandFilter is the filter as --filter spells it.
+//
+// It names the values f walks in altitude colouring and in corridor
+// colouring: the three bands, the ceiling under the high band and the three
+// track classes. The ceiling belongs to both cycles. The operator values
+// airline colouring offers have no spelling, because they are read off the
+// legend on screen: an operator that is not on the field has no slot to be,
+// and a setting that could name one would be a setting that hides the whole
+// fleet on a quiet afternoon.
+//
+// A spelling only means something in the colouring whose cycle holds it.
+// Handed to Apply beside any other colour mode it reads as FilterAll.
+type BandFilter string
+
+// The spellings, the altitude cycle's in the order f walks them and then the
+// corridor cycle's.
+const (
+	// FilterAll draws every aircraft, which is where a run starts.
+	FilterAll BandFilter = "all"
+
+	// FilterLow keeps the band under 10,000 feet, the cap's <10K.
+	FilterLow BandFilter = "low"
+
+	// FilterMid keeps 10,000 to 25,000 feet, the cap's 10-25K.
+	FilterMid BandFilter = "mid"
+
+	// FilterHigh keeps 25,000 feet and up, the cap's >25K.
+	FilterHigh BandFilter = "high"
+
+	// FilterBelowHigh keeps the low and the mid band together, the cap's
+	// <25K. It is the one that hides the overflights.
+	FilterBelowHigh BandFilter = "below-high"
+
+	// FilterIn keeps the aircraft that look to be arriving at the corridor
+	// airfield, the cap's IN.
+	FilterIn BandFilter = "in"
+
+	// FilterOut keeps the ones that look to be leaving it, the cap's OUT.
+	FilterOut BandFilter = "out"
+
+	// FilterOther keeps everything that is neither, overflights and anything
+	// the classifier cannot place, the cap's OTHER.
+	FilterOther BandFilter = "other"
+)
+
+// ErrFilter is returned for a --filter value that is none of the spellings.
+var ErrFilter = errors.New("radar: unknown filter")
+
+// ParseFilter turns a --filter value into a BandFilter.
+//
+// The match is case sensitive, for the reason ParseColour gives.
+func ParseFilter(text string) (BandFilter, error) {
+	switch filter := BandFilter(text); filter {
+	case FilterAll, FilterLow, FilterMid, FilterHigh, FilterBelowHigh, FilterIn, FilterOut, FilterOther:
+		return filter, nil
+	default:
+		return FilterAll, fmt.Errorf("%w: %q", ErrFilter, text)
+	}
+}
+
+// state is the scene's own value for the spelling. Anything that is not one
+// of the narrowing spellings reads as ALL, so the zero value needs no case of
+// its own.
+func (f BandFilter) state() filterState {
+	switch f {
+	case FilterLow:
+		return filterState{kind: filterBand, band: bandLow}
+	case FilterMid:
+		return filterState{kind: filterBand, band: bandMid}
+	case FilterHigh:
+		return filterState{kind: filterBand, band: bandHigh}
+	case FilterBelowHigh:
+		return filterState{kind: filterBelow, band: bandMid}
+	case FilterIn:
+		return filterState{kind: filterClass, class: source.TrackInbound}
+	case FilterOut:
+		return filterState{kind: filterClass, class: source.TrackOutbound}
+	case FilterOther:
+		return filterState{kind: filterClass, class: source.TrackTransit}
+	case FilterAll:
+		fallthrough
+	default:
+		return filterState{}
+	}
+}
+
 // Toggle is an on or off setting a flag carries into the scene.
 //
 // It is a string type rather than a bool for the same reason ColourMode is one:
@@ -160,6 +246,13 @@ func ParseRange(text string) (float64, error) {
 type Settings struct {
 	// Colour is what an aircraft's colour means. Zero reads as ColourAltitude.
 	Colour ColourMode
+
+	// Filter is the stop f starts its cycle on while Colour is altitude or
+	// corridor. Zero reads as FilterAll, and so does a spelling outside
+	// Colour's own cycle. Airline colouring's operator filter has no spelling
+	// and is reached from f alone, so in airline colouring the field reads as
+	// FilterAll whatever it holds.
+	Filter BandFilter
 
 	// Airports is whether the airfield markers start on. Zero reads as on,
 	// which is the scope at its most useful before anyone touches a key.
@@ -259,13 +352,15 @@ type Settings struct {
 // Apply sets the whole block on a scene that is already built, which is how
 // the flags reach a scene the run loop built before it read the config.
 //
-// The filter goes back to ALL with the colour mode, for the reason cycleColour
-// does the same: a filter value belongs to a legend, and a settings block that
-// changes the legend has changed what the value would have meant. No flag
-// carries a filter, so there is nothing to put back in its place.
+// The filter is set from Filter when the colour mode's f cycle holds that
+// stop, and goes back to ALL when it does not. A filter value belongs to a
+// legend: IN means nothing on the altitude legend, and a band means nothing
+// on the corridor one. The ceiling under the high band is on both cycles and
+// means the same thing on each. Airline colouring's cycle has no spelled
+// stops, so there the filter always starts on ALL.
 func (s *Scene) Apply(set Settings) {
 	s.colour = set.Colour
-	s.setFilter(filterState{})
+	s.setFilter(set.Colour.admit(set.Filter.state()))
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
 	s.minimalShore = set.MinimalShore
@@ -282,6 +377,42 @@ func (s *Scene) Apply(set Settings) {
 	s.applyOrbit(set.Orbit.On(), set.Azimuth)
 	s.stars = set.Stars.On()
 	s.corridors = set.Corridors.On()
+}
+
+// admit is the filter value if this mode's f cycle holds it, and ALL if not.
+// The ceiling is in the altitude and the corridor cycle and in no other.
+// Airline colouring's cycle has no spelled values, so nothing is admitted
+// there.
+func (m ColourMode) admit(filter filterState) filterState {
+	var held bool
+
+	switch filter.kind {
+	case filterBelow:
+		held = m.orDefault() == ColourAltitude || m == ColourCorridor
+	case filterBand:
+		held = m.orDefault() == ColourAltitude
+	case filterClass:
+		held = m == ColourCorridor
+	case filterAll, filterOperator, filterOther:
+		fallthrough
+	default:
+		held = false
+	}
+
+	if !held {
+		return filterState{}
+	}
+
+	return filter
+}
+
+// orDefault spells the zero ColourMode as the mode it reads as.
+func (m ColourMode) orDefault() ColourMode {
+	if m == "" {
+		return ColourAltitude
+	}
+
+	return m
 }
 
 // applyOrbit sets whether the camera turns and where it stands.
