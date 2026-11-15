@@ -289,19 +289,27 @@ func TestDrawGroups(t *testing.T) {
 
 	const width = 2000
 
-	scene, frame := groupedScene(ColourCorridor, filterState{})
-	scene.faces = layerTestFaces(t)
-	scene.pal = theme.Night
+	// Every subtest builds its own scene: drawing writes the scene's digits
+	// scratch, so one shared by parallel subtests is a data race.
+	fixture := func(t *testing.T) (*Scene, source.Frame, stripPlan, int) {
+		t.Helper()
 
-	plan, ok := scene.planStrips(design(), stripEdge+stripPadX, width)
-	if !ok {
-		t.Fatal("planStrips refused a generous width")
+		scene, frame := groupedScene(ColourCorridor, filterState{})
+		scene.faces = layerTestFaces(t)
+		scene.pal = theme.Night
+
+		plan, ok := scene.planStrips(design(), stripEdge+stripPadX, width)
+		if !ok {
+			t.Fatal("planStrips refused a generous width")
+		}
+
+		return scene, frame, plan, scene.halfStripHeight(design())
 	}
-
-	pitch := scene.halfStripHeight(design())
 
 	t.Run("a section short of lines counts the rest", func(t *testing.T) {
 		t.Parallel()
+
+		scene, frame, plan, pitch := fixture(t)
 
 		// Seven lines: three headings, IN and OUT need three between them,
 		// which leaves OTHER one: its count line and no strip, so the
@@ -322,6 +330,8 @@ func TestDrawGroups(t *testing.T) {
 
 	t.Run("a column too short for every heading", func(t *testing.T) {
 		t.Parallel()
+
+		scene, frame, plan, pitch := fixture(t)
 
 		canv := boardCanvas(t, width, 3*pitch)
 		col := &layout{dst: canv, right: width, bottom: pitch}
