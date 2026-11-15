@@ -205,14 +205,20 @@ type Scene struct {
 	// sun to pick night or day. See autotheme.go.
 	sunTheme autoTheme
 
-	// daylight is the sun block's condition and times, shown in the header.
-	// See sunblock.go.
+	// daylight is the sun block's condition and times, shown in the header
+	// and in the bare views' bar. See sunblock.go.
 	daylight daylight
 
 	// trail is how much of each aircraft's track is drawn, which the t key
 	// cycles, and autoRange is what the r key toggles.
 	trail     trailMode
 	autoRange bool
+
+	// zoom is how many increments inside the fitted range the fit lands,
+	// from --zoom. It only means anything while autoRange is on, and it is
+	// never cleared by a key: + and - turn auto off, which takes the fit and
+	// the zoom on it out of the picture together, and r gives both back.
+	zoom int
 
 	// colour is what an aircraft's colour means, which the c key cycles.
 	colour ColourMode
@@ -283,13 +289,26 @@ type Scene struct {
 	// two overlay toggles, and they are what m and a flip while it is on.
 	//
 	// Both start off, so minimal opens on a bare field, which is what it is
-	// for. They are separate from shoreOn and airports rather than shared
+	// for, unless Settings asked otherwise (--minimal-shore and
+	// --minimal-airports). They are separate from shoreOn and airports rather than shared
 	// because the two views want opposite defaults: the scope is a map with
 	// aircraft on it and minimal is aircraft with nothing behind them, so a
 	// shared pair would mean every trip into minimal started by turning two
 	// things off and every trip back started by turning them on again.
 	minimalShore    bool
 	minimalAirports bool
+
+	// minimalBar is whether the bare views carry their thin bar across the
+	// top, which h flips there. It starts off for the reason the pair above
+	// does: a bare view opens bare. See bar.go.
+	minimalBar bool
+
+	// keyPressAt is the render clock at the last key press in a bare view,
+	// and keyPressed says there has been one. Both are written by Handle and
+	// read by Draw, which take turns on the run loop's goroutine. See
+	// keyBarRevealed.
+	keyPressAt time.Duration
+	keyPressed bool
 
 	// Minimal mode's own projection centre and the glide that moves it, all
 	// of it inert while recentre is zero. recentre is the cadence --recenter
@@ -367,6 +386,14 @@ type Scene struct {
 	// which the z key toggles. It starts on: the field is what lets a camera
 	// that turns once every two minutes be seen to turn at all.
 	stars bool
+
+	// lights is whether the aircraft carry their exterior lights, which the s
+	// key toggles, and flashFrom is the render clock the frame before this
+	// one was drawn at. The strobes and the beacon are lit by what happened
+	// between the two readings rather than at the instant of either; see
+	// flashLit.
+	lights    bool
+	flashFrom time.Duration
 
 	// envelope is whether the receiving envelope is drawn, which the e key
 	// toggles. It starts on: the envelope is most of the reason the view
@@ -609,11 +636,11 @@ type layout struct {
 
 // Draw paints one frame.
 //
-// Everything on screen comes from the data and the clock in the frame. The
-// one thing elapsed is read for is minimal mode's glide, which is an
-// animation rather than a reading: it has to advance once per drawn frame
-// whatever the feed is doing, and the run loop's own clock is the only thing
-// that measures that.
+// Everything on screen comes from the data and the clock in the frame. What
+// elapsed is read for is animation rather than reading: minimal mode's glide,
+// the orbit, the lights' flashes and the key bar's hold all have to advance
+// once per drawn frame whatever the feed is doing, and the run loop's own
+// clock is the only thing that measures that.
 func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	frame := s.src.Frame()
 	if frame.Now.IsZero() {
@@ -627,7 +654,9 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	s.resolveDaylight(frame)
 
 	// Kept for the camera keys, which arrive between two frames and have to
-	// know where the orbit had got to when the last one was drawn.
+	// know where the orbit had got to when the last one was drawn. The reading
+	// it replaces is what the lights measure this frame's interval from.
+	s.flashFrom = s.elapsed
 	s.elapsed = elapsed
 
 	// Same reason: the b key arrives between two frames and decides what to
@@ -664,11 +693,22 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// A bare view is the aircraft and nothing else, edge to edge. It skips the
 	// three blocks that would take room off the canvas, so the traffic gets
 	// the whole frame rather than the square the column left behind. The scope
-	// box is the canvas itself, which is what the tilted one frames its camera
-	// against; the flat one measures its own projection and never reads it.
+	// box is the canvas itself, less the bar when there is one, and both bare
+	// views centre their picture in it.
+	//
+	// The bar, when h has put it there, takes its height off the top of the
+	// scope box rather than being painted over the picture, so the sky's
+	// horizon and the centre of the projection move down with everything
+	// else. It is drawn after the picture all the same: the flat view's
+	// aircraft are not clipped to the box, and a sprite near the top edge
+	// would otherwise sit on the band. The key bar a press reveals is the
+	// other way round; see drawRevealedKeyBar.
 	if s.bare() {
-		lay.scope = lay.dst.Bounds()
+		bar := s.barHeight(&lay)
+		lay.scope = belowBar(lay.dst.Bounds(), bar)
 		s.drawScope(&lay, frame, elapsed)
+		s.drawBar(&lay, frame, bar)
+		s.drawRevealedKeyBar(&lay, elapsed)
 
 		return
 	}

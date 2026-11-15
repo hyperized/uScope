@@ -146,7 +146,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// going to look at again. The two defers unwind in the order that needs:
 	// cancel, then wait.
 	batteryCtx, stopBattery := context.WithCancel(ctx)
-	status, waitBattery := startBattery(batteryCtx, cfg, stderr)
+	withBattery, waitBattery := batteryOption(batteryCtx, cfg, stderr)
 
 	defer waitBattery()
 	defer stopBattery()
@@ -171,23 +171,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Scene:       cfg.scene,
 		Theme:       cfg.theme,
 		Look:        cfg.look,
-		Radar: radar.Settings{
-			Colour:     cfg.colour,
-			Airports:   cfg.airports,
-			Shore:      cfg.shore,
-			Stars:      cfg.stars,
-			RangeNm:    cfg.rangeNm,
-			Recentre:   cfg.recentre,
-			View:       cfg.view,
-			Exaggerate: cfg.exaggerate,
-		},
+		Radar:       radarSettings(cfg),
 	}
 
 	// Warnings go to stderr because a terminal backend is busy writing
 	// frames to stdout, and a warning in the middle of a frame is a mess on
 	// screen and an unparseable stream in a pipe.
 	err = app.Run(ctx, settings, stdout,
-		app.WithStderr(stderr), app.WithSource(src), app.WithBattery(status),
+		app.WithStderr(stderr), app.WithSource(src), withBattery,
 		app.WithShore(coast))
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, explain(err, cfg))
@@ -196,6 +187,45 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return exitOK
+}
+
+// radarSettings is the radar's half of the config.
+func radarSettings(cfg config) radar.Settings {
+	return radar.Settings{
+		Colour:   cfg.colour,
+		Airports: cfg.airports,
+		Shore:    cfg.shore,
+
+		MinimalShore:    cfg.minimalShore,
+		MinimalAirports: cfg.minimalAirports,
+		MinimalBar:      cfg.minimalBar,
+		Lights:          cfg.lights,
+		Stars:           cfg.stars,
+		RangeNm:         cfg.rangeNm,
+		Recentre:        cfg.recentre,
+		View:            cfg.view,
+		Exaggerate:      cfg.exaggerate,
+		Zoom:            cfg.zoom,
+		Tilt:            cfg.tilt,
+		Orbit:           cfg.orbit,
+		Azimuth:         cfg.azimuth,
+	}
+}
+
+// batteryOption is the app option for the header's battery indicator, plus the
+// function that waits for the poller behind it.
+//
+// --battery off starts no poller and passes WithBattery an untyped nil. It has
+// to be that nil and not a nil *battery.Status, which would arrive as a
+// non-nil interface and have the header draw an indicator for no battery.
+func batteryOption(ctx context.Context, cfg config, stderr io.Writer) (app.Option, func()) {
+	if cfg.noBattery {
+		return app.WithBattery(nil), func() {}
+	}
+
+	status, wait := startBattery(ctx, cfg, stderr)
+
+	return app.WithBattery(status), wait
 }
 
 // startBattery begins polling the machine's power supply and hands back the

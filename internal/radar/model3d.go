@@ -91,6 +91,11 @@ const (
 	vertFinFront
 	vertFinTop
 
+	// vertBeacon is not a corner of any face. It is where the red
+	// anti-collision beacon sits, on top of the fuselage over the wing root,
+	// and it is projected with the rest so the light costs no second pass.
+	vertBeacon
+
 	modelVertexCount
 )
 
@@ -124,6 +129,7 @@ var modelVertices = [modelVertexCount]point3{
 	vertTailTipRight:  {east: 0.20, north: -0.44},
 	vertFinFront:      {north: -0.26},
 	vertFinTop:        {north: -0.38, up: 0.22},
+	vertBeacon:        {north: -0.02, up: 0.04},
 }
 
 // modelTriangle is one filled face, as three indices into modelVertices.

@@ -221,6 +221,12 @@ func identicalIn(first, second *canvas.Canvas, box image.Rectangle) bool {
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var scopeBox = image.Rect(16, 77, 605, 666)
 
+// pastKeyBarHold is a render-clock reading after the key bar a bare-view press
+// reveals has gone again. A test that presses a key in a bare view and then
+// inspects the picture draws at or after it, so the caps are not what it
+// measures. The hold itself is four seconds.
+const pastKeyBarHold = 5 * time.Second
+
 // press sends a rune through Handle.
 func press(scene *radar.Scene, value rune) bool {
 	return scene.Handle(input.Key{Kind: input.Rune, Rune: value})
@@ -641,12 +647,11 @@ func TestHandleTakesItsOwnKeys(t *testing.T) {
 
 		// The false cases are the ones that matter. Anything the scene takes
 		// here is a key the run loop never sees, and q is how you get out. s
-		// used to cycle scenes and falls through now as an ordinary unbound
-		// letter, the same as it always has.
+		// used to cycle scenes in the run loop; it is the lights key now.
 		{name: "q falls through", key: input.Key{Kind: input.Rune, Rune: 'q'}},
 		{name: "Q falls through", key: input.Key{Kind: input.Rune, Rune: 'Q'}},
-		{name: "s falls through", key: input.Key{Kind: input.Rune, Rune: 's'}},
-		{name: "S falls through", key: input.Key{Kind: input.Rune, Rune: 'S'}},
+		{name: "s is taken, it toggles the lights", key: input.Key{Kind: input.Rune, Rune: 's'}, want: true},
+		{name: "S is taken as well", key: input.Key{Kind: input.Rune, Rune: 'S'}, want: true},
 		{name: "esc is taken, it unpins rather than quitting", key: input.Key{Kind: input.Esc}, want: true},
 		{name: "ctrl-c falls through", key: input.Key{Kind: input.CtrlC}},
 		{name: "left falls through", key: input.Key{Kind: input.Left}},
@@ -2449,7 +2454,7 @@ func TestSourceLabelFitsTheBand(t *testing.T) {
 }
 
 // keyCapBox is where one cap lands in the bottom bar at the panel's
-// resolution. The three caps before AUTO are all fixed-width, so AUTO's own
+// resolution. The two caps before AUTO are both fixed-width, so AUTO's own
 // box does not move when a label further along changes.
 //
 // Every cap is the same grey box regardless of its state now: what changes is
@@ -2460,9 +2465,9 @@ func TestSourceLabelFitsTheBand(t *testing.T) {
 //
 //nolint:gochecknoglobals // a rectangle is data.
 var (
-	quitCapBox = image.Rect(16, 682, 64, 704)
-	autoCapBox = image.Rect(220, 682, 268, 704)
-	keyBarBox  = image.Rect(0, 682, 1280, 704)
+	selectCapBox = image.Rect(16, 682, 86, 704)
+	autoCapBox   = image.Rect(167, 682, 215, 704)
+	keyBarBox    = image.Rect(0, 682, 1280, 704)
 
 	autoEngagedBar = image.Rect(
 		autoCapBox.Min.X+keyEngagedInsetTest, autoCapBox.Max.Y-keyPadYTest,
@@ -2470,10 +2475,10 @@ var (
 	)
 
 	// biasCapBox is the B cap the bar draws once a frame says the source has
-	// a bias-tee, at the panel's resolution. It sits right after the twelve
-	// fixed caps in keyCaps, so its left edge is where the bar's painted
+	// a bias-tee, at the panel's resolution. It sits right after the
+	// thirteen fixed caps in keyCaps, so its left edge is where the bar's painted
 	// extent ends when the cap is not there at all.
-	biasCapBox     = image.Rect(785, 682, 847, 704)
+	biasCapBox     = image.Rect(799, 682, 861, 704)
 	biasEngagedBar = image.Rect(
 		biasCapBox.Min.X+keyEngagedInsetTest, biasCapBox.Max.Y-keyPadYTest,
 		biasCapBox.Max.X-keyEngagedInsetTest, biasCapBox.Max.Y-keyPadYTest+keyEngagedHeightTest,
@@ -2513,10 +2518,11 @@ func TestKeyCapsShowToggleState(t *testing.T) {
 		t.Errorf("auto off: %d OK pixels in the engaged bar, want none", got)
 	}
 
-	// q has no setting behind it, so its cap never grows a bar and is drawn
-	// identically whatever the toggle under test is doing.
-	if !identicalIn(onCanvas, offCanvas, quitCapBox) {
-		t.Error("the quit cap changed with a toggle it has nothing to do with")
+	// The select arrows have no setting behind them, so their cap never
+	// grows a bar and is drawn identically whatever the toggle under test is
+	// doing.
+	if !identicalIn(onCanvas, offCanvas, selectCapBox) {
+		t.Error("the select cap changed with a toggle it has nothing to do with")
 	}
 }
 
@@ -3206,14 +3212,14 @@ func TestMinimalAirportsToggle(t *testing.T) {
 	}
 
 	pressView(t, scene, pressViewMinimal)
-	scene.Draw(canv, 0)
+	scene.Draw(canv, pastKeyBarHold)
 
 	if got := countColour(canv, canv.Bounds(), theme.Night.Rule); got != 0 {
 		t.Errorf("minimal drew %d airfield pixels before a, want 0", got)
 	}
 
 	press(scene, 'a')
-	scene.Draw(canv, 0)
+	scene.Draw(canv, 2*pastKeyBarHold)
 
 	if countColour(canv, canv.Bounds(), theme.Night.Rule) == 0 {
 		t.Error("minimal drew no airfield pixels after a, want the markers")
@@ -3331,7 +3337,7 @@ func TestMinimalOverlaysWithNowhereToDrawThem(t *testing.T) {
 	scene.Apply(radar.Settings{View: radar.ViewMinimal, Recentre: radar.DefaultRecentre})
 	press(scene, 'm')
 	press(scene, 'a')
-	scene.Draw(canv, 0)
+	scene.Draw(canv, pastKeyBarHold)
 
 	if got := painted(canv, canv.Bounds()); got != 0 {
 		t.Errorf("minimal painted %d pixels with no position to draw against, want 0", got)
@@ -3934,5 +3940,120 @@ func writeFilterPNG(tb testing.TB, dir, name string, colour radar.ColourMode, ke
 
 	if err := png.Encode(file, canv.Image()); err != nil {
 		tb.Fatalf("png.Encode(%s): %v", path, err)
+	}
+}
+
+// TestZoomTightensTheFitAndKeepsItAuto checks that Settings.Zoom steps the
+// fitted range by whole increments without turning auto off: the second Draw
+// lands on the same figure rather than leaving the first one behind, which is
+// what a pinned range would do on a fleet that moved.
+func TestZoomTightensTheFitAndKeepsItAuto(t *testing.T) {
+	t.Parallel()
+
+	// 37 nm out, so the fit alone is 40 and every zoom step is 20.
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 37, 20000, 41))
+
+	for _, testCase := range []struct {
+		name string
+		set  radar.Settings
+		want float64
+	}{
+		{name: "no zoom is the fit", want: 40},
+		{name: "one step in", set: radar.Settings{Zoom: 1}, want: 20},
+		{name: "two steps in clamps at the minimum", set: radar.Settings{Zoom: 2}, want: 20},
+		{name: "two steps out", set: radar.Settings{Zoom: -2}, want: 80},
+		{name: "past the bound clamps to the bound", set: radar.Settings{Zoom: radar.MinZoom - 9}, want: 140},
+		{name: "a pinned range ignores it", set: radar.Settings{Zoom: 1, RangeNm: 100}, want: 100},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, ranges := sceneOn(t, panelWidth, panelHeight, frame, radar.WithSettings(testCase.set))
+
+			scene.Draw(canv, 0)
+			scene.Draw(canv, 0)
+
+			if got := ranges.GetCurrent(); got != testCase.want {
+				t.Errorf("range after two frames = %g, want %g", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestZoomFollowsTheTraffic checks the zoom in the bare views, where the fit
+// is measured from the centroid on the cadence rather than from the receiver
+// on every frame. It is the same fixture TestRecentreFitsTheRangeAroundTheCentroid
+// uses, so the figures before the zoom are the ones that test already holds.
+func TestZoomFollowsTheTraffic(t *testing.T) {
+	t.Parallel()
+
+	frame := undated(sceneFrame(
+		scenePlane("484AC1", "KLM123", 315, 39, 2400, 41),
+		scenePlane("4CA2D3", "RYR7X", 315, 49, 8500, 41),
+		scenePlane("3C6745", "DLH4EA", 315, 59, 36000, 41),
+	))
+
+	for _, testCase := range []struct {
+		name     string
+		recentre time.Duration
+		zoom     int
+		want     float64
+	}{
+		{name: "following, one step out", recentre: time.Minute, zoom: -1, want: 40},
+		{name: "on the receiver, one step in", zoom: 1, want: 40},
+		{name: "on the receiver, two steps in", zoom: 2, want: 20},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := canvas.New(panelWidth, panelHeight)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			clock := &stepClock{at: sceneClock}
+			ranges := scope.New(scope.WithCurrent(sceneRangeNm))
+			scene := radar.New(testFaces(t), &fakeSource{frame: frame}, ranges, radar.WithClock(clock.now))
+			scene.Apply(radar.Settings{View: radar.ViewMinimal, Recentre: testCase.recentre, Zoom: testCase.zoom})
+
+			scene.Draw(canv, 0)
+
+			if got := ranges.GetCurrent(); got != testCase.want {
+				t.Errorf("range after Draw = %g NM, want %g", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestRangeKeysStillTurnAutoOffUnderZoom checks that + and - behave the way
+// they did before --zoom existed: one step from the range on screen, auto off
+// with it, and r giving back the fit with the zoom still on it.
+func TestRangeKeysStillTurnAutoOffUnderZoom(t *testing.T) {
+	t.Parallel()
+
+	frame := sceneFrame(scenePlane("484AC1", "KLM123", 45, 37, 20000, 41))
+
+	scene, canv, ranges := sceneOn(t, panelWidth, panelHeight, frame, radar.WithSettings(radar.Settings{Zoom: -1}))
+	scene.Draw(canv, 0)
+
+	if got := ranges.GetCurrent(); got != 60 {
+		t.Fatalf("range with zoom -1 = %g, want 60", got)
+	}
+
+	for _, step := range []struct {
+		key  rune
+		want float64
+	}{
+		{key: '+', want: 80},
+		{key: '-', want: 60},
+		{key: '-', want: 40},
+		{key: 'r', want: 60},
+	} {
+		press(scene, step.key)
+		scene.Draw(canv, 0)
+
+		if got := ranges.GetCurrent(); got != step.want {
+			t.Errorf("range on the frame after %q = %g, want %g", step.key, got, step.want)
+		}
 	}
 }

@@ -605,14 +605,14 @@ func fadeInto(field, ink color.RGBA, alpha float64) color.RGBA {
 //
 //nolint:gochecknoglobals // a rectangle is data, and image.Rectangle cannot be const.
 var (
-	orbitCapBox    = image.Rect(785, 682, 840, 704)
-	envelopeCapBox = image.Rect(845, 682, 921, 704)
-	turnCapBox     = image.Rect(926, 682, 982, 704)
-	tiltCapBox     = image.Rect(987, 682, 1051, 704)
+	orbitCapBox    = image.Rect(799, 682, 854, 704)
+	envelopeCapBox = image.Rect(859, 682, 935, 704)
+	turnCapBox     = image.Rect(940, 682, 996, 704)
+	tiltCapBox     = image.Rect(1001, 682, 1065, 704)
 
 	// scopeBarTail is the part of the bar row the thirteen shared caps never
 	// reach, which is where all four of the boxes above sit.
-	scopeBarTail = image.Rect(785, 682, 1280, 704)
+	scopeBarTail = image.Rect(799, 682, 1280, 704)
 
 	// orbitEngagedBar is the strip along the inside of orbitCapBox's bottom
 	// edge the engaged bar is drawn in, worked out the way autoEngagedBar in
@@ -675,8 +675,8 @@ func TestView3DKeyBarListsTheCameraKeys(t *testing.T) {
 	}
 }
 
-// TestView3DKeyBarFitsAtPanelWidth checks that sixteen caps and their labels
-// still stop short of the right margin.
+// TestView3DKeyBarFitsAtPanelWidth checks that seventeen caps and their
+// labels still stop short of the right margin.
 //
 // The bar has no wrapping and no eliding: drawCaps stops after the cap that
 // reaches the margin, so a bar that outgrew the panel would silently lose its

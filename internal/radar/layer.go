@@ -68,6 +68,11 @@ type layerKey struct {
 	// own rings.
 	wide bool
 
+	// bar is in the key because the bare view's bar moves the centre of the
+	// projection down by its height, and the shore in the layer has to move
+	// with the aircraft drawn over it.
+	bar bool
+
 	// centreLat and centreLon are minimal mode's own projection centre,
 	// snapped onto the same grid the receiver's position is.
 	//
@@ -145,6 +150,7 @@ func (s *Scene) layerKeyFor(dst *canvas.Canvas, frame source.Frame) layerKey {
 
 		view:      s.shown,
 		wide:      s.wide,
+		bar:       s.barShown(),
 		centreLat: snap(s.centre.lat),
 		centreLon: snap(s.centre.lon),
 	}
@@ -170,12 +176,14 @@ func (s *Scene) renderLayer(dst *canvas.Canvas, key layerKey, frame source.Frame
 
 	lay := s.newLayout(s.layer)
 
-	// A bare view takes the whole canvas, so there is no key bar or header to
-	// make room for and nothing to split off for a column. measureScope
-	// ignores lay.scope in that mode anyway; skipping the carving keeps it
-	// from being measured twice for an answer nothing reads. Only the flat
-	// bare view gets this far: the tilted one is layerless.
-	if !s.bare() {
+	// A bare view takes the whole canvas less its bar, so there is no key bar
+	// or header to make room for and nothing to split off for a column. The
+	// box is the one Draw hands measureMinimal, which is what keeps the shore
+	// in the layer under the aircraft drawn over it. Only the flat bare view
+	// gets this far: the tilted one is layerless.
+	if s.bare() {
+		lay.scope = belowBar(bounds, s.barHeight(&lay))
+	} else {
 		lay.bottom -= s.keyBarHeight(&lay)
 		lay.top += s.headerHeight(&lay)
 		lay.split()

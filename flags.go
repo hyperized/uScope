@@ -35,12 +35,19 @@ const (
 	defaultLook     = "glass"
 	defaultColour   = "altitude"
 	defaultOn       = "on"
+	defaultOff      = "off"
 	defaultRange    = "auto"
 	defaultRecentre = "3m"
 	defaultView     = "scope"
 
 	// autoRotate is the one non-numeric value --rotate accepts.
 	autoRotate = "auto"
+
+	// batteryOff is the one non-path value --battery accepts. A desktop has no
+	// power supply to find, and without it uAirwaves' poller would warn on
+	// stderr every thirty seconds about a battery that was never going to be
+	// there.
+	batteryOff = "off"
 
 	// defaultGPSDAddress is where gpsd listens, and gpsdOff the one
 	// non-address value --gpsd accepts. The address is spelled with a hostname
@@ -109,6 +116,10 @@ var (
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
 	errStars      = errors.New(appName + ": --stars must be on or off")
+	errMinShore   = errors.New(appName + ": --minimal-shore must be on or off")
+	errMinAirport = errors.New(appName + ": --minimal-airports must be on or off")
+	errMinBar     = errors.New(appName + ": --minimal-bar must be on or off")
+	errLights     = errors.New(appName + ": --lights must be on or off")
 	errRange      = errors.New(appName + ": --range must be auto or a range the scope can show")
 	errBattery    = errors.New(appName + ": --battery must not be empty")
 	errLatitude   = errors.New(appName + ": --lat out of range")
@@ -120,6 +131,10 @@ var (
 	errRecentre   = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
 	errView       = errors.New(appName + ": --view must be scope, 3d, minimal or minimal3d")
 	errExaggerate = errors.New(appName + ": --exaggerate out of range")
+	errZoom       = errors.New(appName + ": --zoom out of range")
+	errTilt       = errors.New(appName + ": --tilt out of range")
+	errOrbit      = errors.New(appName + ": --orbit must be on or off")
+	errAzimuth    = errors.New(appName + ": --azimuth out of range")
 	errGPSD       = errors.New(appName + ": --gpsd must be off or HOST:PORT")
 )
 
@@ -141,15 +156,31 @@ type config struct {
 	colour      radar.ColourMode
 	airports    radar.Toggle
 	shore       radar.Toggle
-	stars       radar.Toggle
-	rangeNm     float64
-	recentre    time.Duration
-	view        radar.View
-	exaggerate  float64
+
+	// minimalShore, minimalAirports and minimalBar are the bare views' own
+	// switches, already read from on/off into what the scene keeps.
+	minimalShore    bool
+	minimalAirports bool
+	minimalBar      bool
+	lights          bool
+	stars           radar.Toggle
+	rangeNm         float64
+	recentre        time.Duration
+	view            radar.View
+	exaggerate      float64
+	zoom            int
+	tilt            float64
+	orbit           radar.Toggle
+	azimuth         float64
 
 	// battery is the power-supply file to read instead of looking one up. It
-	// is empty for the normal case, which is autodiscovery.
+	// is empty for the normal case, which is autodiscovery, and for --battery
+	// off, which noBattery says apart.
 	battery string
+
+	// noBattery is --battery off: no poller and no indicator. It is a field of
+	// its own because empty already means "find one".
+	noBattery bool
 
 	// Where the aircraft come from, and where the receiver is if the operator
 	// said. hasLocation is separate from the two coordinates because latitude
@@ -195,6 +226,10 @@ type rawFlags struct {
 	colour      string
 	airports    string
 	shore       string
+	minShore    string
+	minAirports string
+	minBar      string
+	lights      string
 	stars       string
 	scopeRange  string
 	battery     string
@@ -206,6 +241,10 @@ type rawFlags struct {
 	recentre    string
 	view        string
 	exaggerate  float64
+	zoom        int
+	tilt        float64
+	azimuth     float64
+	orbit       string
 	fps         int
 	frames      int
 	testPattern bool
@@ -264,8 +303,15 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"draw the airfield markers on the scope: on or off")
 	set.StringVar(&raw.shore, "shore", defaultOn,
 		"draw the coastline and the water fill under the scope: on or off")
-	set.StringVar(&raw.stars, "stars", defaultOn,
-		"draw stars in the night sky of the 3d views: on or off. z flips it while it runs")
+	set.StringVar(&raw.minShore, "minimal-shore", defaultOff,
+		"draw the coastline in minimal and minimal3d: on or off. m flips it while it runs")
+	set.StringVar(&raw.minAirports, "minimal-airports", defaultOn,
+		"draw the airfield markers in minimal and minimal3d: on or off. a flips it while it runs")
+	set.StringVar(&raw.minBar, "minimal-bar", defaultOff,
+		"draw a thin bar with the clocks and the sun across the top of minimal and minimal3d: on or off. "+
+			"h flips it while it runs")
+	set.StringVar(&raw.lights, "lights", defaultOn,
+		"draw the aircraft's navigation lights, strobes and beacon: on or off")
 	set.StringVar(&raw.scopeRange, "range", defaultRange,
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
 	// The flag is spelled the American way and the Go identifiers behind it
@@ -277,10 +323,9 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"how often minimal mode recentres on the traffic, 10s to 1h, or 0 to stay on the receiver")
 	set.StringVar(&raw.view, "view", defaultView,
 		"which view the radar starts on: scope, 3d, minimal or minimal3d. v cycles them while it runs")
-	set.Float64Var(&raw.exaggerate, "exaggerate", radar.DefaultExaggerate,
-		"how far the 3d view stretches altitude into height, 1 to 20")
+	bindCamera(set, raw)
 	set.StringVar(&raw.battery, "battery", "",
-		"power-supply uevent file to read the battery from; empty finds one, Linux only")
+		"power-supply uevent file to read the battery from, or off for no indicator; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
 		"fly an invented fleet instead of decoding one, for a machine with no receiver")
 	set.BoolVar(&raw.demoSector, "demo-sector", false,
@@ -303,6 +348,26 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"stop after this many frames, 0 to run until quit, up to 1000")
 
 	return raw
+}
+
+// bindCamera declares the 3D views' flags: the camera's placement and the
+// sky it looks at, and the zoom that frames the picture. They are split from
+// bind to keep it under funlen.
+func bindCamera(set *flag.FlagSet, raw *rawFlags) {
+	set.Float64Var(&raw.exaggerate, "exaggerate", radar.DefaultExaggerate,
+		"how far the 3d view stretches altitude into height, 1 to 20")
+	set.IntVar(&raw.zoom, "zoom", 0,
+		"range increments inside the auto fit, -5 to 5, negative widens; the view still follows the traffic. "+
+			"Ignored with --range")
+	set.Float64Var(&raw.tilt, "tilt", radar.DefaultTilt,
+		"the 3d camera's starting elevation in degrees, 10 to 80. [ and ] step from it while it runs")
+	set.StringVar(&raw.orbit, "orbit", defaultOn,
+		"whether the 3d camera turns on its own: on or off. o flips it while it runs")
+	set.Float64Var(&raw.azimuth, "azimuth", 0,
+		"where the 3d camera stands, in degrees clockwise from north, 0 up to 360; "+
+			"the start of the orbit, or where it stays with --orbit off")
+	set.StringVar(&raw.stars, "stars", defaultOn,
+		"draw stars in the night sky of the 3d views: on or off. z flips it while it runs")
 }
 
 // display is the half of the command line that decides what gets drawn and
@@ -381,7 +446,8 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
-	if err := checkExaggerate(raw.exaggerate); err != nil {
+	camera, err := raw.camera()
+	if err != nil {
 		return display{}, err
 	}
 
@@ -397,13 +463,60 @@ func (raw rawFlags) display() (display, error) {
 			Colour:   colour,
 			Airports: overlays.Airports,
 			Shore:    overlays.Shore,
-			Stars:    overlays.Stars,
 			RangeNm:  rangeNm,
 			Recentre: recentre,
 
+			MinimalShore:    overlays.MinimalShore,
+			MinimalAirports: overlays.MinimalAirports,
+			MinimalBar:      overlays.MinimalBar,
+			Lights:          overlays.Lights,
+			Stars:           overlays.Stars,
+
 			View:       view,
-			Exaggerate: raw.exaggerate,
+			Exaggerate: camera.Exaggerate,
+			Zoom:       camera.Zoom,
+			Tilt:       camera.Tilt,
+			Orbit:      camera.Orbit,
+			Azimuth:    camera.Azimuth,
 		},
+	}, nil
+}
+
+// camera checks the flags that place the 3D camera and frame the picture,
+// rather than name a choice, and hands them back as the part of a settings
+// block they fill. They are one helper so display stays under the complexity
+// cap.
+//
+// The bounds are radar's own Check functions, so the flag and the scene cannot
+// disagree about what a tilt of 85 means. Refused rather than clamped, unlike
+// the bracket keys, because there is somebody reading. The float flags keep
+// their parsed value rather than a zero for "unset": each default is a real
+// setting, so the scene's zero-means-default rule never fires from the
+// command line.
+func (raw rawFlags) camera() (radar.Settings, error) {
+	if err := radar.CheckExaggerate(raw.exaggerate); err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errExaggerate, err)
+	}
+
+	if err := radar.CheckZoom(raw.zoom); err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errZoom, err)
+	}
+
+	if err := radar.CheckTilt(raw.tilt); err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errTilt, err)
+	}
+
+	if err := radar.CheckAzimuth(raw.azimuth); err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errAzimuth, err)
+	}
+
+	orbit, err := radar.ParseToggle(raw.orbit)
+	if err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errOrbit, err)
+	}
+
+	return radar.Settings{
+		Exaggerate: raw.exaggerate, Zoom: raw.zoom, Tilt: raw.tilt, Orbit: orbit, Azimuth: raw.azimuth,
 	}, nil
 }
 
@@ -467,12 +580,23 @@ func (raw rawFlags) validated() (config, error) {
 		colour:      show.radar.Colour,
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
-		stars:       show.radar.Stars,
-		rangeNm:     show.radar.RangeNm,
-		recentre:    show.radar.Recentre,
-		view:        show.radar.View,
-		exaggerate:  show.radar.Exaggerate,
-		battery:     raw.battery,
+
+		minimalShore:    show.radar.MinimalShore,
+		minimalAirports: show.radar.MinimalAirports,
+		minimalBar:      show.radar.MinimalBar,
+		lights:          show.radar.Lights,
+		stars:           show.radar.Stars,
+		rangeNm:         show.radar.RangeNm,
+		recentre:        show.radar.Recentre,
+		view:            show.radar.View,
+		exaggerate:      show.radar.Exaggerate,
+		zoom:            show.radar.Zoom,
+		tilt:            show.radar.Tilt,
+		orbit:           show.radar.Orbit,
+		azimuth:         show.radar.Azimuth,
+
+		battery:     batteryPath(raw.battery),
+		noBattery:   raw.battery == batteryOff,
 		source:      chosen,
 		beast:       raw.beast,
 		replay:      raw.replay,
@@ -686,10 +810,10 @@ func parseShore(text string) (radar.Toggle, error) {
 	return toggle, nil
 }
 
-// overlays parses the three on/off switches, the scope's airfields and shore
-// and the 3D views' stars, into the Settings fields they fill. They are one
-// helper so display stays a flat list of parses rather than growing past
-// funlen.
+// overlays parses the seven on/off switches, the scope's pair, the bare
+// views' pair and bar, the aircraft lights and the stars, into the Settings
+// fields they fill. They are one helper so display stays a flat list of
+// parses rather than growing past funlen.
 func (raw rawFlags) overlays() (radar.Settings, error) {
 	airports, err := parseAirports(raw.airports)
 	if err != nil {
@@ -701,12 +825,58 @@ func (raw rawFlags) overlays() (radar.Settings, error) {
 		return radar.Settings{}, err
 	}
 
+	minimal, err := raw.minimalSwitches()
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	lights, err := parseMinimal(raw.lights, errLights)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
 	stars, err := radar.ParseToggle(raw.stars)
 	if err != nil {
 		return radar.Settings{}, fmt.Errorf("%w: %w", errStars, err)
 	}
 
-	return radar.Settings{Airports: airports, Shore: shoreToggle, Stars: stars}, nil
+	minimal.Airports, minimal.Shore, minimal.Lights, minimal.Stars = airports, shoreToggle, lights, stars
+
+	return minimal, nil
+}
+
+// minimalSwitches reads the bare views' three switches into the Settings
+// fields they fill.
+func (raw rawFlags) minimalSwitches() (radar.Settings, error) {
+	minShore, err := parseMinimal(raw.minShore, errMinShore)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	minAirports, err := parseMinimal(raw.minAirports, errMinAirport)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	minBar, err := parseMinimal(raw.minBar, errMinBar)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	return radar.Settings{MinimalShore: minShore, MinimalAirports: minAirports, MinimalBar: minBar}, nil
+}
+
+// parseMinimal reads one of the bare views' switches, or --lights, against the
+// same on/off allow list --shore uses, wrapping a refusal in the flag's own
+// sentinel. It answers a bool because the scene's own default for each is off
+// and a Toggle's zero reads as on; see radar.Settings.MinimalShore.
+func parseMinimal(text string, sentinel error) (bool, error) {
+	toggle, err := radar.ParseToggle(text)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", sentinel, err)
+	}
+
+	return toggle.On(), nil
 }
 
 // parseRange reads --range against internal/radar's allow list, which takes
@@ -741,21 +911,6 @@ func parseView(text string) (radar.View, error) {
 	return view, nil
 }
 
-// checkExaggerate range-checks --exaggerate.
-//
-// It is a float64 flag rather than a string, unlike --lat and --range, because
-// there is no value it could be handed that means "nobody said": one is life
-// size and zero is a flat world, so both ends are real settings and the flag
-// simply has a default like --fps does.
-func checkExaggerate(factor float64) error {
-	if math.IsNaN(factor) || factor < radar.MinExaggerate || factor > radar.MaxExaggerate {
-		return fmt.Errorf("%w: got %g, want %g to %g",
-			errExaggerate, factor, radar.MinExaggerate, radar.MaxExaggerate)
-	}
-
-	return nil
-}
-
 // checkBattery rejects an override that was given as an empty string.
 //
 // Leaving --battery off means autodiscovery, so an empty value is the operator
@@ -772,6 +927,16 @@ func checkBattery(path string) error {
 	}
 
 	return nil
+}
+
+// batteryPath is the file --battery names, or empty for off, so the poller is
+// never handed the word "off" as a path.
+func batteryPath(text string) string {
+	if text == batteryOff {
+		return ""
+	}
+
+	return text
 }
 
 // parseBackend reads --backend and reconciles it with --png.

@@ -3,6 +3,7 @@ package radar
 import (
 	"image"
 	"image/color"
+	"time"
 	"unicode/utf8"
 
 	"github.com/hyperized/uScope/internal/source"
@@ -128,6 +129,9 @@ const (
 	capEnvelope
 	capBiasTee
 	capWide
+	capBar
+	capLights
+	capStars
 )
 
 // The cycling keys are labelled with the value they are on rather than with
@@ -173,15 +177,14 @@ type keyCap struct {
 }
 
 // keyCaps is the key legend, in the order the keys are worth reaching for:
-// leaving, then moving through the list, then the five things that change what
-// is on the field, then the three that change how it looks.
+// moving through the list, then the five things that change what is on the
+// field, then the three that change how it looks.
 //
-// Thirteen softkeys come to 876 pixels of the 1248 the panel leaves between
-// its margins, measured with every cycling key on its longest word: AIRLINE,
-// SHORT, 10-25K, AUTO·NIGHT and PHOSPHOR. Nothing here has to be shortened to
-// fit. See
-// drawSoftkey for how one box is measured and view3DCaps for the widest the
-// bar ever gets.
+// There is no Q cap. It was the first one in the row until S LIGHTS came in:
+// with both, the widest bar's last box ends at x=1297, 33 pixels past the
+// right margin, so drawCaps would drop the tilt cap off the end. q is the one
+// key nobody needs a legend for, so it is the cap that went. It still quits. See view3DCaps for
+// the widest the bar ever gets and drawSoftkey for how one box is measured.
 //
 // F sits next to C rather than at the end of the row, because the filter is
 // the colour mode's own legend with one entry picked out of it and the two
@@ -198,13 +201,13 @@ type keyCap struct {
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var keyCaps = [...]keyCap{
-	{key: "Q", label: "QUIT"},
 	{key: "↑↓", label: "SELECT"},
 	{key: "+/-", label: "RANGE"},
 	{key: "R", label: "AUTO", state: capAuto},
 	{key: "T", label: trailBarLabel, state: capTrails},
 	{key: "A", label: "AIRPORTS", state: capAirports},
 	{key: "M", label: "SHORE", state: capShore},
+	{key: "S", label: "LIGHTS", state: capLights},
 	{key: "C", label: "COLOUR", state: capColour},
 	{key: "F", label: filterBarLabel, state: capFilter},
 	{key: "L", label: "THEME", state: capTheme},
@@ -217,8 +220,8 @@ var keyCaps = [...]keyCap{
 //
 // They are appended rather than living in keyCaps because none of these keys
 // does anything in the two flat views, and a cap for a key with no effect is
-// furniture pretending to be a control. The bare 3D view draws no bar at all,
-// so the question does not arise there.
+// furniture pretending to be a control. The bare 3D view reveals its own
+// row, bare3DCaps, for the same reason.
 //
 // All four of the view's keys are listed, not just the two toggles. The camera
 // keys were bound and undocumented on screen, so the only way to find out the
@@ -230,18 +233,17 @@ var keyCaps = [...]keyCap{
 // That was checked before this was written rather than assumed, the same way
 // the up and down pair was.
 //
-// Seventeen softkeys and the bias-tee key come to 1214 pixels of the 1248 the
-// panel leaves between its margins, which is the whole bar at its longest: the
-// 3D view, on a dongle that has a bias-tee, with every cycling cap on its
-// longest word, the auto theme's AUTO·NIGHT included. The last box ends at
-// x=1230, 34 pixels inside the right margin. TestDrawCapsFitsAtItsWidestState
-// and TestAutoThemeKeyBarFitsAtPanelWidth are the guards. See the note on
-// keyCaps.
+// The whole bar at its longest is the 3D view on a dongle that has a
+// bias-tee, with every cycling cap on its longest word: AIRLINE, SHORT,
+// 10-25K, PHOSPHOR and the auto theme's AUTO·NIGHT. With S LIGHTS in and Q
+// out its last box ends at x=1244, 20 pixels inside the right margin at 1264.
+// TestDrawCapsFitsAtItsWidestState and TestAutoThemeKeyBarFitsAtPanelWidth
+// are the guards. See the note on keyCaps.
 //
-// z, which turns the stars on and off, has no cap here. Z STARS would take
-// the widest bar to x=1290, past the margin, and at the view's default tilt
-// the full view shows no sky for stars to be in anyway. The key still works
-// in both 3D views.
+// Z STARS is the one 3D key with no cap here. It would take the widest bar to
+// x=1304, past the margin, and the full view at its default tilt shows no sky
+// for stars to be in anyway. z still works in this view; the cap is on
+// bare3DCaps, which has E's room to spare.
 //
 //nolint:gochecknoglobals // scene content, read-only after init.
 var view3DCaps = [...]keyCap{
@@ -276,9 +278,17 @@ func (s *Scene) drawKeyBar(lay *layout) {
 		return
 	}
 
-	top := lay.bottom - (reserved - lay.px(blockGap))
+	s.drawCapRow(lay, lay.bottom-(reserved-lay.px(blockGap)), keyCaps[:], view3DCaps[:])
 
-	pen := s.drawCaps(lay, lay.left, top, keyCaps[:])
+	lay.bottom -= reserved
+}
+
+// drawCapRow draws one row of softkeys at top: the view's own caps, the
+// bias-tee cap when there is a dongle to flip, then the camera caps when the
+// picture is in perspective. The full views and the bare views' reveal each
+// hand in their own two tables.
+func (s *Scene) drawCapRow(lay *layout, top int, caps, camera []keyCap) {
+	pen := s.drawCaps(lay, lay.left, top, caps)
 
 	// The bias-tee cap goes before the camera keys rather than after them, so
 	// it keeps its place in the bar when v switches to the 3D view and the
@@ -289,10 +299,8 @@ func (s *Scene) drawKeyBar(lay *layout) {
 	}
 
 	if s.perspective() && pen < lay.right {
-		s.drawCaps(lay, pen, top, view3DCaps[:])
+		s.drawCaps(lay, pen, top, camera)
 	}
-
-	lay.bottom -= reserved
 }
 
 // drawCaps draws a run of softkeys from pen and returns the x just past the
@@ -401,8 +409,8 @@ func (s *Scene) drawEngaged(lay *layout, box image.Rectangle, which capToggle) {
 // L which theme, T how much trail and F which slice of the traffic, and every
 // one of those is always on something. A bar under them would be claiming an
 // off position they do not have, and the cap already says which value it is on.
-// The keys with no setting behind them at all, q and the three that step
-// through something, are the same case one step further out.
+// The keys with no setting behind them at all, the ones that step through
+// something, are the same case one step further out.
 //
 // It is the bar and not the box that says so. Every key is drawn in the same
 // grey whatever its state, because the box is the switch and the bar is the
@@ -412,9 +420,9 @@ func (s *Scene) capEngaged(which capToggle) bool {
 	case capAuto:
 		return s.autoRange
 	case capAirports:
-		return s.airports
+		return s.airportsDrawn()
 	case capShore:
-		return s.shoreOn
+		return s.shoreDrawn()
 	case capOrbit:
 		return s.orbiting
 	case capEnvelope:
@@ -423,6 +431,12 @@ func (s *Scene) capEngaged(which capToggle) bool {
 		return s.biasEnabled
 	case capWide:
 		return s.wide
+	case capBar:
+		return s.minimalBar
+	case capLights:
+		return s.lights
+	case capStars:
+		return s.stars
 	case capAlways, capColour, capTheme, capLook, capTrails, capFilter:
 		fallthrough
 	default:
@@ -451,7 +465,8 @@ func (s *Scene) capLabel(entry keyCap) string {
 		return s.trail.label()
 	case capFilter:
 		return s.filter.label()
-	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee, capWide:
+	case capAlways, capAuto, capAirports, capShore, capOrbit, capEnvelope, capBiasTee, capWide, capBar, capLights,
+		capStars:
 		fallthrough
 	default:
 		return entry.label
@@ -905,11 +920,7 @@ func (s *Scene) drawHeaderRight(lay *layout, middle int, frame source.Frame, rea
 		pen = left - lay.px(clockGap)
 	}
 
-	local := frame.Now.AppendFormat(s.clock[:0], clockFormat)
-	pen = s.drawClock(lay, pen, middle, labelLocal, s.faces.Large, local) - lay.px(clockGap)
-
-	utc := append(frame.Now.UTC().AppendFormat(s.clock[:0], clockFormat), utcSuffix)
-	pen = s.drawClock(lay, pen, middle, labelUTC, s.faces.Body, utc)
+	pen = s.drawClocks(lay, pen, middle, frame.Now, s.faces.Large, s.faces.Body)
 
 	limit := max(lay.left+s.wordmarkWidth(lay, frame), reach+lay.px(sourceLabelGap))
 	if left, drawn := s.drawSunBlock(lay, pen-lay.px(clockGap), middle, limit); drawn {
@@ -917,6 +928,18 @@ func (s *Scene) drawHeaderRight(lay *layout, middle int, frame source.Frame, rea
 	}
 
 	return pen
+}
+
+// drawClocks sets the local clock in one face ending at rightX and UTC in
+// another before it, and returns the x the UTC label starts at. The header
+// and the bare views' bar set the same pair a size apart.
+func (s *Scene) drawClocks(lay *layout, rightX, middle int, now time.Time, localFace, utcFace *psf.Font) int {
+	local := now.AppendFormat(s.clock[:0], clockFormat)
+	pen := s.drawClock(lay, rightX, middle, labelLocal, localFace, local) - lay.px(clockGap)
+
+	utc := append(now.UTC().AppendFormat(s.clock[:0], clockFormat), utcSuffix)
+
+	return s.drawClock(lay, pen, middle, labelUTC, utcFace, utc)
 }
 
 // drawClock sets one labelled clock ending at rightX and returns the x its

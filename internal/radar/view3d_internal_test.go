@@ -1786,3 +1786,115 @@ func paintedRun(canv *canvas.Canvas, field color.RGBA, fromX, fromY, toX, toY in
 
 	return count
 }
+
+// TestApplyTilt checks where Settings.Tilt starts the camera, and that the
+// brackets then step from that start rather than from the default.
+func TestApplyTilt(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		in        float64
+		want      float64
+		afterUp   float64
+		afterDown float64
+	}{
+		{name: "unset falls back to the default", in: 0, want: defaultElevation,
+			afterUp: defaultElevation + tiltStep, afterDown: defaultElevation - tiltStep},
+		{name: "NaN falls back to the default", in: math.NaN(), want: defaultElevation,
+			afterUp: defaultElevation + tiltStep, afterDown: defaultElevation - tiltStep},
+		{name: "the floor", in: MinTilt, want: minElevation,
+			afterUp: minElevation + tiltStep, afterDown: minElevation},
+		{name: "the ceiling", in: MaxTilt, want: maxElevation,
+			afterUp: maxElevation, afterDown: maxElevation - tiltStep},
+		{name: "below the floor clamps", in: 2, want: minElevation,
+			afterUp: minElevation + tiltStep, afterDown: minElevation},
+		{name: caseNegative, in: -20, want: minElevation,
+			afterUp: minElevation + tiltStep, afterDown: minElevation},
+		{name: "above the ceiling clamps", in: 95, want: maxElevation,
+			afterUp: maxElevation, afterDown: maxElevation - tiltStep},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{scopeRange: scope.New()}
+			scene.Apply(Settings{Tilt: testCase.in, View: View3D})
+
+			if scene.elevation != testCase.want {
+				t.Fatalf("Apply(Tilt: %g) left %g, want %g", testCase.in, scene.elevation, testCase.want)
+			}
+
+			scene.handleRune(']')
+
+			if scene.elevation != testCase.afterUp {
+				t.Errorf("] from %g left %g, want %g", testCase.want, scene.elevation, testCase.afterUp)
+			}
+
+			scene.Apply(Settings{Tilt: testCase.in, View: View3D})
+			scene.handleRune('[')
+
+			if scene.elevation != testCase.afterDown {
+				t.Errorf("[ from %g left %g, want %g", testCase.want, scene.elevation, testCase.afterDown)
+			}
+		})
+	}
+}
+
+// TestApplyZoomClamps checks that a library caller's out-of-range zoom lands
+// on the nearest bound rather than past it.
+func TestApplyZoomClamps(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "unset", in: 0, want: 0},
+		{name: "inside", in: 3, want: 3},
+		{name: "past the top", in: MaxZoom + 1, want: MaxZoom},
+		{name: "past the bottom", in: MinZoom - 1, want: MinZoom},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{scopeRange: scope.New()}
+			scene.Apply(Settings{Zoom: testCase.in})
+
+			if scene.zoom != testCase.want {
+				t.Errorf("Apply(Zoom: %d) left %d, want %d", testCase.in, scene.zoom, testCase.want)
+			}
+		})
+	}
+}
+
+// TestApplyOrbitRebases checks that the orbit is restarted from the last frame
+// drawn rather than from the start of the run, that an azimuth off the compass
+// is wrapped onto it, and that NaN and the infinities read as north.
+func TestApplyOrbitRebases(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		turning bool
+		in      float64
+		want    float64
+	}{
+		{name: "negative wraps", turning: true, in: -90, want: 270},
+		{name: "a stopped camera stays where it was put", in: 45, want: 45},
+		{name: "NaN reads as north", turning: true, in: math.NaN(), want: 0},
+		{name: "infinity reads as north", turning: true, in: math.Inf(1), want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{scopeRange: scope.New(), elapsed: time.Minute}
+			scene.applyOrbit(testCase.turning, testCase.in)
+
+			if scene.azimuth != testCase.want || scene.azimuthAt != time.Minute || scene.orbiting != testCase.turning {
+				t.Errorf("after applyOrbit: azimuth %g at %v orbiting %v, want %g at 1m0s orbiting %v",
+					scene.azimuth, scene.azimuthAt, scene.orbiting, testCase.want, testCase.turning)
+			}
+		})
+	}
+}

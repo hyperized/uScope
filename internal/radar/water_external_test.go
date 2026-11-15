@@ -173,7 +173,7 @@ func TestBare3DFloodsPastThePicture(t *testing.T) {
 				}
 			}
 
-			scene.Draw(canv, 0)
+			scene.Draw(canv, pastKeyBarHold)
 
 			bottom := canv.Image().RGBAAt(panelWidth/2, panelHeight-1)
 
@@ -211,7 +211,7 @@ func TestBareViewFillsEdgeToEdge(t *testing.T) {
 		t.Fatal("Handle('m') = false in the bare view, want the scene to take it")
 	}
 
-	scene.Draw(canv, 0)
+	scene.Draw(canv, pastKeyBarHold)
 
 	bounds := canv.Bounds()
 
