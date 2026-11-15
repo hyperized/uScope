@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // The bounds of --azimuth, in degrees clockwise from north. The upper bound is
@@ -14,9 +15,10 @@ const (
 	MaxAzimuth = 360.0
 )
 
-// Errors for the camera and range knobs the command line takes. They live
-// here, beside the bounds they enforce, so the flag parser refuses a value
-// with the same words whichever package asks.
+// Errors for the camera and range knobs that both the command line and the
+// control port take. They live here, beside the bounds they enforce, so the
+// flag parser and the control port refuse the same values with the same words
+// and cannot drift apart.
 var (
 	ErrZoom       = errors.New("radar: zoom out of range")
 	ErrTilt       = errors.New("radar: tilt out of range")
@@ -63,4 +65,49 @@ func within(value, low, high float64, sentinel error) error {
 	}
 
 	return nil
+}
+
+// ParseZoom reads a zoom typed as text and checks it with CheckZoom.
+func ParseZoom(text string) (int, error) {
+	zoom, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q is not a whole number", ErrZoom, text)
+	}
+
+	if err := CheckZoom(zoom); err != nil {
+		return 0, err
+	}
+
+	return zoom, nil
+}
+
+// ParseTilt reads an elevation typed as text and checks it with CheckTilt.
+func ParseTilt(text string) (float64, error) {
+	return parseChecked(text, ErrTilt, CheckTilt)
+}
+
+// ParseExaggerate reads a stretch typed as text and checks it with
+// CheckExaggerate.
+func ParseExaggerate(text string) (float64, error) {
+	return parseChecked(text, ErrExaggerate, CheckExaggerate)
+}
+
+// ParseAzimuth reads an azimuth typed as text and checks it with CheckAzimuth.
+func ParseAzimuth(text string) (float64, error) {
+	return parseChecked(text, ErrAzimuth, CheckAzimuth)
+}
+
+// parseChecked is the float half of the three parsers above. strconv also takes
+// "Inf" and "NaN", which is why every check has to refuse both.
+func parseChecked(text string, sentinel error, check func(float64) error) (float64, error) {
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q is not a number", sentinel, text)
+	}
+
+	if err := check(value); err != nil {
+		return 0, err
+	}
+
+	return value, nil
 }

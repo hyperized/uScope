@@ -7,6 +7,7 @@ import (
 
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/theme"
+	"github.com/hyperized/uScope/pkg/canvas"
 )
 
 // boardFrameScene draws two aircraft in the view set asks for and returns the
@@ -74,8 +75,35 @@ func TestBoardDrawsTheColumn(t *testing.T) {
 	}
 }
 
+// checkBoardToggle checks j left the column's hairline drawn and that J takes
+// the board off again, in the scene and on the canvas.
+func checkBoardToggle(t *testing.T, scene *radar.Scene, canv *canvas.Canvas, rule image.Rectangle) {
+	t.Helper()
+
+	scene.Draw(canv, pastKeyBarHold)
+
+	if got := countColour(canv, rule, theme.Night.Rule); got != panelHeight {
+		t.Errorf("after j the column's hairline has %d rule pixels, want %d", got, panelHeight)
+	}
+
+	if !press(scene, 'J') {
+		t.Fatal("J was not handled in the bare 3D view")
+	}
+
+	if scene.Current().Board {
+		t.Error("J did not flip the board back off")
+	}
+
+	scene.Draw(canv, 2*pastKeyBarHold)
+
+	if got := countColour(canv, rule, theme.Night.Rule); got != 0 {
+		t.Errorf("after J the column's edge still has %d rule pixels", got)
+	}
+}
+
 // TestBoardKey checks j flips the board in the bare 3D view, which the
-// column's hairline shows, and falls through in every other view.
+// column's hairline shows, is reported back through Current, and falls
+// through in every other view.
 func TestBoardKey(t *testing.T) {
 	t.Parallel()
 
@@ -101,25 +129,29 @@ func TestBoardKey(t *testing.T) {
 				t.Fatalf("j in %s = %v, want %v", testCase.view, got, testCase.want)
 			}
 
+			if got := scene.Current().Board; got != testCase.want {
+				t.Errorf("Current().Board after j in %s = %v, want %v", testCase.view, got, testCase.want)
+			}
+
 			if !testCase.want {
 				return
 			}
 
-			scene.Draw(canv, pastKeyBarHold)
-
-			if got := countColour(canv, rule, theme.Night.Rule); got != panelHeight {
-				t.Errorf("after j the column's hairline has %d rule pixels, want %d", got, panelHeight)
-			}
-
-			if !press(scene, 'J') {
-				t.Fatal("J was not handled in the bare 3D view")
-			}
-
-			scene.Draw(canv, 2*pastKeyBarHold)
-
-			if got := countColour(canv, rule, theme.Night.Rule); got != 0 {
-				t.Errorf("after J the column's edge still has %d rule pixels", got)
-			}
+			checkBoardToggle(t, scene, canv, rule)
 		})
+	}
+}
+
+// TestBoardRoundTrips checks Apply(Current()) keeps the board on.
+func TestBoardRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	scene, _ := benchScene(t)
+	scene.Apply(radar.Settings{View: radar.ViewMinimal3D, Board: true})
+
+	scene.Apply(scene.Current())
+
+	if !scene.Current().Board {
+		t.Error("Apply(Current()) turned the board off")
 	}
 }

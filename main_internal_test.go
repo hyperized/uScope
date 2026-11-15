@@ -75,6 +75,7 @@ const (
 	flagLat        = "--lat"
 	flagLon        = "--lon"
 	flagColour     = "--colour"
+	flagFilter     = "--filter"
 	flagBattery    = "--battery"
 	flagAirports   = "--airports"
 	flagShore      = "--shore"
@@ -100,6 +101,7 @@ const (
 	flagTilt       = "--tilt"
 	flagOrbit      = "--orbit"
 	flagAzimuth    = "--azimuth"
+	flagControl    = "--control"
 	flagBiasT      = "--bias-t"
 	flagAutoSweep  = "--auto-sweep"
 
@@ -190,6 +192,7 @@ func defaultConfig() config {
 		theme:      theme.KindAuto,
 		look:       theme.LookGlass,
 		colour:     radar.ColourAltitude,
+		filter:     radar.FilterAll,
 		airports:   radar.ToggleOn,
 		shore:      radar.ToggleOn,
 		stars:      radar.ToggleOn,
@@ -1384,6 +1387,46 @@ func TestParseFlagsColourRejections(t *testing.T) {
 			// flag that was wrong and the value that was rejected.
 			if !errors.Is(err, radar.ErrColour) {
 				t.Errorf("parseFlags(%v) error = %v, want radar.ErrColour wrapped in it", testCase.args, err)
+			}
+		})
+	}
+}
+
+// TestParseFlagsFilter covers --filter: the default, every spelling, and the
+// refusals, which carry radar's own sentinel inside the flag's.
+func TestParseFlagsFilter(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []radar.BandFilter{
+		radar.FilterAll, radar.FilterLow, radar.FilterMid, radar.FilterHigh, radar.FilterBelowHigh,
+		radar.FilterIn, radar.FilterOut, radar.FilterOther,
+	} {
+		t.Run(string(want), func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFlags([]string{flagFilter, string(want)})
+			if err != nil {
+				t.Fatalf("parseFlags(%s %s) unexpected error: %v", flagFilter, want, err)
+			}
+
+			expected := defaultConfig()
+			expected.filter = want
+
+			checkConfig(t, got, expected)
+
+			if settings := radarSettings(got); settings.Filter != want {
+				t.Errorf("radarSettings().Filter = %q, want %q", settings.Filter, want)
+			}
+		})
+	}
+
+	for _, text := range []string{"", "Low", "<25K"} {
+		t.Run("refuses "+text, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlags([]string{flagFilter, text})
+			if !errors.Is(err, errFilter) || !errors.Is(err, radar.ErrFilter) {
+				t.Fatalf("parseFlags(%s %q) error = %v, want errFilter wrapping radar.ErrFilter", flagFilter, text, err)
 			}
 		})
 	}
@@ -3270,8 +3313,10 @@ func TestParseFlagsTiltRejections(t *testing.T) {
 	}
 }
 
-// TestParseFlagsCameraPlacement covers --orbit and --azimuth in their default
-// state and with a value each.
+// TestParseFlagsCameraPlacement covers --orbit, --azimuth and --control in
+// their default state and with a value each, because all three reach a running
+// uScope steered over the control port, and a default that drifted would change
+// what it shows without anybody touching its settings.
 func TestParseFlagsCameraPlacement(t *testing.T) {
 	t.Parallel()
 
@@ -3285,6 +3330,14 @@ func TestParseFlagsCameraPlacement(t *testing.T) {
 			cfg.orbit = radar.ToggleOff
 		}},
 		{name: "azimuth", args: []string{flagAzimuth, "123.5"}, adjust: func(cfg *config) { cfg.azimuth = 123.5 }},
+		{
+			name:   "control on loopback",
+			args:   []string{flagControl, "127.0.0.1:7777"},
+			adjust: func(cfg *config) { cfg.control = "127.0.0.1:7777" },
+		},
+		{name: "control on every interface", args: []string{flagControl, ":7777"}, adjust: func(cfg *config) {
+			cfg.control = ":7777"
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3317,6 +3370,8 @@ func TestParseFlagsCameraPlacementRejections(t *testing.T) {
 		{name: "azimuth 360", args: []string{flagAzimuth, "360"}, wantErr: errAzimuth},
 		{name: "azimuth negative", args: []string{flagAzimuth, "-0.5"}, wantErr: errAzimuth},
 		{name: "azimuth NaN", args: []string{flagAzimuth, nanText}, wantErr: errAzimuth},
+		{name: "control without a port", args: []string{flagControl, "127.0.0.1"}, wantErr: errControl},
+		{name: "control on port zero", args: []string{flagControl, "127.0.0.1:0"}, wantErr: errControl},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3481,43 +3536,61 @@ func TestSourceForPinsTheCorridorField(t *testing.T) {
 	}
 }
 
-// flagHistory is the --history flag.
-const flagHistory = "--history"
+// flagState is the --state flag.
+const flagState = "--state"
 
-// TestParseFlagsHistory covers --history: off by default, off and empty both
-// mean no file, and - is refused because it reads as stdout.
-func TestParseFlagsHistory(t *testing.T) {
+// TestParseFlagsKeptFiles covers --state and --history, which share a rule:
+// off by default, off and empty both mean no file, and - is refused because
+// it reads as stdout.
+func TestParseFlagsKeptFiles(t *testing.T) {
 	t.Parallel()
 
-	const path = "/var/lib/uscope/history"
-
-	for _, testCase := range []struct {
-		name    string
-		args    []string
-		want    string
-		wantErr error
+	for _, kept := range []struct {
+		flag    string
+		path    string
+		invalid error
+		read    func(config) string
 	}{
-		{name: caseDefault},
-		{name: "off keeps nothing", args: []string{flagHistory, stateOff}},
-		{name: caseEmpty, args: []string{flagHistory, ""}},
-		{name: "a path", args: []string{flagHistory, path}, want: path},
-		{name: "stdout", args: []string{flagHistory, "-"}, wantErr: errHistPath},
-		{name: "a NUL in the path", args: []string{flagHistory, "a\x00b"}, wantErr: errHistPath},
+		{
+			flag: flagState, path: "/var/lib/uscope/settings", invalid: errStatePath,
+			read: func(cfg config) string { return cfg.state },
+		},
+		{
+			flag: flagHistory, path: "/var/lib/uscope/history", invalid: errHistPath,
+			read: func(cfg config) string { return cfg.history },
+		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+		for _, testCase := range []struct {
+			name    string
+			args    []string
+			want    string
+			wantErr error
+		}{
+			{name: caseDefault},
+			{name: "off keeps nothing", args: []string{kept.flag, stateOff}},
+			{name: caseEmpty, args: []string{kept.flag, ""}},
+			{name: "a path", args: []string{kept.flag, kept.path}, want: kept.path},
+			{name: "stdout", args: []string{kept.flag, "-"}, wantErr: kept.invalid},
+			{name: "a NUL in the path", args: []string{kept.flag, "a\x00b"}, wantErr: kept.invalid},
+		} {
+			t.Run(kept.flag+" "+testCase.name, func(t *testing.T) {
+				t.Parallel()
 
-			cfg, err := parseFlags(testCase.args)
-			if !errors.Is(err, testCase.wantErr) {
-				t.Fatalf("parseFlags(%v) error = %v, want errors.Is(%v)", testCase.args, err, testCase.wantErr)
-			}
+				cfg, err := parseFlags(testCase.args)
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("parseFlags(%v) error = %v, want errors.Is(%v)", testCase.args, err, testCase.wantErr)
+				}
 
-			if cfg.history != testCase.want {
-				t.Errorf("history = %q, want %q", cfg.history, testCase.want)
-			}
-		})
+				if got := kept.read(cfg); got != testCase.want {
+					t.Errorf("%s = %q, want %q", kept.flag, got, testCase.want)
+				}
+			})
+		}
 	}
 }
+
+// flagHistory is the --history flag.
+const flagHistory = "--history"
 
 // TestWarnNoHistory checks --history under the demo fleet says once that it
 // keeps nothing, and says nothing when it was not given.

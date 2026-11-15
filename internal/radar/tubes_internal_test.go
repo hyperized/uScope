@@ -48,13 +48,12 @@ func aboveKeyBar(canv *canvas.Canvas) []byte {
 
 // tubePixels counts what routes and trails change on the fixture scene in
 // view under filter, against the same scene with the corridors off.
-func tubePixels(t *testing.T, view View, routes []source.Route, trails []source.Trail, filter filterState) int {
+func tubePixels(t *testing.T, view View, routes []source.Route, trails []source.Trail, filter BandFilter) int {
 	t.Helper()
 
 	draw := func(corridors Toggle) []byte {
 		scene, canv, src := exposedLayerScene(t)
-		scene.Apply(Settings{View: view, Shore: ToggleOff, Corridors: corridors})
-		scene.setFilter(filter)
+		scene.Apply(Settings{View: view, Shore: ToggleOff, Filter: filter, Corridors: corridors})
 
 		src.frame.Ghosts = trails
 		src.frame.Routes = routes
@@ -77,7 +76,7 @@ func tubePixels(t *testing.T, view View, routes []source.Route, trails []source.
 }
 
 // TestTubesDrawWhatTheFilterShows checks a route is drawn in every view, that
-// a band filter takes part of it away, that a route too faint to see, one with no
+// a ceiling takes the top off it, that a route too faint to see, one with no
 // decoded altitude and a transit route draw nothing, and that a trail a route has taken in is
 // not drawn again as a hairline.
 func TestTubesDrawWhatTheFilterShows(t *testing.T) {
@@ -97,28 +96,23 @@ func TestTubesDrawWhatTheFilterShows(t *testing.T) {
 
 			// The trail is there so the corridors count as drawn at all.
 			trails := []source.Trail{tubed}
-			if got := tubePixels(t, view, nil, trails, filterState{}); got != 0 {
+			if got := tubePixels(t, view, nil, trails, FilterAll); got != 0 {
 				t.Errorf("a tubed trail with no route drew %d pixels", got)
 			}
 
 			faint := []source.Route{
 				tubeRoute(source.TrackInbound, 0.01), undecoded, tubeRoute(source.TrackTransit, 1),
 			}
-			if got := tubePixels(t, view, faint, trails, filterState{}); got != 0 {
+			if got := tubePixels(t, view, faint, trails, FilterAll); got != 0 {
 				t.Errorf("a faint route, an undecoded one and a transit one drew %d pixels", got)
 			}
 
-			// A tube needs two neighbouring stations shown to draw anything,
-			// so the second station is brought down into the low band and the
-			// low band's filter keeps the first two of the three decoded.
 			routes := []source.Route{tubeRoute(source.TrackInbound, 1)}
-			routes[0].Stations[1].Altitude = 5000
-
-			all := tubePixels(t, view, routes, trails, filterState{})
-			under := tubePixels(t, view, routes, trails, filterState{kind: filterBand, band: bandLow})
+			all := tubePixels(t, view, routes, trails, FilterAll)
+			under := tubePixels(t, view, routes, trails, FilterBelowHigh)
 
 			if all == 0 || under == 0 || under >= all {
-				t.Errorf("pixels: every band %d, the low band %d; want both drawn and the low band fewer",
+				t.Errorf("pixels: every band %d, under the ceiling %d; want both drawn and the ceiling fewer",
 					all, under)
 			}
 		})
@@ -141,7 +135,7 @@ func TestTubedTrailKeepsItsLooseEnds(t *testing.T) {
 				trail := exposureTrack(source.TrackInbound, 0)
 				trail.Tubed, trail.TubeFrom, trail.TubeTo = tubed, from, to
 
-				return tubePixels(t, view, nil, []source.Trail{trail}, filterState{})
+				return tubePixels(t, view, nil, []source.Trail{trail}, FilterAll)
 			}
 
 			covered, middle, loose := count(0, 3, true), count(1, 2, true), count(0, 0, false)
@@ -172,7 +166,7 @@ func TestTubesCutAtTheScopeEdge(t *testing.T) {
 	trails[0].Tubed, trails[0].TubeTo = true, len(trails[0].Points)-1
 
 	for _, view := range []View{ViewScope, View3D} {
-		if got := tubePixels(t, view, []source.Route{route}, trails, filterState{}); got == 0 {
+		if got := tubePixels(t, view, []source.Route{route}, trails, FilterAll); got == 0 {
 			t.Errorf("%s: a route cut in three drew nothing", view)
 		}
 	}

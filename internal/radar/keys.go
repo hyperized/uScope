@@ -80,9 +80,10 @@ func (s *Scene) handleKey(key input.Key) bool {
 // --lights on.
 //
 // u turns the corridor tubes on and off in every view, on the one switch
-// --corridors sets. There is no bare pair the way there is for a and m: the
-// tubes are made of the traffic's own history, not furniture a bare view
-// exists to leave out.
+// --corridors sets, so Current reports the key and a later set over the
+// control port carries it rather than undoing it. There is no bare pair the
+// way there is for a and m: the tubes are made of the traffic's own history,
+// not furniture a bare view exists to leave out.
 //
 // c and f are one pair rather than two keys: c picks what a colour means and f
 // picks one of the colours, so c is also what puts the filter back to ALL. See

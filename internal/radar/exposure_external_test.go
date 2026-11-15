@@ -146,20 +146,9 @@ func exposureFrame(tb testing.TB) source.Frame {
 func drawExposureCase(t *testing.T, frame source.Frame, set radar.Settings, pal theme.Palette) *canvas.Canvas {
 	t.Helper()
 
-	return drawExposureFiltered(t, frame, set, pal, 0)
-}
-
-// drawExposureFiltered is drawExposureCase with the filter moved on filters
-// presses of f first.
-func drawExposureFiltered(
-	t *testing.T, frame source.Frame, set radar.Settings, pal theme.Palette, filters int,
-) *canvas.Canvas {
-	t.Helper()
-
 	scene, canv := benchSceneWith(t, frame)
 	scene.Apply(set)
 	scene.SetPalette(pal)
-	pressFilter(t, scene, filters)
 	scene.Draw(canv, 0)
 
 	return canv
@@ -193,9 +182,8 @@ func TestExposureToggleTakesOnlyTheTracks(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
-		name    string
-		set     radar.Settings
-		filters int
+		name string
+		set  radar.Settings
 	}{
 		{name: "full scope", set: radar.Settings{View: radar.ViewScope}},
 		{name: "full scope without the shore", set: radar.Settings{View: radar.ViewScope, Shore: radar.ToggleOff}},
@@ -207,11 +195,11 @@ func TestExposureToggleTakesOnlyTheTracks(t *testing.T) {
 		{name: "full 3D at ten miles", set: radar.Settings{View: radar.View3D, RangeNm: 10}},
 		{name: "bare 3D", set: radar.Settings{View: radar.ViewMinimal3D}},
 		{name: "bare 3D at ten miles", set: radar.Settings{View: radar.ViewMinimal3D, RangeNm: 10}},
-		{name: "full scope in the low band", set: radar.Settings{View: radar.ViewScope}, filters: pressFilterLow},
 		{
-			name: "bare 3D over the high band", set: radar.Settings{View: radar.ViewMinimal3D},
-			filters: pressFilterHigh,
+			name: "full scope under the ceiling",
+			set:  radar.Settings{View: radar.ViewScope, Filter: radar.FilterBelowHigh},
 		},
+		{name: "bare 3D over the high band", set: radar.Settings{View: radar.ViewMinimal3D, Filter: radar.FilterHigh}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -226,10 +214,10 @@ func TestExposureToggleTakesOnlyTheTracks(t *testing.T) {
 			// Both sides of each comparison carry the same setting, because
 			// the flat views' U cap shows it and would otherwise be the
 			// difference counted.
-			without := drawExposureFiltered(t, unplaced, testCase.set, theme.Night, testCase.filters)
-			withoutOff := drawExposureFiltered(t, unplaced, off, theme.Night, testCase.filters)
-			hidden := drawExposureFiltered(t, frame, off, theme.Night, testCase.filters)
-			exposed := drawExposureFiltered(t, frame, testCase.set, theme.Night, testCase.filters)
+			without := drawExposureCase(t, unplaced, testCase.set, theme.Night)
+			withoutOff := drawExposureCase(t, unplaced, off, theme.Night)
+			hidden := drawExposureCase(t, frame, off, theme.Night)
+			exposed := drawExposureCase(t, frame, testCase.set, theme.Night)
 
 			if got := differing(withoutOff, hidden); got != 0 {
 				t.Errorf("with the exposure off, %d pixels differ from a frame with no airfield, want 0", got)
@@ -258,8 +246,8 @@ func TestExposureOnTheDayGround(t *testing.T) {
 }
 
 // TestExposureFollowsTheFilter checks the filter reaches the exposure in each
-// of the four views: the tracks in the low band are some exposure, and not the
-// exposure every band makes.
+// of the four views: the tracks under the ceiling are some exposure, and not
+// the exposure every band makes.
 //
 // Each exposure is measured against the same scene with it off, so the fleet,
 // which the filter thins as well, is drawn alike on both sides of each
@@ -272,25 +260,23 @@ func TestExposureFollowsTheFilter(t *testing.T) {
 			t.Parallel()
 
 			frame := exposureFrame(t)
-			exposed := func(filters int) int {
-				set := radar.Settings{View: view}
+			exposed := func(set radar.Settings) int {
 				off := set
 				off.Corridors = radar.ToggleOff
 
 				return differing(
-					drawExposureFiltered(t, frame, off, theme.Night, filters),
-					drawExposureFiltered(t, frame, set, theme.Night, filters))
+					drawExposureCase(t, frame, off, theme.Night), drawExposureCase(t, frame, set, theme.Night))
 			}
 
-			every := exposed(0)
-			low := exposed(pressFilterLow)
+			every := exposed(radar.Settings{View: view})
+			under := exposed(radar.Settings{View: view, Filter: radar.FilterBelowHigh})
 
-			if low == 0 {
-				t.Error("in the low band no exposure was drawn at all")
+			if under == 0 {
+				t.Error("under the ceiling no exposure was drawn at all")
 			}
 
-			if low == every {
-				t.Errorf("in the low band the exposure covered %d pixels, the same as every band", low)
+			if under == every {
+				t.Errorf("under the ceiling the exposure covered %d pixels, the same as every band", under)
 			}
 		})
 	}

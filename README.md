@@ -76,7 +76,7 @@ the end, `<25K`, which keeps the low and mid bands and hides the overflights.
 The altitude stops have 500 ft of slack at each edge: an aircraft on screen
 stays there until it is 500 ft past the line, and one off screen waits until
 it is 500 ft inside, so a flight holding FL250 under the `<25K` stop does not
-flicker.
+flicker. `--filter` starts the run on one of these stops instead of on `ALL`.
 
 A new aircraft fades up from the background over two seconds. The first
 frame, and the first frame after `f`, draw everything at full strength. When
@@ -213,7 +213,8 @@ GPS fix, `--lat` and `--lon`, or a self-locate estimate that has settled to
 within 10 nm) or `--corridor-field`, and until the first aircraft is lost.
 `--demo` starts with seventy invented tracks around Schiphol from the last two
 hours, so there is something to look at. `u` or `--corridors off` hides the
-corridors in every view. The `U TUBES` cap is on the flat views' key bar and
+corridors in every view, and `set corridors off` on the control port does the
+same. The `U TUBES` cap is on the flat views' key bar and
 the bare views' reveal. The 3D view's bar has no room for it, but the key
 works there too.
 
@@ -344,6 +345,91 @@ markers and the line widths are all drawn at twice that, at 4320 four times,
 so a large `--size` gives the same picture rather than a small one in a big
 frame.
 
+### Driving it from another terminal
+
+`--control HOST:PORT` opens a small line protocol, so another terminal or a
+script can change the settings of a uScope that is already running. Plain `nc`
+is enough to talk to it:
+
+```sh
+./uScope --demo --view minimal3d --control 127.0.0.1:7777
+```
+
+```console
+$ nc 127.0.0.1 7777
+set tilt 20
+ok view=minimal3d shore=off airports=on zoom=0 tilt=20 orbit=on azimuth=17.9 exaggerate=8 range=auto theme=auto look=glass colour=altitude bar=off lights=on stars=on recenter=3m corridors=on filter=all board=off
+set tilt 95
+err bad value for tilt: radar: tilt out of range: got 95, want 10 to 80
+```
+
+Each line is one command and gets one reply line: `ok` and the state after
+the command, or `err` and the reason.
+
+| Command | Does |
+|---|---|
+| `get` | reports the state as `name=value` pairs, the same line `ok` carries after every other command |
+| `set NAME VALUE` | changes one setting: `view`, `shore`, `airports`, `bar`, `board`, `lights`, `stars`, `zoom`, `tilt`, `orbit`, `azimuth`, `exaggerate`, `range`, `theme`, `look`, `colour`, `recenter`, `corridors` or `filter`, taking the same values and bounds as the flag of the same name |
+| `key K` | presses a key, one printable character or `up`, `down`, `left`, `right`, `enter`, the same as pressing it on the keyboard |
+| `help` | lists the commands |
+
+`shore` and `airports` set the scope's switch and the minimal views' switch
+together, and `get` reports whichever one the view on screen draws. `bar` is
+the bare views' bar, `on` or `off`, whatever view is up, and `board` is the
+flight strip board in `minimal3d`. `lights` turns the aircraft lights on or
+off in every view, and `stars` the stars in the 3D views' night sky.
+`recenter` takes `0`, which keeps the bare views on the receiver, or an
+interval from `10s` to `1h`, and `get` spells it the short way (`3m`, `1h`).
+`corridors` turns the corridors on or off; which airfield sorts the tracks and
+how fast they fade are fixed for the run, so the port cannot change either.
+`filter` is the filter `f` cycles: `all`, `low`, `mid` or `high` while
+colouring by altitude, `in`, `out` or `other` while colouring by corridor, and
+`below-high` in either for the low and mid bands together. A value from the
+other colouring's list reads as `all`. `below-high` survives a `set colour`
+between altitude and corridor; any other filter goes back to `all` when the
+colouring changes. `get` says `filter=all` while colouring by airline, because
+the operator `f` picks there has no name `set` could take. The fields of the
+reply keep their order, so a script can cut one out by position or by name.
+
+The port changes what is drawn and nothing else. `q`, `Q` and `esc` are
+refused, so a typo cannot end the run; stop it with SIGTERM or Ctrl-C. `b` and
+`B` are refused too, because the bias-tee puts power on the antenna cable, and
+that stays with whoever is at the keyboard. A line longer than 256 bytes or
+not valid UTF-8 gets an `err`, and the connection stays open. The port serves
+four connections at once; a fifth is let in by closing the one that has been
+silent longest, and a connection that sends nothing for ten minutes is closed.
+In a bare view a `key` command brings the key bar up for four seconds, the
+same as a press on the keyboard would.
+
+The port has no authentication, so keep it on loopback: `127.0.0.1:PORT` or
+`[::1]:PORT`. A host left empty, as in `:7777`, listens on every interface,
+and uScope warns about that when it starts, before the framebuffer takes the
+console. A line that looks like the start of an HTTP request closes the
+connection before anything after it runs, so a web page open in a browser on
+the same machine cannot drive the port.
+
+### Keeping settings across a restart
+
+With `--state PATH`, uScope writes what the control port changed to PATH in
+the port's own syntax: one `name value` per line, using the names `set` takes,
+so `cat` shows it and you can edit it by hand while uScope is stopped. On the
+next start the file is read after the flags and wins for every field it holds,
+and the flags decide the rest. A line uScope does not understand, or a value
+`set` would refuse, gets one warning on stderr and is skipped; only the first
+64 KiB of the file is read, and a path that is not a regular file is left
+alone with a warning. The file is written three quarters of a second
+after the last change and then at most once every ten seconds, as a new file
+readable by its owner alone and renamed over the old one, so a burst of
+`key ]` costs one write, a script flipping a setting does not wear out an SD
+card, and a crash never leaves half a file behind. Stopping uScope writes any
+change still waiting. If a write fails, uScope says so once and carries
+on. `off`, the default, keeps nothing, and `-` is refused. The file is only
+written while `--control` is on, since nothing else changes what it holds.
+`shore` and `airports` are kept the way `get` reports them, so after a restart
+both views' switches follow whatever the view on screen had. The trail length,
+the wide layout, the envelope, the selection and the bias-tee have no `set`
+name and are not kept.
+
 ## Where the aircraft come from
 
 | Flag | Source |
@@ -432,6 +518,7 @@ starts the four seconds again.
 | `--view` | `scope` | `scope`, `3d`, `minimal` or `minimal3d` |
 | `--range` | `auto` | range in nautical miles, or `auto` to fit the traffic |
 | `--colour` | `altitude` | `altitude`, `airline` or `corridor` |
+| `--filter` | `all` | which aircraft are drawn: `low`, `mid` or `high` while colouring by altitude, `in`, `out` or `other` while colouring by corridor, `below-high` in either for everything under 25,000 ft, or `all`. A value from the other colouring's list reads as `all`, and none has any effect while colouring by airline |
 | `--theme` | `auto` | `night`, `day`, or `auto` to follow the sun at the receiver |
 | `--look` | `glass` | `glass`, `phosphor`, `mono` or `vector` |
 | `--airports` | `on` | airfield markers |
@@ -446,6 +533,8 @@ starts the four seconds again.
 | `--corridor-field` | | the airfield tracks are sorted into arrivals and departures by, as an ICAO code; empty takes the nearest within 150 nm of the receiver |
 | `--corridor-half-life` | `2h` | how long a lost track takes to count for half as much in its route, `10m` to `24h` |
 | `--history` | `off` | keep the lost tracks the corridors are drawn from in this file across a restart, live sources only; `off` keeps nothing; see "Corridors" |
+| `--control` | | listen on `[HOST]:PORT` for commands from another terminal or a script, see "Driving it from another terminal"; no authentication, so keep it on loopback |
+| `--state` | `off` | keep what the control port changes in this file and read it back on the next start, where it wins over the flags; `off` keeps nothing; see "Keeping settings across a restart" |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--zoom` | `0` | range steps inside the `auto` fit, `-5` to `5`; negative widens, the view keeps following the traffic, `+` and `-` still turn auto off, and a fixed `--range` ignores it |
 | `--tilt` | `35` | the 3D camera's starting elevation in degrees, 10 to 80; `[` and `]` step from it |

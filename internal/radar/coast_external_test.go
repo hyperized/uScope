@@ -44,33 +44,6 @@ func lostTrail(plane airplane.Snapshot, ago time.Duration) source.Trail {
 	}
 }
 
-// How many presses of f it takes to reach each filter from ALL, in altitude
-// colouring, and for IN and OUT in corridor colouring.
-const (
-	pressFilterLow  = 1
-	pressFilterMid  = 2
-	pressFilterHigh = 3
-
-	// pressFilterCeiling is the fourth press in altitude colouring, and the
-	// fourth in corridor colouring as well: past IN, OUT and OTHER.
-	pressFilterCeiling = 4
-
-	// pressFilterIn and pressFilterOut are corridor colouring's first two.
-	pressFilterIn  = 1
-	pressFilterOut = 2
-)
-
-// pressFilter moves the filter on times presses of f.
-func pressFilter(tb testing.TB, scene *radar.Scene, times int) {
-	tb.Helper()
-
-	for step := range times {
-		if !press(scene, 'f') {
-			tb.Fatalf("press %d of f was not handled, want the filter key to take it", step+1)
-		}
-	}
-}
-
 // coastFrame is a frame with nothing heard and the given trails lost.
 func coastFrame(trails ...source.Trail) source.Frame {
 	frame := sceneFrame()
@@ -84,18 +57,9 @@ func coastFrame(trails ...source.Trail) source.Frame {
 func drawOnce(t *testing.T, frame source.Frame, set radar.Settings, presses int) *canvas.Canvas {
 	t.Helper()
 
-	return drawFiltered(t, frame, set, presses, 0)
-}
-
-// drawFiltered is drawOnce with the filter moved on filters presses of f as
-// well.
-func drawFiltered(t *testing.T, frame source.Frame, set radar.Settings, presses, filters int) *canvas.Canvas {
-	t.Helper()
-
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
 	scene.Apply(set)
 	pressTrails(t, scene, presses)
-	pressFilter(t, scene, filters)
 	scene.Draw(canv, 0)
 
 	return canv
@@ -163,9 +127,10 @@ func TestCoastingAircraftKeepsTheFilter(t *testing.T) {
 	t.Parallel()
 
 	set := coastSettings()
+	set.Filter = radar.FilterLow
 
-	empty := drawFiltered(t, sceneFrame(), set, 0, pressFilterLow)
-	got := drawFiltered(t, coastFrame(lostTrail(highPlane(), 0)), set, 0, pressFilterLow)
+	empty := drawOnce(t, sceneFrame(), set, 0)
+	got := drawOnce(t, coastFrame(lostTrail(highPlane(), 0)), set, 0)
 
 	if !identical(got, empty) {
 		t.Error("a high aircraft coasting under the low-band filter was drawn, want it hidden")
@@ -266,25 +231,25 @@ func TestNewAircraftFadeIn(t *testing.T) {
 	}
 }
 
-// TestBandHoldsInsideTheDeadBand walks an aircraft down and up through the
-// high band's 25,000 ft floor and checks it switches only once it is 500 ft
-// past the edge, in whichever direction it is going.
-func TestBandHoldsInsideTheDeadBand(t *testing.T) {
+// TestCeilingHoldsInsideTheDeadBand walks an aircraft up and down through the
+// 25,000 ft ceiling and checks it switches only once it is 500 ft past the
+// edge, in whichever direction it is going.
+func TestCeilingHoldsInsideTheDeadBand(t *testing.T) {
 	t.Parallel()
+
+	set := coastSettings()
+	set.Filter = radar.FilterBelowHigh
 
 	src := &fakeSource{frame: sceneFrame()}
 	scene := radar.New(testFaces(t), src, scope.New(scope.WithCurrent(sceneRangeNm)))
-	scene.Apply(coastSettings())
-	pressFilter(t, scene, pressFilterHigh)
+	scene.Apply(set)
 
 	empty, err := canvas.New(panelWidth, panelHeight)
 	if err != nil {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	// Past the hold the f presses opened the bare view's key bar for, so the
-	// empty frame and the measured ones agree about the bar.
-	scene.Draw(empty, 5*time.Second)
+	scene.Draw(empty, 0)
 
 	canv, err := canvas.New(panelWidth, panelHeight)
 	if err != nil {
@@ -295,11 +260,11 @@ func TestBandHoldsInsideTheDeadBand(t *testing.T) {
 		altitude float64
 		shown    bool
 	}{
-		{altitude: 25100, shown: true},
-		{altitude: 24700, shown: true},
-		{altitude: 24400},
-		{altitude: 25300},
-		{altitude: 25600, shown: true},
+		{altitude: 24900, shown: true},
+		{altitude: 25300, shown: true},
+		{altitude: 25600},
+		{altitude: 24700},
+		{altitude: 24400, shown: true},
 	} {
 		plane := scenePlane("484AC1", "KLM123", 45, 12, testCase.altitude, 41)
 		src.frame = sceneFrame(plane)
@@ -360,7 +325,7 @@ func coastAllocScene(tb testing.TB, kind coastAllocKind, set radar.Settings) (*r
 	case coastAllocFadingIn:
 		frame.Planes = frame.Planes[:benchPlanes/2]
 	case coastAllocDeadBand:
-		frame.Planes = hexFleet(25100)
+		frame.Planes = hexFleet(24900)
 	case coastAllocNone:
 		fallthrough
 	default:
@@ -374,11 +339,11 @@ func coastAllocScene(tb testing.TB, kind coastAllocKind, set radar.Settings) (*r
 	src := &fakeSource{frame: frame}
 	scene := radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(60)))
 
-	scene.Apply(set)
-
 	if kind == coastAllocDeadBand {
-		pressFilter(tb, scene, pressFilterHigh)
+		set.Filter = radar.FilterBelowHigh
 	}
+
+	scene.Apply(set)
 
 	scene.Draw(canv, 0)
 
@@ -388,7 +353,7 @@ func coastAllocScene(tb testing.TB, kind coastAllocKind, set radar.Settings) (*r
 
 		scene.Draw(canv, coastAllocAt/2)
 	case coastAllocDeadBand:
-		src.frame.Planes = hexFleet(24800)
+		src.frame.Planes = hexFleet(25200)
 	case coastAllocNone, coastAllocCoasting:
 		fallthrough
 	default:

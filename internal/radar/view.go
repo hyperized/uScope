@@ -108,4 +108,17 @@ func (s *Scene) perspective() bool { return s.shown == View3D || s.shown == View
 // view, the centre follows the traffic in one, and the selection draws no ring
 // because there is no type on screen for a ring to refer to. None of those
 // three cares whether the picture is flat or tilted.
-func (s *Scene) bare() bool { return s.shown == ViewMinimal || s.shown == ViewMinimal3D }
+func (s *Scene) bare() bool { return s.shown.Bare() }
+
+// Bare reports whether the view is one of the two without chrome, the pair
+// that reads MinimalShore and MinimalAirports instead of Shore and Airports.
+func (v View) Bare() bool { return v == ViewMinimal || v == ViewMinimal3D }
+
+// orDefault spells the zero View as the view it reads as.
+func (v View) orDefault() View {
+	if v == "" {
+		return ViewScope
+	}
+
+	return v
+}

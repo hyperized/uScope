@@ -255,11 +255,17 @@ func (s *Scene) minimalOrigin(receiver source.Receiver) geo {
 
 // applyRecentre sets the cadence and forgets whatever the last one worked out.
 //
-// A scene handed a fresh settings block should not carry on gliding towards a
-// centre the new cadence never chose, and a block that turns recentring off
-// has to put the projection back on the receiver rather than leaving it
-// parked wherever the traffic was.
+// A scene handed a new cadence should not carry on gliding towards a centre
+// the old one chose, and a block that turns recentring off has to put the
+// projection back on the receiver rather than leaving it parked wherever the
+// traffic was. The same cadence again changes nothing, so a control-port
+// change to some other setting does not snap a bare view back to the receiver
+// for a refit.
 func (s *Scene) applyRecentre(every time.Duration) {
+	if every == s.recentre {
+		return
+	}
+
 	s.recentre = every
 	s.centre, s.haveCentre, s.gliding = geo{}, false, false
 	s.lastFit = time.Time{}

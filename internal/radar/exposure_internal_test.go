@@ -167,17 +167,11 @@ func TestCorridorBandsFollowVisible(t *testing.T) {
 
 	inside := [bandCount]float64{bandLow: 5000, bandMid: 15000, bandHigh: 35000}
 
-	for _, filter := range []filterState{
-		{},
-		{kind: filterBand, band: bandLow},
-		{kind: filterBand, band: bandMid},
-		{kind: filterBand, band: bandHigh},
-		{kind: filterBelow, band: bandMid},
-	} {
-		t.Run(filter.label(), func(t *testing.T) {
+	for _, filter := range []BandFilter{FilterAll, FilterLow, FilterMid, FilterHigh, FilterBelowHigh} {
+		t.Run(string(filter), func(t *testing.T) {
 			t.Parallel()
 
-			scene := &Scene{filter: filter}
+			scene := &Scene{filter: filter.state()}
 			mask := scene.corridorBands()
 
 			for band, altitude := range inside {
@@ -204,12 +198,6 @@ func TestCorridorBandsFollowVisible(t *testing.T) {
 		}
 	})
 }
-
-// midBandFilter is the filter on the middle altitude band, which keeps the
-// part of a test track flown between 10,000 and 25,000 ft and drops the rest.
-//
-//nolint:gochecknoglobals // a fixture, read only.
-var midBandFilter = filterState{kind: filterBand, band: bandMid}
 
 // exposedLayerScene is layerScene with one track lost on the frame.
 func exposedLayerScene(t *testing.T) (*Scene, *canvas.Canvas, *stubSource) {
@@ -279,13 +267,12 @@ func TestExposureKeysTheLayer(t *testing.T) {
 
 // exposurePixels counts what trails change on the fixture scene in view
 // under filter, against the same scene with the exposure off.
-func exposurePixels(t *testing.T, view View, trails []source.Trail, filter filterState) int {
+func exposurePixels(t *testing.T, view View, trails []source.Trail, filter BandFilter) int {
 	t.Helper()
 
 	draw := func(corridors Toggle) []byte {
 		scene, canv, src := exposedLayerScene(t)
-		scene.Apply(Settings{View: view, Shore: ToggleOff, Corridors: corridors})
-		scene.setFilter(filter)
+		scene.Apply(Settings{View: view, Shore: ToggleOff, Filter: filter, Corridors: corridors})
 
 		src.frame.Ghosts = trails
 
@@ -322,15 +309,15 @@ func TestExposurePathsSkipWhatTheyCannotDraw(t *testing.T) {
 			single.Points = whole.Points[:1]
 			faint := exposureTrack(source.TrackInbound, 5*time.Hour)
 
-			if got := exposurePixels(t, view, []source.Trail{single, faint}, filterState{}); got != 0 {
+			if got := exposurePixels(t, view, []source.Trail{single, faint}, FilterAll); got != 0 {
 				t.Errorf("a one-fix track and a faded one drew %d pixels", got)
 			}
 
-			all := exposurePixels(t, view, []source.Trail{whole}, filterState{})
-			under := exposurePixels(t, view, []source.Trail{whole}, midBandFilter)
+			all := exposurePixels(t, view, []source.Trail{whole}, FilterAll)
+			under := exposurePixels(t, view, []source.Trail{whole}, FilterBelowHigh)
 
 			if all == 0 || under == 0 || under >= all {
-				t.Errorf("pixels: every band %d, the mid band %d; want both drawn and the mid band fewer",
+				t.Errorf("pixels: every band %d, under the ceiling %d; want both drawn and the ceiling fewer",
 					all, under)
 			}
 		})

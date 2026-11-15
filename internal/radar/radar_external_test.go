@@ -326,7 +326,6 @@ type drawAllocCase struct {
 	name     string
 	set      radar.Settings
 	presses  int
-	filters  int
 	ghosts   bool
 	exposure exposureKind
 	wide     bool
@@ -348,7 +347,7 @@ func drawAllocCases() []drawAllocCase {
 		{name: "a coasting fleet", coast: coastAllocCoasting},
 		{name: "a coasting fleet in 3D", set: radar.Settings{View: radar.View3D}, coast: coastAllocCoasting},
 		{name: "a fleet fading in", coast: coastAllocFadingIn, at: coastAllocAt},
-		{name: "the band filter's dead band", coast: coastAllocDeadBand},
+		{name: "the ceiling's dead band", coast: coastAllocDeadBand},
 		{
 			name: "minimal mode following the traffic",
 			set: radar.Settings{
@@ -443,17 +442,17 @@ func boardAllocCases() []drawAllocCase {
 			exposure: exposureDemo,
 		},
 		{
-			name:     "the bare 3D view with the strip board, under the ceiling, in 4K",
-			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Board: true},
-			filters:  pressFilterCeiling,
+			name: "the bare 3D view with the strip board, filtered, in 4K",
+			set: radar.Settings{
+				Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Board: true, Filter: radar.FilterBelowHigh,
+			},
 			exposure: exposureDemo,
 			uhd:      true,
 		},
 		{name: "corridor mode", set: radar.Settings{Colour: radar.ColourCorridor}, exposure: exposureDemo},
 		{
 			name:     "corridor mode holding to IN",
-			set:      radar.Settings{Colour: radar.ColourCorridor},
-			filters:  pressFilterIn,
+			set:      radar.Settings{Colour: radar.ColourCorridor, Filter: radar.FilterIn},
 			exposure: exposureDemo,
 		},
 		{
@@ -474,14 +473,12 @@ func boardAllocCases() []drawAllocCase {
 		},
 		{
 			name:     "the scope in corridor mode, grouped, holding to OUT",
-			set:      radar.Settings{Colour: radar.ColourCorridor},
-			filters:  pressFilterOut,
+			set:      radar.Settings{Colour: radar.ColourCorridor, Filter: radar.FilterOut},
 			exposure: exposureDemo,
 		},
 		{
 			name:     "the scope with the exposure under the ceiling",
-			set:      radar.Settings{Colour: radar.ColourAltitude},
-			filters:  pressFilterCeiling,
+			set:      radar.Settings{Colour: radar.ColourAltitude, Filter: radar.FilterBelowHigh},
 			exposure: exposureDemo,
 		},
 	}
@@ -519,14 +516,12 @@ func corridorAllocCases() []drawAllocCase {
 		},
 		{
 			name:     "the scope with the exposure in the mid band",
-			set:      radar.Settings{Colour: radar.ColourAltitude},
-			filters:  pressFilterMid,
+			set:      radar.Settings{Colour: radar.ColourAltitude, Filter: radar.FilterMid},
 			exposure: exposureDemo,
 		},
 		{
 			name:     "the 3D view with the exposure in the mid band",
-			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D},
-			filters:  pressFilterMid,
+			set:      radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D, Filter: radar.FilterMid},
 			exposure: exposureDemo,
 		},
 		{
@@ -632,7 +627,6 @@ func TestDrawAllocations(t *testing.T) {
 			pressTrails(t, scene, testCase.presses)
 			pressWide(t, scene, testCase.wide)
 			pressReveal(scene, testCase.reveal)
-			pressFilter(t, scene, testCase.filters)
 
 			// Draw once outside the measurement so the one-time growth of the
 			// ICAO index is not counted as a per-frame allocation.

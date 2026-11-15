@@ -78,6 +78,108 @@ func (m ColourMode) Next() ColourMode {
 	}
 }
 
+// BandFilter is the filter as --filter and the control port spell it.
+//
+// It names the values f walks in altitude colouring and in corridor
+// colouring: the three bands, the ceiling under the high band and the three
+// track classes. The ceiling belongs to both cycles. The operator values
+// airline colouring offers have no spelling, because they are read off the
+// legend on screen: an operator that is not on the field has no slot to be,
+// and a setting that could name one would be a setting that hides the whole
+// fleet on a quiet afternoon.
+//
+// A spelling only means something in the colouring whose cycle holds it.
+// Handed to Apply beside any other colour mode it reads as FilterAll.
+type BandFilter string
+
+// The spellings, the altitude cycle's in the order f walks them and then the
+// corridor cycle's.
+const (
+	// FilterAll draws every aircraft, which is where a run starts.
+	FilterAll BandFilter = "all"
+
+	// FilterLow keeps the band under 10,000 feet, the cap's <10K.
+	FilterLow BandFilter = "low"
+
+	// FilterMid keeps 10,000 to 25,000 feet, the cap's 10-25K.
+	FilterMid BandFilter = "mid"
+
+	// FilterHigh keeps 25,000 feet and up, the cap's >25K.
+	FilterHigh BandFilter = "high"
+
+	// FilterBelowHigh keeps the low and the mid band together, the cap's
+	// <25K. It is the one that hides the overflights.
+	FilterBelowHigh BandFilter = "below-high"
+
+	// FilterIn keeps the aircraft that look to be arriving at the corridor
+	// airfield, the cap's IN.
+	FilterIn BandFilter = "in"
+
+	// FilterOut keeps the ones that look to be leaving it, the cap's OUT.
+	FilterOut BandFilter = "out"
+
+	// FilterOther keeps everything that is neither, overflights and anything
+	// the classifier cannot place, the cap's OTHER.
+	FilterOther BandFilter = "other"
+)
+
+// ErrFilter is returned for a --filter value that is none of the spellings.
+var ErrFilter = errors.New("radar: unknown filter")
+
+// ParseFilter turns a --filter value into a BandFilter.
+//
+// The match is case sensitive, for the reason ParseColour gives.
+func ParseFilter(text string) (BandFilter, error) {
+	switch filter := BandFilter(text); filter {
+	case FilterAll, FilterLow, FilterMid, FilterHigh, FilterBelowHigh, FilterIn, FilterOut, FilterOther:
+		return filter, nil
+	default:
+		return FilterAll, fmt.Errorf("%w: %q", ErrFilter, text)
+	}
+}
+
+// state is the scene's own value for the spelling. Anything that is not one
+// of the narrowing spellings reads as ALL, so the zero value needs no case of
+// its own.
+func (f BandFilter) state() filterState {
+	switch f {
+	case FilterLow:
+		return filterState{kind: filterBand, band: bandLow}
+	case FilterMid:
+		return filterState{kind: filterBand, band: bandMid}
+	case FilterHigh:
+		return filterState{kind: filterBand, band: bandHigh}
+	case FilterBelowHigh:
+		return filterState{kind: filterBelow, band: bandMid}
+	case FilterIn:
+		return filterState{kind: filterClass, class: source.TrackInbound}
+	case FilterOut:
+		return filterState{kind: filterClass, class: source.TrackOutbound}
+	case FilterOther:
+		return filterState{kind: filterClass, class: source.TrackTransit}
+	case FilterAll:
+		fallthrough
+	default:
+		return filterState{}
+	}
+}
+
+// bandFilterOf spells a filter value back. A value the spellings do not
+// cover, an operator or the airline legend's OTHER, comes back as FilterAll,
+// which is only reached by Current in airline mode and is what it reports
+// there anyway.
+func bandFilterOf(f filterState) BandFilter {
+	for _, spelling := range [...]BandFilter{
+		FilterLow, FilterMid, FilterHigh, FilterBelowHigh, FilterIn, FilterOut, FilterOther,
+	} {
+		if spelling.state() == f {
+			return spelling
+		}
+	}
+
+	return FilterAll
+}
+
 // Toggle is an on or off setting a flag carries into the scene.
 //
 // It is a string type rather than a bool for the same reason ColourMode is one:
@@ -160,6 +262,13 @@ func ParseRange(text string) (float64, error) {
 type Settings struct {
 	// Colour is what an aircraft's colour means. Zero reads as ColourAltitude.
 	Colour ColourMode
+
+	// Filter is the filter f cycles while Colour is altitude or corridor.
+	// Zero reads as FilterAll. A spelling outside Colour's own cycle reads as
+	// FilterAll too. Airline colouring's operator filter has no spelling and
+	// is reached from f alone, so Apply ignores this field while Colour is
+	// airline.
+	Filter BandFilter
 
 	// Airports is whether the airfield markers start on. Zero reads as on,
 	// which is the scope at its most useful before anyone touches a key.
@@ -257,15 +366,29 @@ type Settings struct {
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
-// the flags reach a scene the run loop built before it read the config.
+// the flags reach a scene the run loop built before it read the config, and
+// how the control port changes one that is already drawing.
 //
-// The filter goes back to ALL with the colour mode, for the reason cycleColour
-// does the same: a filter value belongs to a legend, and a settings block that
-// changes the legend has changed what the value would have meant. No flag
-// carries a filter, so there is nothing to put back in its place.
+// The filter follows the colour mode the block leaves on screen. In altitude
+// and corridor colouring it is set from Filter, which describes those filters
+// completely, and a spelling the mode's cycle does not hold reads as ALL. A
+// filter value belongs to a legend, so a band, a class or an operator does
+// not survive a block that changes the colour mode: Current spells it, and
+// the new mode's cycle does not hold it. The ceiling under the high band is
+// in both the altitude and the corridor cycle and means the same thing in
+// each, so it carries across a switch between the two. In airline colouring
+// Filter has nothing to say, so the filter goes back to ALL when the block
+// changes the colour mode, and a block that keeps airline colouring leaves an
+// operator filter alone, so changing the tilt over the control port does not
+// undo an f pressed a minute earlier.
+//
+// Apply(Current()) changes nothing anyone can see, in either colour mode,
+// which is what lets the control port read the block back, change one field
+// and hand it over whole.
 func (s *Scene) Apply(set Settings) {
+	s.applyFilter(set.Colour, set.Filter)
+
 	s.colour = set.Colour
-	s.setFilter(filterState{})
 	s.airports = set.Airports.On()
 	s.shoreOn = set.Shore.On()
 	s.minimalShore = set.MinimalShore
@@ -284,11 +407,123 @@ func (s *Scene) Apply(set Settings) {
 	s.corridors = set.Corridors.On()
 }
 
+// Current reads the scene's live state back as a settings block: the tilt the
+// brackets left, the azimuth the camera is at on the last frame drawn, the
+// view v left on screen, and so on. RangeNm is zero while auto range is on and
+// the range on screen while it is off.
+//
+// Handing the result straight back to Apply changes nothing anyone can see.
+// Fields whose zero value stands for a default come back spelled out, so a
+// caller reading the block does not have to know what the zero means.
+//
+// Like every other method on Scene it belongs to the goroutine that draws.
+func (s *Scene) Current() Settings {
+	set := Settings{
+		Colour:          s.colour.orDefault(),
+		Filter:          s.currentFilter(),
+		Airports:        ToggleOf(s.airports),
+		Shore:           ToggleOf(s.shoreOn),
+		MinimalShore:    s.minimalShore,
+		MinimalAirports: s.minimalAirports,
+		MinimalBar:      s.minimalBar,
+		Board:           s.board,
+		Lights:          s.lights,
+		View:            s.shown.orDefault(),
+		Exaggerate:      s.exaggerate,
+		Zoom:            s.zoom,
+		Tilt:            s.elevation,
+		Recentre:        s.recentre,
+		Orbit:           ToggleOf(s.orbiting),
+		Azimuth:         s.cameraAzimuth(s.elapsed),
+		Stars:           ToggleOf(s.stars),
+		Corridors:       ToggleOf(s.corridors),
+	}
+
+	if !s.autoRange {
+		set.RangeNm = s.scopeRange.GetCurrent()
+	}
+
+	return set
+}
+
+// applyFilter is Apply's rule for the filter, run before the colour mode
+// changes so it can still see the old one.
+func (s *Scene) applyFilter(colour ColourMode, filter BandFilter) {
+	switch {
+	case colour.orDefault() != ColourAirline:
+		s.setFilter(colour.admit(filter.state()))
+	case s.colour.orDefault() != ColourAirline:
+		s.setFilter(filterState{})
+	default:
+		// Airline colouring kept: the operator f picked stays picked.
+	}
+}
+
+// admit is the filter value if this mode's f cycle holds it, and ALL if not.
+// The ceiling is in the altitude and the corridor cycle and in no other.
+// Airline colouring's cycle has no spelled values, so nothing is admitted
+// there.
+func (m ColourMode) admit(filter filterState) filterState {
+	var held bool
+
+	switch filter.kind {
+	case filterBelow:
+		held = m.orDefault() == ColourAltitude || m == ColourCorridor
+	case filterBand:
+		held = m.orDefault() == ColourAltitude
+	case filterClass:
+		held = m == ColourCorridor
+	case filterAll, filterOperator, filterOther:
+		fallthrough
+	default:
+		held = false
+	}
+
+	if !held {
+		return filterState{}
+	}
+
+	return filter
+}
+
+// currentFilter is the filter as Current reports it: spelled out in altitude
+// and corridor colouring, and FilterAll in airline colouring, where the value
+// on screen has no spelling and Apply ignores the field.
+func (s *Scene) currentFilter() BandFilter {
+	if s.colour.orDefault() == ColourAirline {
+		return FilterAll
+	}
+
+	return bandFilterOf(s.filter)
+}
+
+// ToggleOf spells a bool as the Toggle that reads back as it.
+//
+//nolint:revive // turning a bool into its spelling is the whole job, not control coupling.
+func ToggleOf(on bool) Toggle {
+	if on {
+		return ToggleOn
+	}
+
+	return ToggleOff
+}
+
+// orDefault spells the zero ColourMode as the mode it reads as.
+func (m ColourMode) orDefault() ColourMode {
+	if m == "" {
+		return ColourAltitude
+	}
+
+	return m
+}
+
 // applyOrbit sets whether the camera turns and where it stands.
 //
 // The orbit is rebased on the last frame drawn, the way startOrbit does it, so
-// the camera sets off from the azimuth it was handed rather than from wherever
-// an older revolution would have got to by now.
+// a block whose azimuth came from Current puts the camera where it already is
+// and the picture does not jump. A camera that was not turning and is handed
+// the azimuth it is at stays put; one that is told to turn sets off from
+// there.
 func (s *Scene) applyOrbit(turning bool, degrees float64) {
 	if math.IsNaN(degrees) || math.IsInf(degrees, 0) {
 		degrees = 0

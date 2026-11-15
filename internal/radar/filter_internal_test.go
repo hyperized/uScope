@@ -399,8 +399,8 @@ func TestColourKeyResetsTheFilter(t *testing.T) {
 }
 
 // TestApplyResetsTheFilter checks the other way into a colour mode. A settings
-// block changes the legend exactly as c does, and no flag carries a filter for
-// it to put back in place.
+// block changes the legend exactly as c does, and its Filter field only speaks
+// for altitude colouring, so there is nothing for it to put back in place.
 func TestApplyResetsTheFilter(t *testing.T) {
 	t.Parallel()
 

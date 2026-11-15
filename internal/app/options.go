@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"time"
@@ -26,6 +28,7 @@ type runner struct {
 	readRotation  func(path string) (rotate.Rotation, error)
 	newTicker     func(interval time.Duration) (<-chan time.Time, func())
 	createPNG     func(path string) (io.WriteCloser, error)
+	listen        func(ctx context.Context, network, address string) (net.Listener, error)
 	now           func() time.Time
 	getenv        func(name string) string
 	goos          string
@@ -71,6 +74,7 @@ func newRunner(opts ...Option) *runner {
 		readRotation:  rotate.FromSysfs,
 		newTicker:     realTicker,
 		createPNG:     createFile,
+		listen:        listenTCP,
 		now:           time.Now,
 		getenv:        os.Getenv,
 		goos:          runtime.GOOS,
@@ -134,6 +138,12 @@ func WithTicker(newTicker func(interval time.Duration) (<-chan time.Time, func()
 // WithPNGCreator replaces the PNG output sink.
 func WithPNGCreator(create func(path string) (io.WriteCloser, error)) Option {
 	return func(r *runner) { r.createPNG = create }
+}
+
+// WithListener replaces how the control port opens its listener, which is how
+// a test learns the port it is talking to before the loop starts.
+func WithListener(listen func(ctx context.Context, network, address string) (net.Listener, error)) Option {
+	return func(r *runner) { r.listen = listen }
 }
 
 // WithClock replaces the start-of-run timestamp.

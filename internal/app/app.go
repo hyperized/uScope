@@ -26,12 +26,16 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/hyperized/uScope/internal/control"
 	"github.com/hyperized/uScope/internal/input"
 	"github.com/hyperized/uScope/internal/radar"
+	"github.com/hyperized/uScope/internal/statefile"
 	"github.com/hyperized/uScope/internal/term"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/backend"
@@ -161,6 +165,26 @@ func applySettings(scenes []Drawer, set radar.Settings) {
 	}
 }
 
+// Reporter is the optional half of the settings contract that reads them back,
+// which is what the control port's get and set are built on: read the block,
+// change one field, hand it to Configured whole. Only the radar has one.
+type Reporter interface {
+	Current() radar.Settings
+}
+
+// currentSettings reads the settings back from the first scene that reports
+// them. A set with none, such as a test running the pattern alone, reads as
+// the zero block, which every Configured scene takes as its defaults.
+func currentSettings(scenes []Drawer) radar.Settings {
+	for _, scene := range scenes {
+		if reporter, ok := scene.(Reporter); ok {
+			return reporter.Current()
+		}
+	}
+
+	return radar.Settings{}
+}
+
 // Config is the parsed intent of the command line.
 type Config struct {
 	FBPath      string
@@ -187,6 +211,18 @@ type Config struct {
 	// Radar is what the flags picked for the radar scene. Every field's zero
 	// value is that setting's default, for the same reason Theme's is.
 	Radar radar.Settings
+
+	// Control is the address the live loop listens on for control commands,
+	// already validated. Empty, the default, opens no port. The port has no
+	// authentication; see internal/control.
+	Control string
+
+	// State is the file the control port's changes are kept in, so they
+	// survive a restart. Empty, the default, keeps nothing. When the file
+	// exists it is read over Radar, Theme and Look before the first frame, so
+	// the file wins for every field it holds. It is only written while a
+	// control port is open, because nothing else changes what it holds.
+	State string
 }
 
 // session is one backend plus the canvas that fits it, and the label that
@@ -202,8 +238,8 @@ type session struct {
 	active int
 
 	// themeKind and look are the two halves of the palette currently applied:
-	// l cycles night, day and auto, k cycles glass, phosphor and mono, and the
-	// pair names one of the six, with auto leaving night or day to the scene.
+	// l cycles night, day and auto, k cycles glass, phosphor, mono and
+	// vector, and the pair names one of the eight, with auto leaving night or day to the scene.
 	// Both start at whatever the flags asked for.
 	themeKind theme.Kind
 	look      theme.Look
@@ -212,6 +248,65 @@ type session struct {
 	// needs the VT switched into graphics mode; doing that to a terminal
 	// backend would blank the very screen it is drawing on.
 	console bool
+
+	// saver keeps the state after each control command that can change it,
+	// nil when there is no state file or no control port.
+	saver *statefile.Saver
+}
+
+// state is what a control reply reports: the scene's settings read back, and
+// the palette pair the loop holds.
+func (s *session) state() control.State {
+	return control.State{
+		Radar: currentSettings(s.scenes), Theme: s.themeKind, Look: s.look,
+	}
+}
+
+// execute runs one control command on the loop's goroutine, between two
+// frames, and returns the state after it.
+//
+// key goes through offerKey and dispatch exactly as a press on the keyboard
+// does, so every binding behaves the same from the port. dispatch's answer is
+// dropped: the parser refuses every key that quits, and if one were ever let
+// through, ignoring the answer is what keeps the loop running.
+func (s *session) execute(cmd control.Command) control.State {
+	switch cmd.Verb {
+	case control.VerbSet:
+		s.change(cmd.Change)
+	case control.VerbKey:
+		if !offerKey(s.scene(), cmd.Key) {
+			_ = dispatch(s, classify(cmd.Key))
+		}
+	case control.VerbGet, control.VerbHelp:
+		fallthrough
+	default:
+		// get changes nothing, and help is answered by the server before it
+		// ever reaches the loop.
+		return s.state()
+	}
+
+	state := s.state()
+
+	// A key that changed nothing the file holds is saved too; the saver
+	// drops a write whose bytes match the last one, which is cheaper than
+	// working out here which keys can matter.
+	if s.saver != nil {
+		s.saver.Save(state)
+	}
+
+	return state
+}
+
+// change reads the state back, lets the command change one field of it, and
+// hands the whole of it over again. Reading back first is what makes a set
+// change one thing: Apply takes the whole block, and Current is lossless.
+func (s *session) change(change control.Change) {
+	state := s.state()
+	change(&state)
+
+	applySettings(s.scenes, state.Radar)
+	s.themeKind, s.look = state.Theme, state.Look
+	s.repaint()
 }
 
 // Run executes one of the modes and returns when it is done.
@@ -225,6 +320,10 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 	// is closed by main the moment Run returns. Waiting here is what stops a
 	// control transfer still being in the air when the dongle is let go.
 	defer run.biasTee.wait()
+
+	if cfg.State != "" {
+		cfg = restore(cfg, run.stderr)
+	}
 
 	scenes, err := run.loadScenes()
 	if err != nil {
@@ -244,6 +343,18 @@ func Run(ctx context.Context, cfg Config, stdout io.Writer, opts ...Option) erro
 	}
 
 	return run.renderBackend(ctx, cfg, scenes, active, stdout)
+}
+
+// restore reads the state file over what the flags picked, so the file wins
+// for every field it holds and the flags stand for the rest. Nothing it finds
+// is fatal: statefile.Load warns about a line it cannot use and skips it.
+func restore(cfg Config, stderr io.Writer) Config {
+	base := control.State{Radar: cfg.Radar, Theme: cfg.Theme, Look: cfg.Look}
+	state := statefile.Load(cfg.State, base, stderr)
+
+	cfg.Radar, cfg.Theme, cfg.Look = state.Radar, state.Theme, state.Look
+
+	return cfg
 }
 
 // scene is the one currently on screen.
@@ -572,6 +683,19 @@ func (*runner) once(ses *session, status io.Writer) error {
 // unwinds, so there is no recover here: a crash still hands back a console
 // in text mode with echo on.
 func (r *runner) live(ctx context.Context, cfg Config, ses *session, status io.Writer) error {
+	// The port is bound before the console goes into graphics mode, so its
+	// lines, and the warning about a bind off loopback above all, reach the
+	// console while text can still be read there.
+	listener, err := r.bindControl(ctx, cfg.Control, status)
+	if err != nil {
+		return err
+	}
+
+	if listener != nil {
+		// Serve closes it as well; this covers a return before Serve starts.
+		defer func() { _ = listener.Close() }()
+	}
+
 	restoreVT, err := r.enterConsole(ses, status)
 	if err != nil {
 		return err
@@ -579,8 +703,7 @@ func (r *runner) live(ctx context.Context, cfg Config, ses *session, status io.W
 
 	defer func() { _ = restoreVT() }()
 
-	restoreTerm, raw, err := enter(status, "raw keyboard mode", r.makeRawStdin,
-		term.ErrNotTerminal, term.ErrUnsupported)
+	restoreTerm, raw, err := r.enterKeyboard(status)
 	if err != nil {
 		return err
 	}
@@ -608,7 +731,88 @@ func (r *runner) live(ctx context.Context, cfg Config, ses *session, status io.W
 		})
 	}
 
-	return r.loop(ctx, cfg, ses, keys)
+	// A nil channel never delivers, so with no control port the loop's
+	// select simply never takes that case.
+	var requests <-chan control.Request
+
+	if listener != nil {
+		requests = serveControl(readCtx, listener, &group, status)
+	}
+
+	// The saver joins the group so the deferred cancel and Wait stop it as
+	// well, and the cancel is what makes it write a change still waiting.
+	if cfg.State != "" && requests != nil {
+		ses.saver = r.startSaver(readCtx, cfg.State, &group, status)
+	}
+
+	return r.loop(ctx, cfg, ses, keys, requests)
+}
+
+// bindControl listens on the control address and says where, or returns nil
+// when there is to be no control port.
+//
+// A port that will not open is an error rather than a warning: somebody asked
+// for it, and a scope they cannot steer is worth finding out about before the
+// first frame.
+//
+//nolint:ireturn // the listener comes from the seam, whatever type it is.
+func (r *runner) bindControl(ctx context.Context, address string, status io.Writer) (net.Listener, error) {
+	if address == "" {
+		return nil, nil //nolint:nilnil // no port asked for is not an error.
+	}
+
+	listener, err := r.listen(ctx, "tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("app: control port: %w", err)
+	}
+
+	sayf(status, "control port listening on %s\n", listener.Addr())
+
+	if !loopback(listener.Addr()) {
+		sayf(status, "warning: the control port on %s is not on loopback and has no authentication\n",
+			listener.Addr())
+	}
+
+	return listener, nil
+}
+
+// serveControl serves the bound port on the group, so live's deferred cancel
+// and Wait close it and join it with the key reader. A server that fails
+// later only warns, because by then the picture is what matters.
+func serveControl(
+	ctx context.Context, listener net.Listener, group *sync.WaitGroup, status io.Writer,
+) <-chan control.Request {
+	requests := make(chan control.Request)
+	server := control.New(listener, requests)
+
+	group.Go(func() {
+		if err := server.Serve(ctx); err != nil {
+			sayf(status, "warning: %v\n", err)
+		}
+	})
+
+	return requests
+}
+
+// loopback reports whether a listener only takes connections from this
+// machine. An address that does not parse as IP and port, which no TCP
+// listener reports, counts as reachable from elsewhere so the warning errs on
+// the side of being printed.
+func loopback(addr net.Addr) bool {
+	host, err := netip.ParseAddrPort(addr.String())
+
+	return err == nil && host.Addr().IsLoopback()
+}
+
+// startSaver runs the state file's writer on the group.
+func (*runner) startSaver(
+	ctx context.Context, path string, group *sync.WaitGroup, status io.Writer,
+) *statefile.Saver {
+	saver := statefile.New(path, status)
+
+	group.Go(func() { saver.Run(ctx) })
+
+	return saver
 }
 
 // enterConsole switches the VT into graphics mode, but only for the
@@ -624,14 +828,21 @@ func (r *runner) enterConsole(ses *session, status io.Writer) (func() error, err
 	return restore, err
 }
 
-// loop draws a frame per tick until something asks it to stop.
-func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan input.Key) error {
-	rate := cfg.FPS
-	if rate <= 0 {
-		rate = defaultFPS
-	}
+// enterKeyboard puts stdin into raw mode. The bool is false whenever no keys
+// will arrive.
+func (r *runner) enterKeyboard(status io.Writer) (func() error, bool, error) {
+	return enter(status, "raw keyboard mode", r.makeRawStdin, term.ErrNotTerminal, term.ErrUnsupported)
+}
 
-	tick, stopTick := r.newTicker(time.Second / time.Duration(rate))
+// loop draws a frame per tick until something asks it to stop.
+//
+// Control requests are served here, on the goroutine that owns the scene, so
+// a command and a frame can never run at once.
+func (r *runner) loop(
+	ctx context.Context, cfg Config, ses *session,
+	keys <-chan input.Key, requests <-chan control.Request,
+) error {
+	tick, stopTick := r.newTicker(frameInterval(cfg))
 	defer stopTick()
 
 	start := r.now()
@@ -649,6 +860,8 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan
 			if dispatch(ses, classify(key)) {
 				return nil
 			}
+		case req := <-requests:
+			req.Reply(ses.execute(req.Command))
 		case now := <-tick:
 			if err := ses.frame(ses.scene(), now.Sub(start)); err != nil {
 				return err
@@ -660,6 +873,16 @@ func (r *runner) loop(ctx context.Context, cfg Config, ses *session, keys <-chan
 			}
 		}
 	}
+}
+
+// frameInterval is the time between two ticks at --fps.
+func frameInterval(cfg Config) time.Duration {
+	rate := cfg.FPS
+	if rate <= 0 {
+		rate = defaultFPS
+	}
+
+	return time.Second / time.Duration(rate)
 }
 
 // frame resizes the canvas if it has to, draws, and blits.
@@ -801,6 +1024,20 @@ func rawStdin() (func() error, error) {
 	}
 
 	return restore, nil
+}
+
+// listenTCP is the production control-port listener.
+//
+//nolint:ireturn // the seam is net.Listener so a test can hand one in.
+func listenTCP(ctx context.Context, network, address string) (net.Listener, error) {
+	var config net.ListenConfig
+
+	listener, err := config.Listen(ctx, network, address)
+	if err != nil {
+		return nil, fmt.Errorf("listening on %s: %w", address, err)
+	}
+
+	return listener, nil
 }
 
 // realTicker is the production clock.

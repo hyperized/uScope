@@ -91,11 +91,7 @@ func TestGroupedSelectionWalksTheSections(t *testing.T) {
 func TestGroupedFilterDrawsOneSection(t *testing.T) {
 	t.Parallel()
 
-	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, groupedCorridorFrame())
-	scene.Apply(radar.Settings{Colour: radar.ColourCorridor})
-	pressFilter(t, scene, pressFilterOut)
-	scene.Draw(canv, 0)
-	scene.Draw(canv, groupedSettle)
+	_, canv := groupedDraw(t, radar.Settings{Colour: radar.ColourCorridor, Filter: radar.FilterOut})
 
 	if countColour(canv, stripRowBox(0), theme.Night.Caution) == 0 {
 		t.Error("the first line carries no amber: OUT's heading is not on top")

@@ -315,6 +315,195 @@ func TestClassFilterState(t *testing.T) {
 	}
 }
 
+// TestApplyFilterAcrossModes changes the colour mode the way the control
+// port does, off Current, and checks which filters survive.
+func TestApplyFilterAcrossModes(t *testing.T) {
+	t.Parallel()
+
+	ceiling := filterState{kind: filterBelow, band: bandMid}
+	arrivals := filterState{kind: filterClass, class: source.TrackInbound}
+
+	for _, testCase := range []struct {
+		name   string
+		from   ColourMode
+		filter filterState
+		to     ColourMode
+		want   filterState
+	}{
+		{
+			name:   "the ceiling carries from altitude to corridor",
+			from:   ColourAltitude,
+			filter: ceiling,
+			to:     ColourCorridor,
+			want:   ceiling,
+		},
+		{
+			name:   "the ceiling carries from corridor to altitude",
+			from:   ColourCorridor,
+			filter: ceiling,
+			to:     ColourAltitude,
+			want:   ceiling,
+		},
+		{
+			name:   "a band does not reach corridor",
+			from:   ColourAltitude,
+			filter: filterState{kind: filterBand, band: bandLow},
+			to:     ColourCorridor,
+		},
+		{name: "a class does not reach altitude", from: ColourCorridor, filter: arrivals, to: ColourAltitude},
+		{name: "a class stays in corridor", from: ColourCorridor, filter: arrivals, to: ColourCorridor, want: arrivals},
+		{
+			name:   "the ceiling does not carry from altitude to airline",
+			from:   ColourAltitude,
+			filter: ceiling,
+			to:     ColourAirline,
+		},
+		{
+			name:   "the ceiling does not carry from corridor to airline",
+			from:   ColourCorridor,
+			filter: ceiling,
+			to:     ColourAirline,
+		},
+		{
+			name:   "an operator does not reach corridor",
+			from:   ColourAirline,
+			filter: filterState{kind: filterOperator, icao: sampleICAO},
+			to:     ColourCorridor,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := corridorScene(testCase.from)
+			scene.setFilter(testCase.filter)
+
+			set := scene.Current()
+			set.Colour = testCase.to
+			scene.Apply(set)
+
+			if scene.filter != testCase.want {
+				t.Errorf("filter after Apply = %+v, want %+v", scene.filter, testCase.want)
+			}
+		})
+	}
+}
+
+// TestAdmit checks which cycles hold which kinds of value, airline's
+// holding none, so admit is right on its own and not only through the
+// branch of applyFilter that reaches it.
+func TestAdmit(t *testing.T) {
+	t.Parallel()
+
+	ceiling := filterState{kind: filterBelow, band: bandMid}
+	band := filterState{kind: filterBand, band: bandLow}
+	class := filterState{kind: filterClass, class: source.TrackInbound}
+
+	for _, testCase := range []struct {
+		mode   ColourMode
+		filter filterState
+		held   bool
+	}{
+		{mode: ColourAltitude, filter: ceiling, held: true},
+		{mode: ColourCorridor, filter: ceiling, held: true},
+		{mode: ColourAirline, filter: ceiling},
+		{mode: "", filter: ceiling, held: true},
+		{mode: ColourAltitude, filter: band, held: true},
+		{mode: ColourCorridor, filter: band},
+		{mode: ColourAirline, filter: band},
+		{mode: ColourCorridor, filter: class, held: true},
+		{mode: ColourAltitude, filter: class},
+		{mode: ColourAirline, filter: class},
+		{mode: ColourAirline, filter: filterState{kind: filterOperator, icao: sampleICAO}},
+	} {
+		want := filterState{}
+		if testCase.held {
+			want = testCase.filter
+		}
+
+		if got := testCase.mode.admit(testCase.filter); got != want {
+			t.Errorf("%q.admit(%+v) = %+v, want %+v", testCase.mode, testCase.filter, got, want)
+		}
+	}
+}
+
+// TestCurrentAgreesWithTheFilterInEveryMode starts under a ceiling, switches
+// to each colour mode off Current the way set colour does, and checks Current
+// spells what is on screen and that handing it back changes nothing.
+func TestCurrentAgreesWithTheFilterInEveryMode(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []ColourMode{ColourAltitude, ColourAirline, ColourCorridor} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+
+			scene := corridorScene(ColourAltitude)
+			scene.Apply(Settings{Colour: ColourAltitude, Filter: FilterBelowHigh})
+
+			set := scene.Current()
+			set.Colour = mode
+			scene.Apply(set)
+
+			got := scene.Current().Filter
+			if bandFilterOf(scene.filter) != got {
+				t.Errorf("Current().Filter = %q, but the scene holds %+v", got, scene.filter)
+			}
+
+			want := FilterBelowHigh
+			if mode == ColourAirline {
+				want = FilterAll
+			}
+
+			if got != want {
+				t.Errorf("Current().Filter = %q, want %q", got, want)
+			}
+
+			before := scene.filter
+			scene.Apply(scene.Current())
+
+			if scene.filter != before {
+				t.Errorf("Apply(Current()) moved the filter from %+v to %+v", before, scene.filter)
+			}
+		})
+	}
+}
+
+// TestApplyRefusesAFilterFromAnotherCycle checks a spelling handed to Apply
+// beside a colour mode whose cycle does not hold it reads as ALL.
+func TestApplyRefusesAFilterFromAnotherCycle(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		colour ColourMode
+		filter BandFilter
+	}{
+		{colour: ColourCorridor, filter: FilterLow},
+		{colour: ColourAltitude, filter: FilterIn},
+		{colour: ColourCorridor, filter: FilterAll},
+	} {
+		t.Run(string(testCase.colour)+"/"+string(testCase.filter), func(t *testing.T) {
+			t.Parallel()
+
+			scene := corridorScene(testCase.colour)
+			scene.Apply(Settings{Colour: testCase.colour, Filter: testCase.filter})
+
+			if scene.filter != (filterState{}) {
+				t.Errorf("filter = %+v, want ALL", scene.filter)
+			}
+		})
+	}
+}
+
+// TestBandFilterOfAClass checks each class spelling survives the trip through state and back.
+func TestBandFilterOfAClass(t *testing.T) {
+	t.Parallel()
+
+	for _, spelling := range []BandFilter{FilterIn, FilterOut, FilterOther, FilterBelowHigh} {
+		if got := bandFilterOf(spelling.state()); got != spelling {
+			t.Errorf("bandFilterOf(%q.state()) = %q", spelling, got)
+		}
+	}
+}
+
 func TestColourLabel(t *testing.T) {
 	t.Parallel()
 

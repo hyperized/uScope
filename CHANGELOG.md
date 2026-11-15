@@ -8,6 +8,31 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A control port for a running uScope. `--control HOST:PORT` takes `get`,
+  `set NAME VALUE`, `key K` and `help`, one per line, and answers each with
+  the state after it, so another terminal or a script can drive it. Commands
+  run on the run loop between two frames, `set` uses the same parsers and
+  bounds as the flags, and `key` goes through the same bindings as the
+  keyboard. Keys that quit and the bias-tee key are refused, so the port
+  only changes the picture. A line shaped like an HTTP request line closes
+  the connection, so a web page cannot make a browser drive it. Lines are
+  capped at 256 bytes and four connections are served at once; a fifth closes
+  the one silent longest, and one that sends nothing for ten minutes is
+  closed. There is no authentication, so it belongs on loopback; a bind to
+  any other address prints a warning before the framebuffer takes the
+  console.
+- `--state PATH` keeps what the control port changed across a restart, in the
+  port's own `name value` syntax. The file is read after the flags and wins
+  for every field it holds; a line `set` would refuse is one warning and is
+  skipped, and a path that is not a regular file, a FIFO included, is refused
+  without blocking. It is written three quarters of a second after the last
+  change and at most once every ten seconds after that, readable by its owner
+  only, through a temporary file renamed over the old one.
+- `--filter all|low|mid|high|below-high|in|out|other` starts the run on one of
+  the stops `f` cycles, so a display nobody is at the keyboard of can use it.
+  `set filter` changes it over the control port, `get` reports it, and
+  `--state` keeps it. The operator filter in airline colouring has no
+  spelling and stays on `f`.
 - `--history PATH` keeps the lost tracks the corridors are drawn from across
   a restart. The file is read before the first frame, written once a minute
   while the tracks change and once more on shutdown, when aircraft still in

@@ -238,7 +238,7 @@ func TestDeadBandOnBothEdges(t *testing.T) {
 
 // TestSetFilterForgetsOnlyOnAChange checks that the table is wiped when the
 // filter really changes and kept when it is handed the same one, which is
-// what Apply does whenever it is handed a block with the same colour mode.
+// what Apply(Current()) does on every control-port set.
 func TestSetFilterForgetsOnlyOnAChange(t *testing.T) {
 	t.Parallel()
 
@@ -252,7 +252,7 @@ func TestSetFilterForgetsOnlyOnAChange(t *testing.T) {
 		t.Error("the same filter again wiped the table")
 	}
 
-	scene.setFilter(filterState{kind: filterBand, band: bandMid})
+	scene.setFilter(filterState{kind: filterBelow, band: bandMid})
 
 	if scene.seen.find(seenICAO) != nil || scene.seen.warm {
 		t.Error("a new filter kept the old filter's memory")

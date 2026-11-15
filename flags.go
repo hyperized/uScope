@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hyperized/uScope/internal/app"
+	"github.com/hyperized/uScope/internal/control"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
@@ -35,6 +36,7 @@ const (
 	defaultTheme    = "auto"
 	defaultLook     = "glass"
 	defaultColour   = "altitude"
+	defaultFilter   = "all"
 	defaultOn       = "on"
 	defaultOff      = "off"
 	defaultRange    = "auto"
@@ -121,6 +123,7 @@ var (
 	errTheme      = errors.New(appName + ": --theme must be night, day or auto")
 	errLook       = errors.New(appName + ": --look must be glass, phosphor, mono or vector")
 	errColour     = errors.New(appName + ": --colour must be altitude, airline or corridor")
+	errFilter     = errors.New(appName + ": --filter must be all, low, mid, high, below-high, in, out or other")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
 	errStars      = errors.New(appName + ": --stars must be on or off")
@@ -149,11 +152,13 @@ var (
 	errAzimuth    = errors.New(appName + ": --azimuth out of range")
 	errGPSD       = errors.New(appName + ": --gpsd must be off or HOST:PORT")
 	errHistPath   = errors.New(appName + ": --history must be off or a path, and not -")
+	errControl    = errors.New(appName + ": --control must be [HOST]:PORT")
+	errStatePath  = errors.New(appName + ": --state must be off or a path, and not -")
 )
 
-// The off spelling of --history and the one path it refuses: - reads as
-// stdout everywhere else on a command line, and stdout is not a file
-// anything can be kept in.
+// The off spelling --state and --history share, and the one path both
+// refuse: - reads as stdout everywhere else on a command line, and stdout is
+// not a file anything can be kept in.
 const (
 	stateOff   = "off"
 	stdoutPath = "-"
@@ -175,6 +180,7 @@ type config struct {
 	theme       theme.Kind
 	look        theme.Look
 	colour      radar.ColourMode
+	filter      radar.BandFilter
 	airports    radar.Toggle
 	shore       radar.Toggle
 
@@ -235,6 +241,13 @@ type config struct {
 	// strength, already inside the source's bounds.
 	corridorHalfLife time.Duration
 
+	// control is the --control listen address, already validated, and empty
+	// when there is to be no control port.
+	control string
+
+	// state is the --state file, already validated, and empty for off.
+	state string
+
 	// history is the --history file, already validated, and empty for off.
 	// Only a live source reads it; see sourceFor.
 	history string
@@ -261,6 +274,7 @@ type rawFlags struct {
 	theme       string
 	look        string
 	colour      string
+	filter      string
 	airports    string
 	shore       string
 	minShore    string
@@ -273,6 +287,8 @@ type rawFlags struct {
 	corrField   string
 	halfLife    string
 	history     string
+	control     string
+	state       string
 	scopeRange  string
 	battery     string
 	beast       string
@@ -342,6 +358,10 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.colour, "colour", defaultColour,
 		"what an aircraft's colour means: altitude, airline or corridor, which is arriving at or leaving "+
 			"the corridor airfield")
+	set.StringVar(&raw.filter, "filter", defaultFilter,
+		"which aircraft to draw: all, low, mid or high while colouring by altitude, in, out or other "+
+			"while colouring by corridor, and below-high in either for everything under 25,000 ft. "+
+			"f cycles them while it runs")
 	set.StringVar(&raw.airports, "airports", defaultOn,
 		"draw the airfield markers on the scope: on or off")
 	set.StringVar(&raw.shore, "shore", defaultOn,
@@ -370,6 +390,12 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.view, "view", defaultView,
 		"which view the radar starts on: scope, 3d, minimal or minimal3d. v cycles them while it runs")
 	bindCamera(set, raw)
+	set.StringVar(&raw.control, "control", "",
+		"listen on HOST:PORT for live control commands; no authentication, so bind it to loopback "+
+			"or a private network. Empty is off")
+	set.StringVar(&raw.state, "state", stateOff,
+		"keep what the control port changes in this file and read it back on start, where it wins over "+
+			"the flags; off keeps nothing")
 	set.StringVar(&raw.battery, "battery", "",
 		"power-supply uevent file to read the battery from, or off for no indicator; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,
@@ -483,7 +509,7 @@ func (raw rawFlags) display() (display, error) {
 		return display{}, err
 	}
 
-	colour, err := parseColour(raw.colour)
+	colouring, err := raw.colouring()
 	if err != nil {
 		return display{}, err
 	}
@@ -522,7 +548,8 @@ func (raw rawFlags) display() (display, error) {
 		theme:      themeKind,
 		look:       look,
 		radar: radar.Settings{
-			Colour:   colour,
+			Colour:   colouring.Colour,
+			Filter:   colouring.Filter,
 			Airports: overlays.Airports,
 			Shore:    overlays.Shore,
 			RangeNm:  rangeNm,
@@ -546,17 +573,34 @@ func (raw rawFlags) display() (display, error) {
 	}, nil
 }
 
+// colouring reads --colour and --filter, the two flags that say what the
+// aircraft are painted by and which of them are drawn. They are one helper so
+// display stays under the complexity cap.
+func (raw rawFlags) colouring() (radar.Settings, error) {
+	colour, err := parseColour(raw.colour)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	filter, err := radar.ParseFilter(raw.filter)
+	if err != nil {
+		return radar.Settings{}, fmt.Errorf("%w: %w", errFilter, err)
+	}
+
+	return radar.Settings{Colour: colour, Filter: filter}, nil
+}
+
 // camera checks the flags that place the 3D camera and frame the picture,
 // rather than name a choice, and hands them back as the part of a settings
 // block they fill. They are one helper so display stays under the complexity
 // cap.
 //
-// The bounds are radar's own Check functions, so the flag and the scene cannot
-// disagree about what a tilt of 85 means. Refused rather than clamped, unlike
-// the bracket keys, because there is somebody reading. The float flags keep
-// their parsed value rather than a zero for "unset": each default is a real
-// setting, so the scene's zero-means-default rule never fires from the
-// command line.
+// The bounds are radar's own Check functions, the ones the control port's
+// set uses as well, so the command line and the port cannot disagree about
+// what a tilt of 85 means. Refused rather than clamped, unlike the bracket
+// keys, because there is somebody reading. The float flags keep their parsed
+// value rather than a zero for "unset": each default is a real setting, so the
+// scene's zero-means-default rule never fires from the command line.
 func (raw rawFlags) camera() (radar.Settings, error) {
 	if err := radar.CheckExaggerate(raw.exaggerate); err != nil {
 		return radar.Settings{}, fmt.Errorf("%w: %w", errExaggerate, err)
@@ -584,8 +628,9 @@ func (raw rawFlags) camera() (radar.Settings, error) {
 	}, nil
 }
 
-// limits range-checks the three numeric flags, which are the only ones that
-// are a number rather than a name.
+// limits range-checks the numeric flags that are a number rather than a
+// name, and checks the ones that are free text: the battery path, the control
+// address and the two kept files.
 func (raw rawFlags) limits() error {
 	if raw.fb == "" {
 		return errEmptyFB
@@ -603,12 +648,20 @@ func (raw rawFlags) limits() error {
 		return err
 	}
 
+	if err := checkControl(raw.control); err != nil {
+		return err
+	}
+
+	if err := checkKept(raw.state, errStatePath); err != nil {
+		return err
+	}
+
 	return checkKept(raw.history, errHistPath)
 }
 
-// checkKept refuses a --history value that cannot be a file to keep: -,
-// which reads like stdout, and a path with a NUL in it. off is the default,
-// and empty means off too. invalid is the flag's own sentinel.
+// checkKept refuses a --state or --history value that cannot be a file to
+// keep: -, which reads like stdout, and a path with a NUL in it. off is the
+// default, and empty means off too. invalid is the flag's own sentinel.
 func checkKept(path string, invalid error) error {
 	if path == stdoutPath || strings.ContainsRune(path, 0) {
 		return fmt.Errorf("%w: got %q", invalid, path)
@@ -617,13 +670,27 @@ func checkKept(path string, invalid error) error {
 	return nil
 }
 
-// statePath is the --history file, or empty for off.
+// statePath is the --state or --history file, or empty for off.
 func statePath(text string) string {
 	if text == stateOff {
 		return ""
 	}
 
 	return text
+}
+
+// checkControl refuses a --control address the listener could not use. Empty
+// is the default and means no control port.
+func checkControl(address string) error {
+	if address == "" {
+		return nil
+	}
+
+	if err := control.CheckAddress(address); err != nil {
+		return fmt.Errorf("%w: %w", errControl, err)
+	}
+
+	return nil
 }
 
 // validated range-checks everything and produces the config.
@@ -671,6 +738,7 @@ func (raw rawFlags) validated() (config, error) {
 		theme:       show.theme,
 		look:        show.look,
 		colour:      show.radar.Colour,
+		filter:      show.radar.Filter,
 		airports:    show.radar.Airports,
 		shore:       show.radar.Shore,
 
@@ -706,6 +774,8 @@ func (raw rawFlags) validated() (config, error) {
 		corridorField:    field,
 		corridorHalfLife: halfLife,
 		history:          statePath(raw.history),
+		control:          raw.control,
+		state:            statePath(raw.state),
 	}, nil
 }
 

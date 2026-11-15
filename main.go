@@ -172,6 +172,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Theme:       cfg.theme,
 		Look:        cfg.look,
 		Radar:       radarSettings(cfg),
+		Control:     cfg.control,
+		State:       cfg.state,
 	}
 
 	// Warnings go to stderr because a terminal backend is busy writing
@@ -193,6 +195,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func radarSettings(cfg config) radar.Settings {
 	return radar.Settings{
 		Colour:   cfg.colour,
+		Filter:   cfg.filter,
 		Airports: cfg.airports,
 		Shore:    cfg.shore,
 

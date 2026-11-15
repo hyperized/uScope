@@ -20,7 +20,7 @@ BEAST ?=
 
 .PHONY: all build build-aarch64 build-macos run run-demo run-airline run-3d run-beast \
         run-blocks run-pattern shore-data test \
-        test-coverage lint fmt ship pattern radar test-device clean
+        test-coverage lint lint-image fmt ship pattern radar test-device clean
 
 all: build
 
@@ -113,6 +113,13 @@ test-coverage:
 
 lint:
 	golangci-lint run ./...
+
+# The linter in the pinned CI image. A golangci-lint built with an older Go
+# than the one on this machine loads no types and reports nothing, so this
+# is the run to believe when the two disagree.
+lint-image:
+	docker run --rm -v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=false \
+		golangci/golangci-lint:v2.15.0-alpine golangci-lint run ./...
 
 fmt:
 	go fmt ./...

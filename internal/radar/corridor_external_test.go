@@ -117,8 +117,8 @@ func TestCorridorLegend(t *testing.T) {
 	}
 }
 
-// TestCorridorFilterHidesTheOtherClasses checks two presses of f in corridor
-// colouring, which hold the filter to OUT, take the arrival off the scope and leaves the departure.
+// TestCorridorFilterHidesTheOtherClasses checks set filter out over the
+// settings block takes the arrival off the scope and leaves the departure.
 func TestCorridorFilterHidesTheOtherClasses(t *testing.T) {
 	t.Parallel()
 
@@ -128,9 +128,12 @@ func TestCorridorFilterHidesTheOtherClasses(t *testing.T) {
 	all.Draw(allCanvas, 0)
 
 	out, outCanvas, _ := sceneOn(t, panelWidth, panelHeight, frame)
-	out.Apply(radar.Settings{Colour: radar.ColourCorridor})
-	pressFilter(t, out, pressFilterOut)
+	out.Apply(radar.Settings{Colour: radar.ColourCorridor, Filter: radar.FilterOut})
 	out.Draw(outCanvas, 0)
+
+	if got := out.Current().Filter; got != radar.FilterOut {
+		t.Fatalf("Current().Filter = %q, want %q", got, radar.FilterOut)
+	}
 
 	if countColour(outCanvas, scopeBox, theme.Night.Data) >= countColour(allCanvas, scopeBox, theme.Night.Data) {
 		t.Error("OUT left the arrival's data-coloured pixels on the scope")
