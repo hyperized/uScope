@@ -27,7 +27,8 @@ const (
 	// bandUnknown is an altitude nobody has decoded, which is not a band.
 	// It is painted muted, and no filter value selects it: the legend has
 	// three entries and none of them is "not known", so an aircraft with no
-	// altitude goes off the field as soon as a band is picked.
+	// altitude goes off the field as soon as a band is picked. It sorts above
+	// every band, which the ceiling relies on.
 	bandUnknown = bandCount
 )
 
@@ -42,6 +43,10 @@ const (
 	labelFilterLow  = "<10K"
 	labelFilterMid  = "10-25K"
 	labelFilterHigh = ">25K"
+
+	// labelFilterBelowHigh is the ceiling's word: everything under the high
+	// band, which is the low and the mid band read together.
+	labelFilterBelowHigh = "<25K"
 
 	// filterBarLabel is what the F cap falls back to. It is never drawn:
 	// filterState.label answers from the value itself and every value has a
@@ -68,7 +73,7 @@ var filterBandLabels = [bandCount]string{
 // API for the sake of symmetry.
 type filterKind uint8
 
-// The four kinds of value the filter can hold.
+// The six kinds of value the filter can hold.
 const (
 	// filterAll draws the whole fleet, which is where every run starts and
 	// where pressing c puts it back.
@@ -89,6 +94,19 @@ const (
 	// at all, or a prefix the database does not know. It is the legend's own
 	// last entry.
 	filterOther
+
+	// filterBelow keeps every altitude band at or under band: a ceiling
+	// rather than a band. It is the inverse of what a single band does, and
+	// what it exists for is hiding the overflights. Against three bands the
+	// only ceiling that is not already a band or ALL is the one under the
+	// high band, so that is the only one the cycle offers, but nothing here
+	// assumes it.
+	filterBelow
+
+	// filterClass keeps one track class: arriving, leaving, or the rest. It is
+	// what the cycle offers while the scope is coloured by corridor, and the
+	// ceiling is offered there too.
+	filterClass
 )
 
 // filterState is the value the f key cycles.
@@ -99,11 +117,15 @@ const (
 type filterState struct {
 	kind filterKind
 
-	// band is which of the three altitude bands, when kind is filterBand.
+	// band is which of the three altitude bands, when kind is filterBand,
+	// and the highest band still shown, when kind is filterBelow.
 	band int
 
 	// icao is the operator's designator, when kind is filterOperator.
 	icao string
+
+	// class is the track class, when kind is filterClass.
+	class source.TrackClass
 }
 
 // active reports whether the filter is holding anything back. The F cap is
@@ -118,10 +140,14 @@ func (f filterState) label() string {
 	switch f.kind {
 	case filterBand:
 		return filterBandLabels[f.band]
+	case filterBelow:
+		return labelFilterBelowHigh
 	case filterOperator:
 		return f.icao
 	case filterOther:
 		return legendOther
+	case filterClass:
+		return classLabel(f.class)
 	case filterAll:
 		fallthrough
 	default:
@@ -130,12 +156,26 @@ func (f filterState) label() string {
 }
 
 // marksBand reports whether the filter is on the legend's band-th altitude
-// entry, and marksOperator and marksOther are the same question about the
-// airline legend's two kinds of row. The legend rings whichever of its own
+// entry, marksOperator and marksOther are the same question about the
+// airline legend's two kinds of row, and marksClass about the corridor
+// legend's. The legend rings whichever of its own
 // entries answers true, so it says which row the scope is showing rather than
 // leaving the key bar to say it alone.
+//
+// A ceiling marks every band it lets through, so the legend rings the low and
+// the mid swatch together and the picture and the legend agree about what is
+// on the field.
 func (f filterState) marksBand(band int) bool {
-	return f.kind == filterBand && f.band == band
+	switch f.kind {
+	case filterBand:
+		return f.band == band
+	case filterBelow:
+		return band <= f.band
+	case filterAll, filterOperator, filterOther, filterClass:
+		fallthrough
+	default:
+		return false
+	}
 }
 
 func (f filterState) marksOperator(icao string) bool {
@@ -144,11 +184,16 @@ func (f filterState) marksOperator(icao string) bool {
 
 func (f filterState) marksOther() bool { return f.kind == filterOther }
 
+func (f filterState) marksClass(class source.TrackClass) bool {
+	return f.kind == filterClass && f.class == class
+}
+
 // bandOf is which altitude band an aircraft is in.
 //
-// The thresholds are source.AltitudeBandOf's. An altitude of zero means
-// nobody has decoded one yet, not sea level, and a NaN means the same; both
-// come back bandUnknown, which is what bandColour paints muted.
+// The thresholds are source.AltitudeBandOf's.
+// An altitude of zero means nobody has decoded one yet, not sea level, and a
+// NaN means the same; both come back bandUnknown, which is what bandColour
+// paints muted.
 func bandOf(altitude float64) int {
 	band, known := source.AltitudeBandOf(altitude)
 	if !known {
@@ -167,23 +212,40 @@ func bandOf(altitude float64) int {
 // about which aeroplanes are on the field, which is the rule trailMode.plan
 // already follows for the trails.
 //
-// The band filter remembers its last answer for each aircraft and holds it
-// inside a dead band either side of the edge; see inBand. Asking twice in one
-// frame gets the same answer twice, because the band an answer is held in
+// The altitude filters remember their last answer for each aircraft and hold
+// it inside a dead band either side of the edge; see inBand. Asking twice in
+// one frame gets the same answer twice, because the band an answer is held in
 // always contains the altitude that produced it.
 //
 // A coasting aircraft goes through passes, the same rule by its parts, on the
-// altitude and callsign it was last heard with. Ghosts past their coast do
+// altitude and callsign it was last heard with and the class its trail was
+// given. Ghosts past their coast do
 // not go through it at all: hiding a track on a reading that old would be a
 // decision nobody could check against the picture.
 func (s *Scene) visible(plane airplane.Snapshot) bool {
-	return s.passes(plane.ICAO, plane.Altitude, plane.Callsign)
+	return s.passes(plane.ICAO, plane.Altitude, plane.Callsign, s.filterClass(plane))
+}
+
+// filterClass is the aircraft's track class when the filter is holding to
+// one, and transit otherwise. visible is asked several times a frame per
+// aircraft and every other filter ignores the class, so Classify only runs
+// when the answer is read.
+func (s *Scene) filterClass(plane airplane.Snapshot) source.TrackClass {
+	if s.filter.kind != filterClass {
+		return source.TrackTransit
+	}
+
+	return s.exposure.corridors.Classify(plane)
 }
 
 // admits is the filter's decision, given what the table remembers.
-func (s *Scene) admits(altitude float64, callsign string, entry *seenEntry) bool {
+func (s *Scene) admits(altitude float64, callsign string, class source.TrackClass, entry *seenEntry) bool {
 	switch s.filter.kind {
-	case filterBand:
+	case filterClass:
+		return class == s.filter.class
+	case filterBand, filterBelow:
+		// An aircraft with no altitude decoded stays hidden under a ceiling
+		// the way it does under a band.
 		return s.inBand(altitude, entry)
 	case filterOperator:
 		airline, known := airlines.Lookup(callsign)
@@ -202,36 +264,85 @@ func (s *Scene) admits(altitude float64, callsign string, entry *seenEntry) bool
 
 // cycleFilter moves the filter on one, which is what f does.
 //
-// The two cycles are the two legends. In altitude mode it is a fixed list of
-// four: ALL, the three bands, ALL again. In airline mode it is whatever the
-// legend was showing on the frame the key arrived between, which is why the
-// tally is counted at the top of Draw rather than inside the block that draws
-// the legend.
+// The three cycles are the three legends. In altitude mode it is a fixed list
+// of five: ALL, the three bands, the ceiling under the high band, ALL again.
+// Corridor mode is the same shape over the classes: ALL, IN, OUT, OTHER, the
+// ceiling, ALL. In airline mode it is whatever the legend was showing on the
+// frame the key arrived between, which is why the tally is counted at the top
+// of Draw rather than inside the block that draws the legend.
 func (s *Scene) cycleFilter() {
-	if s.colour == ColourAirline {
+	switch s.colour {
+	case ColourAirline:
 		s.setFilter(s.nextOperatorFilter())
-
-		return
+	case ColourCorridor:
+		s.setFilter(nextClassFilter(s.filter))
+	case ColourAltitude:
+		fallthrough
+	default:
+		s.setFilter(nextBandFilter(s.filter))
 	}
+}
 
-	s.setFilter(nextBandFilter(s.filter))
+// nextClassFilter is the value after this one in corridor mode's cycle.
+//
+// The ceiling closes it for the sake of the field's own traffic: an overflight is OTHER, but so
+// is a light aircraft crossing the field at two thousand feet, and the
+// ceiling is how the field's own traffic is shown in all three colours with
+// the airways overhead taken away. Anything that is neither a class nor the
+// ceiling starts at IN, by nextBandFilter's rule.
+func nextClassFilter(current filterState) filterState {
+	switch current.kind {
+	case filterClass:
+		return classFilterAfter(current.class)
+	case filterBelow:
+		return filterState{}
+	case filterAll, filterBand, filterOperator, filterOther:
+		fallthrough
+	default:
+		return filterState{kind: filterClass, class: source.TrackInbound}
+	}
+}
+
+// classFilterAfter is the step after one class: IN to OUT, OUT to OTHER, and
+// OTHER on to the ceiling.
+func classFilterAfter(class source.TrackClass) filterState {
+	switch class {
+	case source.TrackInbound:
+		return filterState{kind: filterClass, class: source.TrackOutbound}
+	case source.TrackOutbound:
+		return filterState{kind: filterClass, class: source.TrackTransit}
+	case source.TrackTransit:
+		fallthrough
+	default:
+		return filterState{kind: filterBelow, band: bandMid}
+	}
 }
 
 // nextBandFilter is the value after this one in altitude mode's cycle.
 //
-// Anything that is not already a band starts at the lowest, so the value left
-// behind by airline mode cycles the way ALL does and never has to be
-// special-cased. That is trailMode.next's rule, for trailMode.next's reason.
+// The ceiling comes after the high band rather than before the low one, so the
+// cycle reads the three bands in order first and the press that would have
+// gone back to ALL lands on the one view of the field the bands cannot give.
+//
+// Anything that is neither a band nor a ceiling starts at the lowest band, so
+// the value left behind by airline mode cycles the way ALL does and never has
+// to be special-cased. That is trailMode.next's rule, for trailMode.next's
+// reason.
 func nextBandFilter(current filterState) filterState {
-	if current.kind != filterBand {
+	switch current.kind {
+	case filterBand:
+		if current.band+1 < bandCount {
+			return filterState{kind: filterBand, band: current.band + 1}
+		}
+
+		return filterState{kind: filterBelow, band: bandMid}
+	case filterBelow:
+		return filterState{}
+	case filterAll, filterOperator, filterOther, filterClass:
+		fallthrough
+	default:
 		return filterState{kind: filterBand, band: bandLow}
 	}
-
-	if current.band+1 < bandCount {
-		return filterState{kind: filterBand, band: current.band + 1}
-	}
-
-	return filterState{}
 }
 
 // nextOperatorFilter is the value after this one in airline mode's cycle, read
@@ -246,7 +357,7 @@ func (s *Scene) nextOperatorFilter() filterState {
 		return filterState{}
 	case filterOperator:
 		return s.operatorAfter(s.filter.icao)
-	case filterAll, filterBand:
+	case filterAll, filterBand, filterBelow, filterClass:
 		fallthrough
 	default:
 		return s.operatorAt(0)

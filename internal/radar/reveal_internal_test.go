@@ -122,7 +122,10 @@ func TestBareCapsAreKeysThatWork(t *testing.T) {
 	keys := map[string]input.Key{
 		"+/-": {Kind: input.Rune, Rune: '+'},
 		"←→":  {Kind: input.Left},
-		"[ ]": {Kind: input.Rune, Rune: '['},
+		// The bare 3D row's one camera cap stands for both pairs; the arrow is
+		// the first of the four keys it names.
+		"←→[ ]": {Kind: input.Left},
+		"[ ]":   {Kind: input.Rune, Rune: '['},
 	}
 
 	for _, testCase := range []struct {
@@ -239,8 +242,8 @@ func TestBareCapsFitAtTheirWidestState(t *testing.T) {
 		view View
 		end  int
 	}{
-		{name: "bare flat", view: ViewMinimal, end: 956},
-		{name: "bare 3D", view: ViewMinimal3D, end: 1206},
+		{name: "bare flat", view: ViewMinimal, end: 963},
+		{name: "bare 3D", view: ViewMinimal3D, end: 1242},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -254,7 +257,7 @@ func TestBareCapsFitAtTheirWidestState(t *testing.T) {
 				faces:         layerTestFaces(t),
 				shown:         testCase.view,
 				biasSupported: true,
-				colour:        ColourAirline,
+				colour:        ColourCorridor,
 				trail:         trailShort,
 				filter:        filterState{kind: filterBand, band: bandMid},
 				sunTheme:      autoTheme{on: true},

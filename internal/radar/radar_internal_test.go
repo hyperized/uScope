@@ -1015,6 +1015,7 @@ func TestParseColour(t *testing.T) {
 	}{
 		{name: "altitude", input: "altitude", want: ColourAltitude},
 		{name: "airline", input: "airline", want: ColourAirline},
+		{name: "corridor", input: "corridor", want: ColourCorridor},
 		{name: "empty string is rejected", input: "", want: ColourAltitude, wantErr: true},
 		{name: "wrong case is rejected", input: "Airline", want: ColourAltitude, wantErr: true},
 		{name: "a near-miss spelling is rejected", input: "altitudes", want: ColourAltitude, wantErr: true},
@@ -1054,7 +1055,8 @@ func TestColourModeNext(t *testing.T) {
 		want ColourMode
 	}{
 		{name: "altitude moves to airline", mode: ColourAltitude, want: ColourAirline},
-		{name: "airline moves to altitude", mode: ColourAirline, want: ColourAltitude},
+		{name: "airline moves to corridor", mode: ColourAirline, want: ColourCorridor},
+		{name: "corridor moves to altitude", mode: ColourCorridor, want: ColourAltitude},
 		{name: "the zero value moves to airline", mode: ColourMode(""), want: ColourAirline},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1593,18 +1595,12 @@ func TestStripPlanGeometry(t *testing.T) {
 // stripPlanWithout builds a fully-enabled plan and applies the first drops
 // entries of stripDropOrder to it, mirroring how planStrips narrows the board
 // one entry at a time.
-func stripPlanWithout(widths [fieldCount]int, drops int) stripPlan {
-	var plan stripPlan
-
-	for index := range fieldCount {
-		plan.on[index] = true
-	}
-
-	plan.att = true
-	plan.size(widths)
+func stripPlanWithout(sizes stripMeasure, drops int) stripPlan {
+	plan := newStripPlan(0)
+	plan.size(&sizes)
 
 	for _, entry := range stripDropOrder[:drops] {
-		plan.give(entry, widths)
+		plan.give(entry, &sizes)
 	}
 
 	return plan
@@ -3609,6 +3605,7 @@ func TestCapLabel(t *testing.T) {
 	}{
 		{name: "altitude mode", scene: Scene{colour: ColourAltitude}, entry: colourCap, want: labelAltitude},
 		{name: "airline mode", scene: Scene{colour: ColourAirline}, entry: colourCap, want: labelAirline},
+		{name: "corridor mode", scene: Scene{colour: ColourCorridor}, entry: colourCap, want: labelCorridor},
 		{
 			name:  "the zero colour mode reads as altitude",
 			scene: Scene{}, entry: colourCap, want: labelAltitude,
@@ -3636,6 +3633,11 @@ func TestCapLabel(t *testing.T) {
 			name:  "the filter on a band",
 			scene: Scene{filter: filterState{kind: filterBand, band: bandMid}},
 			entry: filterCap, want: labelFilterMid,
+		},
+		{
+			name:  "the filter on the ceiling",
+			scene: Scene{filter: filterState{kind: filterBelow, band: bandMid}},
+			entry: filterCap, want: labelFilterBelowHigh,
 		},
 		{
 			name:  "the filter on an operator",
@@ -3755,9 +3757,12 @@ func TestNewStartsOnGlassNightWithoutAPalette(t *testing.T) {
 
 // TestDrawCapsFitsAtItsWidestState measures the bar the way the scene itself
 // draws it, at the widest state it ever reaches: the 3D view, a dongle with a
-// bias-tee, airline colour, the short trail, the mid-band filter, the
-// phosphor look, the longest of the three look words, and the auto theme at
-// night, whose AUTO·NIGHT is the longest word any cap carries.
+// bias-tee, corridor colour, the longest of the three colour words, the short
+// trail, the mid-band filter, the phosphor look, the longest of the three look
+// words, and the auto theme at night, whose AUTO·NIGHT is the longest word any
+// cap carries. Corridor colouring never holds a band filter, but 10-25K is
+// wider than any word its own cycle has, so the pair is a bound the bar never
+// quite reaches.
 //
 // drawCaps stops after the cap that reaches the right margin rather than
 // wrapping or eliding one, so a bar that had grown past its budget would lose
@@ -3769,10 +3774,10 @@ func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
 	t.Parallel()
 
 	// widestBarLastCapEnd is where the pen stands after the tilt cap, the
-	// last one in the bar, at exactly this state: its box ends at 1244 and
+	// last one in the bar, at exactly this state: its box ends at 1251 and
 	// the key gap follows. It is named so a change to any cap's word shows up
 	// here rather than as a number nobody can place.
-	const widestBarLastCapEnd = 1249
+	const widestBarLastCapEnd = 1256
 
 	canv, err := canvas.New(layerCanvasWidth, layerCanvasHeight)
 	if err != nil {
@@ -3783,7 +3788,7 @@ func TestDrawCapsFitsAtItsWidestState(t *testing.T) {
 		faces:         layerTestFaces(t),
 		shown:         View3D,
 		biasSupported: true,
-		colour:        ColourAirline,
+		colour:        ColourCorridor,
 		trail:         trailShort,
 		filter:        filterState{kind: filterBand, band: bandMid},
 		sunTheme:      autoTheme{on: true},

@@ -199,6 +199,7 @@ func radarSettings(cfg config) radar.Settings {
 		MinimalShore:    cfg.minimalShore,
 		MinimalAirports: cfg.minimalAirports,
 		MinimalBar:      cfg.minimalBar,
+		Board:           cfg.minimalBoard,
 		Lights:          cfg.lights,
 		Stars:           cfg.stars,
 		Corridors:       cfg.corridors,

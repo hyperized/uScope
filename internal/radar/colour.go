@@ -21,7 +21,7 @@ import (
 // cannot drift apart.
 type ColourMode string
 
-// The two modes, in the order the c key cycles them.
+// The three modes, in the order the c key cycles them.
 const (
 	// ColourAltitude is the default: three bands of height, which is the one
 	// piece of information a top-down scope cannot show by position.
@@ -31,9 +31,16 @@ const (
 	// Height then has to be read off the card and the rows, and what the scope
 	// shows at a glance is who is flying rather than how high.
 	ColourAirline ColourMode = "airline"
+
+	// ColourCorridor paints each aircraft by what it looks to be doing about
+	// the corridor airfield: arriving in the IN tube's colour, leaving in the
+	// OUT tube's, and anything else, overflights included, muted. It is the
+	// strip board's DIR column read straight off the picture. With no field
+	// placed every aircraft is transit and the whole fleet draws muted.
+	ColourCorridor ColourMode = "corridor"
 )
 
-// ErrColour is returned for a --colour value that is neither spelling.
+// ErrColour is returned for a --colour value that is none of the spellings.
 var ErrColour = errors.New("radar: unknown colour mode")
 
 // ParseColour turns a --colour value into a ColourMode.
@@ -47,20 +54,28 @@ func ParseColour(text string) (ColourMode, error) {
 		return ColourAltitude, nil
 	case ColourAirline:
 		return ColourAirline, nil
+	case ColourCorridor:
+		return ColourCorridor, nil
 	default:
 		return ColourAltitude, fmt.Errorf("%w: %q", ErrColour, text)
 	}
 }
 
-// Next cycles to the other mode. Anything that is not ColourAirline moves to
-// it, so the zero value of ColourMode cycles the way ColourAltitude does and
-// never has to be special-cased where one is read.
+// Next cycles to the next mode: altitude, airline, corridor and back.
+// Anything that is not one of the last two moves to airline, so the zero
+// value of ColourMode cycles the way ColourAltitude does and never has to be
+// special-cased where one is read.
 func (m ColourMode) Next() ColourMode {
-	if m == ColourAirline {
+	switch m {
+	case ColourAirline:
+		return ColourCorridor
+	case ColourCorridor:
 		return ColourAltitude
+	case ColourAltitude:
+		fallthrough
+	default:
+		return ColourAirline
 	}
-
-	return ColourAirline
 }
 
 // Toggle is an on or off setting a flag carries into the scene.
@@ -167,6 +182,12 @@ type Settings struct {
 	// is one: off is the default, and a bare view opens bare.
 	MinimalBar bool
 
+	// Board is whether the bare 3D view carries the flight strip board in a
+	// column down its right quarter, the one j flips there. A plain bool for
+	// the reason MinimalBar is one: off is the default, and a bare view opens
+	// bare. The full views have their own column and never read it.
+	Board bool
+
 	// Lights is whether the aircraft carry their exterior lights: red and
 	// green on the wingtips, white on the tail, the strobes and the beacon.
 	// A plain bool like the bare views' pair, because the lights start off
@@ -250,6 +271,7 @@ func (s *Scene) Apply(set Settings) {
 	s.minimalShore = set.MinimalShore
 	s.minimalAirports = set.MinimalAirports
 	s.minimalBar = set.MinimalBar
+	s.board = set.Board
 	s.lights = set.Lights
 	s.shown = set.View
 	s.applyRange(set.RangeNm)
@@ -448,27 +470,45 @@ func outranks(left, right operatorCount) bool {
 // aircraftColour is the colour one aircraft is drawn in: its silhouette, its
 // trail, its callsign on its own strip and the little model beside it.
 func (s *Scene) aircraftColour(plane airplane.Snapshot) color.RGBA {
-	return s.contactColour(plane.Altitude, plane.Callsign)
+	return s.contactColour(plane.Altitude, plane.Callsign, s.colourClass(plane))
+}
+
+// colourClass is the aircraft's track class when the colour mode reads one,
+// and transit otherwise. Classify runs a bearing and a couple of distances,
+// and the colour is asked for several times a frame per aircraft, so the
+// other two modes do not pay for an answer they ignore.
+func (s *Scene) colourClass(plane airplane.Snapshot) source.TrackClass {
+	if s.colour != ColourCorridor {
+		return source.TrackTransit
+	}
+
+	return s.exposure.corridors.Classify(plane)
 }
 
 // ghostColour is the colour the trail of a lost aircraft keeps.
 //
 // It is the same rule live traffic is coloured by, read off the last altitude
-// and callsign the aircraft reported. A ghost drawn by some other rule would
-// be a second thing to learn about a field that is already showing a track
-// nobody is flying.
+// and callsign the aircraft reported and the class the ring gave the track. A
+// ghost drawn by some other rule would be a second thing to learn about a
+// field that is already showing a track nobody is flying.
 func (s *Scene) ghostColour(ghost source.Trail) color.RGBA {
-	return s.contactColour(ghost.Altitude, ghost.Callsign)
+	return s.contactColour(ghost.Altitude, ghost.Callsign, ghost.Class)
 }
 
-// contactColour is the rule both of those share: the altitude band, or the
-// operator's own colour in airline mode.
-func (s *Scene) contactColour(altitude float64, callsign string) color.RGBA {
-	if s.colour != ColourAirline {
+// contactColour is the rule both of those share: the altitude band, the
+// operator's own colour in airline mode, or the track class's in corridor
+// mode.
+func (s *Scene) contactColour(altitude float64, callsign string, class source.TrackClass) color.RGBA {
+	switch s.colour {
+	case ColourAirline:
+		return s.airlineColour(callsign)
+	case ColourCorridor:
+		return s.classColour(class)
+	case ColourAltitude:
+		fallthrough
+	default:
 		return s.bandColour(altitude)
 	}
-
-	return s.airlineColour(callsign)
 }
 
 // airlineColour is the operator's colour for a callsign.
@@ -503,11 +543,16 @@ func (s *Scene) operatorColour(airline airlines.Airline) color.RGBA {
 //
 // In airline mode it is the operator's own colour, which is the whole point of
 // the mode: the same colour marks the aircraft on the scope and its name in
-// the list beside it.
+// the list beside it. Corridor mode does the same with the track class.
 func (s *Scene) callsignInk(plane airplane.Snapshot) color.RGBA {
-	if s.colour == ColourAirline {
+	switch s.colour {
+	case ColourAirline:
 		return s.airlineColour(plane.Callsign)
+	case ColourCorridor:
+		return s.classColour(s.colourClass(plane))
+	case ColourAltitude:
+		fallthrough
+	default:
+		return s.pal.Ink
 	}
-
-	return s.pal.Ink
 }

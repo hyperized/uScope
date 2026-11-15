@@ -44,12 +44,20 @@ func lostTrail(plane airplane.Snapshot, ago time.Duration) source.Trail {
 	}
 }
 
-// How many presses of f it takes to reach each band filter from ALL, in
-// altitude mode.
+// How many presses of f it takes to reach each filter from ALL, in altitude
+// colouring, and for IN and OUT in corridor colouring.
 const (
 	pressFilterLow  = 1
 	pressFilterMid  = 2
 	pressFilterHigh = 3
+
+	// pressFilterCeiling is the fourth press in altitude colouring, and the
+	// fourth in corridor colouring as well: past IN, OUT and OTHER.
+	pressFilterCeiling = 4
+
+	// pressFilterIn and pressFilterOut are corridor colouring's first two.
+	pressFilterIn  = 1
+	pressFilterOut = 2
 )
 
 // pressFilter moves the filter on times presses of f.

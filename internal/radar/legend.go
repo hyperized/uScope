@@ -150,10 +150,10 @@ func (s *Scene) distance(valueNm float64) []byte {
 // drawLegend explains what the colours on the scope mean, which is the one
 // thing there that cannot be worked out by looking at it.
 //
-// What it explains depends on the colour mode, so the two versions are two
-// functions rather than one with a branch in the middle of it: the altitude
-// legend is a fixed list of three and the airline legend is counted off the
-// frame.
+// What it explains depends on the colour mode, so each version is a function
+// of its own rather than one with a branch in the middle of it: the altitude
+// and corridor legends are fixed lists of three and the airline legend is
+// counted off the frame.
 func (s *Scene) drawLegend(col *layout) {
 	face := s.faces.Small
 
@@ -164,9 +164,14 @@ func (s *Scene) drawLegend(col *layout) {
 
 	top := col.bottom - height
 
-	if s.colour == ColourAirline {
+	switch s.colour {
+	case ColourAirline:
 		s.drawAirlineLegend(col, face, top)
-	} else {
+	case ColourCorridor:
+		s.drawClassLegend(col, face, top)
+	case ColourAltitude:
+		fallthrough
+	default:
 		s.drawBandLegend(col, face, top)
 	}
 
@@ -192,6 +197,27 @@ func (s *Scene) drawBandLegend(col *layout, face *psf.Font, top int) {
 		box := image.Rect(pen, top, pen+side, top+side)
 		col.dst.FillRect(box, entry.col)
 		s.markLegendEntry(col, box, s.filter.marksBand(band))
+
+		pen = col.tracked(face, box.Max.X+gap, top, entry.label, s.pal.Muted)
+		pen += col.px(legendGap)
+	}
+}
+
+// drawClassLegend names the three track classes, laid out and dropped the way
+// drawBandLegend lays out and drops the bands.
+func (s *Scene) drawClassLegend(col *layout, face *psf.Font, top int) {
+	pen := col.left
+	side, gap := col.px(swatchSide), col.px(swatchGap)
+
+	for _, entry := range s.classEntries() {
+		width := col.measureTracked(face, entry.label)
+		if pen+side+gap+width > col.right {
+			break
+		}
+
+		box := image.Rect(pen, top, pen+side, top+side)
+		col.dst.FillRect(box, entry.col)
+		s.markLegendEntry(col, box, s.filter.marksClass(entry.class))
 
 		pen = col.tracked(face, box.Max.X+gap, top, entry.label, s.pal.Muted)
 		pen += col.px(legendGap)
@@ -299,5 +325,45 @@ func (s *Scene) legendEntries() [bandCount]legendEntry {
 		bandLow:  {col: s.pal.AltLow, label: legendLow},
 		bandMid:  {col: s.pal.AltMid, label: legendMid},
 		bandHigh: {col: s.pal.AltHigh, label: legendHigh},
+	}
+}
+
+// classEntry is one entry of the corridor legend.
+type classEntry struct {
+	class source.TrackClass
+	col   color.RGBA
+	label string
+}
+
+// classCount is how many track classes there are to name.
+const classCount = 3
+
+// classEntries pairs each track class with its colour and its word, IN, OUT
+// and OTHER, in the order the f key walks them. The colour is classColour's,
+// the one the tubes and the board's DIR column already draw, so the legend
+// explains all three at once.
+func (s *Scene) classEntries() [classCount]classEntry {
+	var entries [classCount]classEntry
+
+	for index, class := range classOrder {
+		entries[index] = classEntry{class: class, col: s.classColour(class), label: classLabel(class)}
+	}
+
+	return entries
+}
+
+// classLabel is the word for a track class on the legend and the F cap. The
+// rest is OTHER rather than DIR's dashes, because on a legend it names a set
+// of aircraft that are on the field rather than a reading nobody could take.
+func classLabel(class source.TrackClass) string {
+	switch class {
+	case source.TrackInbound:
+		return legendIn
+	case source.TrackOutbound:
+		return legendOut
+	case source.TrackTransit:
+		fallthrough
+	default:
+		return legendOther
 	}
 }

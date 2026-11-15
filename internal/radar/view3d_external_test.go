@@ -682,16 +682,16 @@ func TestView3DKeyBarListsTheCameraKeys(t *testing.T) {
 //
 // The bar has no wrapping and no eliding: drawCaps stops after the cap that
 // reaches the margin, so a bar that outgrew the panel would silently lose its
-// last control rather than complain. Airline mode is the wide case, because
-// the colour cap is labelled with the mode it is on and AIRLINE is four
-// characters longer than ALT.
+// last control rather than complain. Corridor mode is the wide case, because
+// the colour cap is labelled with the mode it is on and CORRIDOR is the
+// longest of the three words.
 func TestView3DKeyBarFitsAtPanelWidth(t *testing.T) {
 	t.Parallel()
 
 	frame := covered(sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)))
 
-	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourAirline))
-	scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourAirline})
+	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame, radar.WithColour(radar.ColourCorridor))
+	scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourCorridor})
 	scene.Draw(canv, 0)
 
 	last := paintedEnd(canv, keyBarBox)
@@ -727,8 +727,8 @@ func TestView3DKeyBarDoublesAt2160(t *testing.T) {
 	end := func(width, height, unit int) int {
 		frame := covered(sceneFrame(scenePlane("484AC1", "KLM123", 45, 12, 2400, 41)))
 
-		scene, canv, _ := sceneOn(t, width, height, frame, radar.WithColour(radar.ColourAirline))
-		scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourAirline})
+		scene, canv, _ := sceneOn(t, width, height, frame, radar.WithColour(radar.ColourCorridor))
+		scene.Apply(radar.Settings{View: radar.View3D, RangeNm: sceneRangeNm, Colour: radar.ColourCorridor})
 		scene.Draw(canv, 0)
 
 		row := image.Rect(0, height-(margin+capRow)*unit, width, height-margin*unit)

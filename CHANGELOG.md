@@ -34,6 +34,36 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   views' key bar and after `M` in the bare views' reveal; the 3D view's bar
   has no room for it. `--demo` starts with seventy invented tracks around
   Schiphol from the last two hours.
+- Colouring by corridor, third on the `c` cycle and `--colour corridor`. An
+  aircraft that looks to be arriving at the corridor airfield is cyan, one
+  leaving it amber, and the rest grey, by the same guess and in the same
+  colours as the strip board's `DIR` column. Trails, coasting aircraft,
+  callsigns and the trails of lost aircraft follow it; the level column and
+  the panel's altitude figure keep the altitude colours. The legend reads
+  `IN`, `OUT` and `OTHER`, and the cap reads `C CORRIDOR`. With no airfield
+  placed everything is grey.
+- In corridor colouring the aircraft list is three sections, `IN`, `OUT` and
+  `OTHER`, each under a heading with its count, nearest first inside each and
+  numbered from 01 again. The lines are shared a third each, spare lines go to
+  the sections that need them, and a section that runs out of room ends on
+  `+N MORE`. `n`, `p` and the arrows step through the list in the order it is
+  drawn, the selected section scrolls to keep its strip in view, and the
+  `SEL` number is the strip's own. Altitude and airline colouring list as
+  before.
+- `f` has a fifth stop while colouring by altitude: after `>25K` comes `<25K`,
+  which keeps the low and mid bands together and hides the overflights, and
+  rings both swatches on the legend. In corridor colouring `f` cycles `IN`,
+  `OUT`, `OTHER` and `<25K`; holding it to one class shows that section of the
+  list alone and leaves every corridor tube on screen.
+- A flight strip board for `minimal3d`. `j` or `--minimal-board on` gives the
+  right quarter of the bare 3D view to a column with the aircraft count, a
+  strip per aircraft and a legend. The strips keep the callsign, the level,
+  the ground speed and the distance at 1280x720, plus a `DIR` column that
+  reads `IN`, `OUT` or `---`, and an emergency still shows as `EMG` beside the
+  callsign. The camera moves in so the picture keeps its size in the three
+  quarters left. Coloured by corridor, the board is grouped like the list
+  and drops `DIR`. It is off by default, and `j` does nothing in the other
+  views.
 - The tilted views' ground no longer stops at the outer range ring. The sea,
   the land and the coastline run on past it and fade in 32 bands into the
   sky's horizon colour, or into the field when there is no sky. Inside the
@@ -113,6 +143,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `--theme` defaults to `auto` rather than `night`.
 - The bare views draw the airfield markers by default. `a` or
   `--minimal-airports off` takes them away.
+- The bare 3D view's key bar folds `←→ TURN` and `[ ] TILT` into one
+  `←→[ ] CAMERA` cap, which makes room for `J BOARD`. The full 3D bar keeps
+  both.
 - The key bar has no `Q QUIT` cap any more. `S LIGHTS` took its room, since
   with both the widest bar ran past the margin. `q` still quits.
 - The radar's layout scales with the canvas height. A canvas 2160 pixels

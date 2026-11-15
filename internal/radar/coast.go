@@ -30,8 +30,8 @@ const (
 
 	// filterBandFt is the dead band either side of a filter's altitude edge.
 	// An aircraft holding FL250 reports 24,975, 25,000 and 25,025 by turns,
-	// and with no band at all it flicked between the mid and the high band's
-	// filters every few seconds. Five hundred feet is a whole flight level either way
+	// and with no band at all it switched on and off under the 25K ceiling
+	// every few seconds. Five hundred feet is a whole flight level either way
 	// of the step a level aircraft's altitude jitters by.
 	filterBandFt = 500.0
 )
@@ -337,9 +337,9 @@ func coastPlane(ghost *source.Trail) airplane.Snapshot {
 // coasting aircraft is filtered on the altitude and callsign it was last
 // heard with. It reads the aircraft's last decision from the table and writes
 // this one back.
-func (s *Scene) passes(icao string, altitude float64, callsign string) bool {
+func (s *Scene) passes(icao string, altitude float64, callsign string, class source.TrackClass) bool {
 	entry := s.seen.touch(icao)
-	if !s.admits(altitude, callsign, entry) {
+	if !s.admits(altitude, callsign, class, entry) {
 		s.seen.hide(entry)
 
 		return false
@@ -382,8 +382,13 @@ var (
 	bandCeilings = [bandCount]float64{source.LowCeilingFt, source.MidCeilingFt, math.Inf(1)}
 )
 
-// edges is the altitude range a band lets through, before any dead band.
+// edges is the altitude range a band or a ceiling lets through, before any
+// dead band.
 func (f filterState) edges() (float64, float64) {
+	if f.kind == filterBelow {
+		return math.Inf(-1), bandCeilings[f.band]
+	}
+
 	return bandFloors[f.band], bandCeilings[f.band]
 }
 

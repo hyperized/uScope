@@ -81,6 +81,7 @@ const (
 	flagMinShore   = "--minimal-shore"
 	flagMinAirport = "--minimal-airports"
 	flagMinBar     = "--minimal-bar"
+	flagMinBoard   = "--minimal-board"
 	flagLights     = "--lights"
 	flagStars      = "--stars"
 	flagCorridors  = "--corridors"
@@ -1335,6 +1336,7 @@ func TestParseFlagsColour(t *testing.T) {
 		{name: caseDefault, args: nil, want: radar.ColourAltitude},
 		{name: "altitude explicit", args: []string{flagColour, defaultColour}, want: radar.ColourAltitude},
 		{name: airlineValue, args: []string{flagColour, airlineValue}, want: radar.ColourAirline},
+		{name: "corridor", args: []string{flagColour, "corridor"}, want: radar.ColourCorridor},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3022,10 +3024,10 @@ func TestBatteryOptionOff(t *testing.T) { //nolint:paralleltest // rewrites watc
 	}
 }
 
-// TestParseFlagsMinimalSwitches covers the bare views' three switches: the
-// airfields on by default and the other two off, each one flipped when asked,
-// and none of them leaking into the
-// scope's own --shore and --airports.
+// TestParseFlagsMinimalSwitches covers the bare views' four switches: the
+// airfields on by default and the other three off, each one flipped when
+// asked, and none of them leaking into the scope's own --shore and
+// --airports.
 func TestParseFlagsMinimalSwitches(t *testing.T) {
 	t.Parallel()
 
@@ -3035,10 +3037,13 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 		wantShore    bool
 		wantAirports bool
 		wantBar      bool
+		wantBoard    bool
 	}{
 		{name: caseDefault, args: nil, wantAirports: true},
 		{name: "bar on", args: []string{flagMinBar, defaultOn}, wantBar: true, wantAirports: true},
 		{name: "bar off explicit", args: []string{flagMinBar, offValue}, wantAirports: true},
+		{name: "board on", args: []string{flagMinBoard, defaultOn}, wantBoard: true, wantAirports: true},
+		{name: "board off explicit", args: []string{flagMinBoard, offValue}, wantAirports: true},
 		{name: "off explicit", args: []string{flagMinShore, offValue, flagMinAirport, offValue}},
 		{name: "shore on", args: []string{flagMinShore, defaultOn}, wantShore: true, wantAirports: true},
 		{name: "airports off", args: []string{flagMinAirport, offValue}},
@@ -3059,13 +3064,14 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 			want.minimalShore = testCase.wantShore
 			want.minimalAirports = testCase.wantAirports
 			want.minimalBar = testCase.wantBar
+			want.minimalBoard = testCase.wantBoard
 
 			checkConfig(t, got, want)
 		})
 	}
 }
 
-// TestParseFlagsMinimalSwitchRejections checks each of the three refuses
+// TestParseFlagsMinimalSwitchRejections checks each of the four refuses
 // anything outside the on/off allow list with its own sentinel and the
 // radar's.
 func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
@@ -3084,6 +3090,8 @@ func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
 		{name: "airports bool spelling", args: []string{flagMinAirport, "1"}, wantErr: errMinAirport},
 		{name: "bar empty", args: []string{flagMinBar, ""}, wantErr: errMinBar},
 		{name: "bar wrong case", args: []string{flagMinBar, "On"}, wantErr: errMinBar},
+		{name: "board empty", args: []string{flagMinBoard, ""}, wantErr: errMinBoard},
+		{name: "board bool spelling", args: []string{flagMinBoard, "1"}, wantErr: errMinBoard},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3330,6 +3338,21 @@ func TestRadarSettingsCarriesTheCorridors(t *testing.T) {
 
 	if got := radarSettings(cfg).Corridors; got != radar.ToggleOff {
 		t.Errorf("radarSettings().Corridors = %q, want %q", got, radar.ToggleOff)
+	}
+}
+
+// TestRadarSettingsCarriesTheBoard checks that --minimal-board reaches the
+// scene's settings block.
+func TestRadarSettingsCarriesTheBoard(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagMinBoard, defaultOn})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if !radarSettings(cfg).Board {
+		t.Error("radarSettings().Board = false after --minimal-board on, want true")
 	}
 }
 

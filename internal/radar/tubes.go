@@ -200,7 +200,7 @@ type tubeSection struct {
 // Transit routes get none. A transit bundle is through traffic at 17,000 to
 // 25,000 ft and up to nine miles wide, and at the 3D view's exaggeration it
 // floats thirty miles above its ground track, where it drew as a large grey
-// surface that a band filter then cut off in mid-air. The tubes are
+// surface that the below-high filter then cut off in mid-air. The tubes are
 // there to show the field's arrivals and departures; through traffic keeps
 // its hairlines on the flat views and is left off the tilted ones.
 func tubeDrawn(route *source.Route) bool {

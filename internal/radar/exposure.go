@@ -71,16 +71,20 @@ func (s *Scene) exposureDrawn() bool {
 // the filter lets aircraft through in.
 //
 // It walks the filter's own value rather than the colour mode, so it answers
-// what visible answers: a band keeps itself and anything else keeps them all.
-// The operator values are airline mode's and land in the last case. A lost
-// track carries a callsign, but a filter on one airline's live traffic that
-// also thinned two hours of its history would be answering a question nobody
-// asked of the corridors.
+// what visible answers: a band keeps itself, the ceiling keeps every band
+// under it, and anything else keeps them all. The operator values are airline
+// mode's and land in the last case, and so do the classes: a filter on the
+// arrivals that also hid the OUT tubes would leave the picture with half the
+// corridors it is there to show. A lost track carries a callsign, but a
+// filter on one airline's live traffic that also thinned two hours of its
+// history would be answering a question nobody asked of the corridors.
 func (s *Scene) corridorBands() bandMask {
 	switch s.filter.kind {
 	case filterBand:
 		return bandMask(1) << s.filter.band
-	case filterAll, filterOperator, filterOther:
+	case filterBelow:
+		return bandMask(1)<<(s.filter.band+1) - 1
+	case filterAll, filterOperator, filterOther, filterClass:
 		fallthrough
 	default:
 		return allBands
@@ -191,8 +195,8 @@ func (s *Scene) drawExposure(dst *canvas.Canvas, proj projector, weight int) {
 // drawExposurePath draws one track as one-pixel segments in one colour.
 //
 // The filter is applied a segment at a time, by the band of the fix it ends
-// on, so the low band's filter takes the top off a departure's climb and
-// leaves the part under it. A segment ending at an undecoded altitude is in no band and is
+// on, so a ceiling takes the top off a departure's climb and leaves the part
+// under it. A segment ending at an undecoded altitude is in no band and is
 // never drawn.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.

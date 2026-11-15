@@ -40,6 +40,10 @@
 // it is on, they simply have nothing to draw. The bare 3D view is the same
 // idea tilted, and the two share one pair of overlay toggles.
 //
+// The bare 3D view can give its right quarter to the flight strip board, which
+// j and --minimal-board switch. The board is the only place someone watching a
+// big screen can read who an aeroplane is. See boardcolumn.go.
+//
 // Every size comes from the canvas bounds and the metrics of the face it is
 // set in. A block that does not fit is dropped rather than drawn over its
 // neighbour, so the same scene renders at 1280x720 on the panel and on a canvas
@@ -310,6 +314,11 @@ type Scene struct {
 	// does: a bare view opens bare. See bar.go.
 	minimalBar bool
 
+	// board is whether the bare 3D view gives its right quarter to the flight
+	// strip board, which j flips there. It starts off for the reason
+	// minimalBar does. See boardcolumn.go.
+	board bool
+
 	// keyPressAt is the render clock at the last key press in a bare view,
 	// and keyPressed says there has been one. Both are written by Handle and
 	// read by Draw, which take turns on the run loop's goroutine. See
@@ -490,6 +499,10 @@ type Scene struct {
 	selICAO  string
 	selIndex int
 	icaos    []string
+
+	// groups is icaos sorted into the IN, OUT and OTHER sections corridor
+	// colouring lists them in. See groups.go.
+	groups groupIndex
 
 	// pinned says the operator chose this aircraft. Until they do, the
 	// selection follows the nearest contact rather than sticking to whichever
@@ -745,8 +758,9 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	// A bare view is the aircraft and nothing else, edge to edge. It skips the
 	// three blocks that would take room off the canvas, so the traffic gets
 	// the whole frame rather than the square the column left behind. The scope
-	// box is the canvas itself, less the bar when there is one, and both bare
-	// views centre their picture in it.
+	// box is the canvas itself, less the bar when there is one and less the
+	// board's column when the bare 3D view has one, and both bare views centre
+	// their picture in what is left.
 	//
 	// The bar, when h has put it there, takes its height off the top of the
 	// scope box rather than being painted over the picture, so the sky's
@@ -758,7 +772,9 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 	if s.bare() {
 		bar := s.barHeight(&lay)
 		lay.scope = belowBar(lay.dst.Bounds(), bar)
+		column := s.carveBoard(&lay)
 		s.drawScope(&lay, frame, elapsed)
+		s.drawBoardColumn(&lay, frame, column)
 		s.drawBar(&lay, frame, bar)
 		s.drawRevealedKeyBar(&lay, elapsed)
 
