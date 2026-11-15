@@ -318,7 +318,7 @@ func TestAutoThemeKeepsTheLook(t *testing.T) {
 // TestAutoThemeKeyBarFitsAtPanelWidth is TestView3DKeyBarFitsAtPanelWidth at
 // the widest the bar can get with the L cap on its longest word, AUTO·NIGHT:
 // the 3D view on a dongle with a bias-tee, corridor colours, the short trails
-// and the phosphor look, whose cap word is the longest of the three.
+// and the phosphor look, whose cap word is the longest of the four.
 func TestAutoThemeKeyBarFitsAtPanelWidth(t *testing.T) {
 	t.Parallel()
 

@@ -119,7 +119,7 @@ var (
 	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
 	errScene      = errors.New(appName + ": --scene must be radar or pattern")
 	errTheme      = errors.New(appName + ": --theme must be night, day or auto")
-	errLook       = errors.New(appName + ": --look must be glass, phosphor or mono")
+	errLook       = errors.New(appName + ": --look must be glass, phosphor, mono or vector")
 	errColour     = errors.New(appName + ": --colour must be altitude, airline or corridor")
 	errAirports   = errors.New(appName + ": --airports must be on or off")
 	errShore      = errors.New(appName + ": --shore must be on or off")
@@ -338,7 +338,7 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"colour theme: night, day or auto. auto follows the sun at the receiver, night with no position. "+
 			"l cycles them while it runs")
 	set.StringVar(&raw.look, "look", defaultLook,
-		"which palette to wear: glass, phosphor or mono. k cycles them while it runs")
+		"which palette to wear: glass, phosphor, mono or vector. k cycles them while it runs")
 	set.StringVar(&raw.colour, "colour", defaultColour,
 		"what an aircraft's colour means: altitude, airline or corridor, which is arriving at or leaving "+
 			"the corridor airfield")

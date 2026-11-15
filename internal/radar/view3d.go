@@ -167,12 +167,20 @@ func (v scene3) world(latitude, longitude, altitudeFt float64) point3 {
 // project is where one aircraft fix lands on the canvas: refused when it has
 // no position, when it is outside the range, or when the camera cannot see it.
 func (v scene3) project(latitude, longitude, altitudeFt float64) (int, int, bool) {
+	return v.place(latitude, longitude, altitudeFt, true)
+}
+
+// place is project with the reach test optional, for the bare view's corridor
+// exposure, which draws past the reach because there is no ring to keep to.
+//
+//nolint:revive // flag-parameter: reach is one test skipped, not a second mode.
+func (v scene3) place(latitude, longitude, altitudeFt float64, reach bool) (int, int, bool) {
 	if !positioned(latitude, longitude) {
 		return 0, 0, false
 	}
 
 	point := v.world(latitude, longitude, altitudeFt)
-	if !v.inRange(point) {
+	if reach && !v.inRange(point) {
 		return 0, 0, false
 	}
 
@@ -336,14 +344,22 @@ func (s *Scene) window(dst *canvas.Canvas, box image.Rectangle) (*canvas.Canvas,
 // field, so the full view gets the scope's pair and the bare one gets the pair
 // the bare views keep between them, which starts off.
 func (s *Scene) drawGround3(lay *layout, view scene3, receiver source.Receiver) {
-	if view.plottable && s.shoreDrawn() {
-		s.drawShore3(lay.dst, view)
+	if view.plottable {
+		s.drawSurface3(lay.dst, view)
 	}
 
 	s.drawGroundMarks3(lay, view, receiver)
 
 	if view.plottable && s.airportsDrawn() {
 		s.drawAirports3(lay, view, airports.All())
+	}
+}
+
+// drawSurface3 paints what lies on the tilted views' ground, which is the
+// shore when it is on and nothing when it is not.
+func (s *Scene) drawSurface3(dst *canvas.Canvas, view scene3) {
+	if s.shoreDrawn() {
+		s.drawShore3(dst, view)
 	}
 }
 

@@ -44,10 +44,11 @@ const (
 //
 // The numbers are written out rather than computed with the same fade the
 // code uses, because a test that recomputed the answer would agree with any
-// mistake the implementation made. What they are checking is that eight per
-// cent towards Data really does land where the look wants it: cyan-black on
-// Glass night, a deeper green on Phosphor, a lighter grey on Mono where there
-// is no hue to borrow, and a faint blue-grey on each of the three day pages.
+// mistake the implementation made. On the handheld palettes they check that
+// eight per cent towards Data really does land where the look wants it:
+// cyan-black on Glass night, a deeper green on Phosphor, a lighter grey on
+// Mono where there is no hue to borrow, and a faint blue-grey on the day
+// pages. The vector pair is the blue picked off rendered stills.
 func TestWaterInk(t *testing.T) {
 	t.Parallel()
 
@@ -62,6 +63,8 @@ func TestWaterInk(t *testing.T) {
 		{name: "phosphor day is a deeper green on paper", pal: theme.PhosphorDay, want: rgba(222, 233, 222)},
 		{name: "mono night is a lighter grey", pal: theme.MonoNight, want: rgba(29, 29, 31)},
 		{name: "mono day is a darker grey on paper", pal: theme.MonoDay, want: rgba(225, 222, 216)},
+		{name: "vector night is a deep blue", pal: theme.VectorNight, want: rgba(23, 53, 87)},
+		{name: "vector day is a pale blue", pal: theme.VectorDay, want: rgba(180, 205, 227)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -85,6 +88,7 @@ func TestWaterTintStandsOffTheField(t *testing.T) {
 
 	for _, pal := range []theme.Palette{
 		theme.Night, theme.Day, theme.PhosphorNight, theme.PhosphorDay, theme.MonoNight, theme.MonoDay,
+		theme.VectorNight, theme.VectorDay,
 	} {
 		t.Run(string(pal.Look)+"/"+fieldKind(pal), func(t *testing.T) {
 			t.Parallel()
@@ -101,6 +105,51 @@ func TestWaterTintStandsOffTheField(t *testing.T) {
 					channelGap(water, pal.Field), channelGap(pal.Shore, pal.Field))
 			}
 		})
+	}
+}
+
+// vectorFloor is the luma under which dark detail reads as black on a
+// dim panel, and vectorStep the gap two ground fills need to
+// arrive as two shades rather than one.
+const (
+	vectorFloor = 20
+	vectorStep  = 10
+)
+
+// TestVectorNightGroundStaysOffBlack is the 3D ground under the
+// vector look: the land is drawn in its green tint, the sea in the water
+// tint and the coast in the shore colour. Both fills have to clear the
+// floor, and the coast has to stand a step over the brighter of
+// the two. Under Glass night the field is 0 and both tints sit near 13,
+// which reads as one black.
+//
+// The land and the sea are not a luma step apart, and that is the point of
+// giving them the same depth: what tells them apart is hue, green against
+// blue, which stays visible over areas this size even on a dim panel. The test holds them to differing at all.
+func TestVectorNightGroundStaysOffBlack(t *testing.T) {
+	t.Parallel()
+
+	scene := &Scene{pal: theme.VectorNight}
+	land, water := scene.landInks3()[hazePast], scene.waterInks3()[hazePast]
+
+	for _, fill := range []struct {
+		name string
+		col  color.RGBA
+	}{
+		{name: "the land fill", col: land},
+		{name: "the water fill", col: water},
+	} {
+		if got := luma(fill.col); got < vectorFloor {
+			t.Errorf("%s luma = %.1f, want at least %d", fill.name, got, vectorFloor)
+		}
+	}
+
+	if land == water {
+		t.Errorf("the land and the water are both %v, want two colours", land)
+	}
+
+	if gap := luma(scene.pal.Shore) - max(luma(land), luma(water)); gap < vectorStep {
+		t.Errorf("the coastline is %.1f luma over the brighter fill, want at least %d", gap, vectorStep)
 	}
 }
 
@@ -136,7 +185,7 @@ func TestWaterFillDrawOrderOnRealData(t *testing.T) {
 		want color.RGBA
 	}{
 		{name: "the North Sea is water", lat: northSeaLat, lon: northSeaLon, want: scene.waterInk()},
-		{name: "Utrecht is land", lat: utrechtLat, lon: utrechtLon, want: scene.pal.Field},
+		{name: "Utrecht is land", lat: utrechtLat, lon: utrechtLon, want: scene.landInk()},
 		{name: "the IJsselmeer is water", lat: ijsselmeerLat, lon: ijsselmeerLon, want: scene.waterInk()},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -201,7 +250,7 @@ func TestWaterFillDrawOrder(t *testing.T) {
 		want color.RGBA
 	}{
 		{name: "west of the coast is water", lon: syntheticSeaLon, want: scene.waterInk()},
-		{name: "east of the coast is land", lon: syntheticLandLon, want: scene.pal.Field},
+		{name: "east of the coast is land", lon: syntheticLandLon, want: scene.landInk()},
 		{name: "inside the lake is water again", lon: syntheticInLakeLon, want: scene.waterInk()},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

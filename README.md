@@ -16,8 +16,9 @@ strobes, and a red beacon flashing on the fuselage 46 times a minute. The
 strobes double-flash twenty times a minute, half the slowest rate a real
 aircraft may use and below the certified range on purpose: on a screen the
 real cadence pulls the eye away from the traffic. `s` or `--lights off` turns
-them off. Around them: the coastline, the water, the airfields, range rings,
-a panel for the selected flight and a table of the rest.
+them off. Around them: the coastline over a faintly tinted sea and land (blue
+and green, two greys in mono), the airfields, range rings, a panel for the
+selected flight and a table of the rest.
 
 uScope is the sister of [uAirwaves](https://github.com/hyperized/uAirwaves),
 which does the same job in character cells with tview. uAirwaves is also where
@@ -240,10 +241,14 @@ refused. Put the file somewhere that survives a reboot, such as
 
 ### Looks and themes
 
-There are three looks, each with a night and a day palette. Glass is the
+There are four looks, each with a night and a day palette. Glass is the
 default, phosphor is a green CRT, and mono is black and white with the
-altitude bands told apart by brightness. `k` cycles the look and `l` steps
-through night, day and auto.
+altitude bands told apart by brightness. Vector keeps glass's hues on a night
+field lifted off black: the band, the rules, the softkeys, the muted chrome and
+the coast come up with it. Its sea is a clear blue and its land a low-chroma
+grey-green, by night and by day, strong enough to stay apart under the
+coloured route tubes. Its day is glass's day with that stronger ground and a
+darker coast. `k` cycles the look and `l` steps through night, day and auto.
 
 Auto is the default. It picks day while the sun at the receiver is above the
 horizon, and night otherwise, so the sky's dusk colours play on the dark
@@ -395,7 +400,7 @@ true at once and the answer is a compromise.
 | `c` | colour by altitude, by airline or by corridor |
 | `f` | filter to one entry of the legend, then back to all; by altitude the stops are `<10K`, `10-25K`, `>25K` and `<25K`, by corridor `IN`, `OUT`, `OTHER` and `<25K` |
 | `l` | night, day or auto by the sun |
-| `k` | glass, phosphor or mono |
+| `k` | glass, phosphor, mono or vector |
 | `w` | hide the right column and give the picture the whole width |
 | `b` | bias-tee on or off, when the source has one |
 | `e` | 3D view: the receiving envelope on or off |
@@ -428,7 +433,7 @@ starts the four seconds again.
 | `--range` | `auto` | range in nautical miles, or `auto` to fit the traffic |
 | `--colour` | `altitude` | `altitude`, `airline` or `corridor` |
 | `--theme` | `auto` | `night`, `day`, or `auto` to follow the sun at the receiver |
-| `--look` | `glass` | `glass`, `phosphor` or `mono` |
+| `--look` | `glass` | `glass`, `phosphor`, `mono` or `vector` |
 | `--airports` | `on` | airfield markers |
 | `--shore` | `on` | coastline and water |
 | `--minimal-shore` | `off` | coastline and water in `minimal` and `minimal3d`; `m` still flips it |

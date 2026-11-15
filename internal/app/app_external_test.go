@@ -1605,9 +1605,10 @@ func TestRunLiveSwitchesTheme(t *testing.T) {
 }
 
 // TestRunLiveSwitchesLook checks the k key's effect on a running loop and
-// that renderBackend actually seeded ses.look from cfg.Look: starting on mono
-// and pressing k must land on glass, mono's neighbour going forward in the
-// cycle, not on phosphor, which is where the zero value would have started.
+// that renderBackend actually seeded ses.look from cfg.Look: starting on
+// vector and pressing k must land on glass, vector's neighbour going
+// forward in the cycle, not on phosphor, which is where the zero value would
+// have started.
 func TestRunLiveSwitchesLook(t *testing.T) {
 	t.Parallel()
 
@@ -1620,7 +1621,7 @@ func TestRunLiveSwitchesLook(t *testing.T) {
 	ticker := newFakeTicker()
 
 	cfg := liveConfig(30)
-	cfg.Look = theme.LookMono
+	cfg.Look = theme.LookVector
 
 	done := runAsync(ctx, cfg, io.Discard,
 		app.WithFramebuffer(func(string) (app.Blitter, error) { return blitter, nil }),
@@ -1635,8 +1636,8 @@ func TestRunLiveSwitchesLook(t *testing.T) {
 	)
 
 	for range 2 {
-		if got := recvOrTimeout(t, palettes, testTimeout, "the starting palette"); got != theme.MonoNight {
-			t.Errorf("starting palette = %v, want %v", got, theme.MonoNight)
+		if got := recvOrTimeout(t, palettes, testTimeout, "the starting palette"); got != theme.VectorNight {
+			t.Errorf("starting palette = %v, want %v", got, theme.VectorNight)
 		}
 	}
 
@@ -1666,6 +1667,10 @@ func TestRunAppliesTheLookAndTheme(t *testing.T) {
 		want theme.Palette
 	}{
 		{name: "mono day", cfg: app.Config{Look: theme.LookMono, Theme: theme.KindDay}, want: theme.MonoDay},
+		{
+			name: "vector night", cfg: app.Config{Look: theme.LookVector, Theme: theme.KindNight},
+			want: theme.VectorNight,
+		},
 		{name: "zero value config starts on glass night", cfg: app.Config{}, want: theme.Night},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

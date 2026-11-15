@@ -379,7 +379,7 @@ type Scene struct {
 	// between two of them.
 	light bool
 
-	// look is which of the three palettes the scene is drawing in, copied off
+	// look is which of the four looks the scene is drawing in, copied off
 	// the palette by SetPalette. Only the K softkey reads it, and it is kept
 	// here for the reason light is: the answer is fixed for the whole frame,
 	// and asking the palette once is cheaper than asking it per cap.

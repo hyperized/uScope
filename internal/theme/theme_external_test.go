@@ -43,6 +43,8 @@ const (
 	nameKey     = "Key"
 	nameRule    = "Rule"
 	nameShore   = "Shore"
+	nameWater   = "Water"
+	nameLand    = "Land"
 	nameAltLow  = "AltLow"
 	nameAltMid  = "AltMid"
 	nameAltHigh = "AltHigh"
@@ -201,6 +203,8 @@ func paletteFields() []fieldAccessor {
 		{name: nameKey, get: func(p theme.Palette) color.RGBA { return p.Key }},
 		{name: nameRule, get: func(p theme.Palette) color.RGBA { return p.Rule }},
 		{name: nameShore, get: func(p theme.Palette) color.RGBA { return p.Shore }},
+		{name: nameWater, get: func(p theme.Palette) color.RGBA { return p.Water }},
+		{name: nameLand, get: func(p theme.Palette) color.RGBA { return p.Land }},
 		{name: nameAltLow, get: func(p theme.Palette) color.RGBA { return p.AltLow }},
 		{name: nameAltMid, get: func(p theme.Palette) color.RGBA { return p.AltMid }},
 		{name: nameAltHigh, get: func(p theme.Palette) color.RGBA { return p.AltHigh }},
@@ -228,7 +232,7 @@ type namedPalette struct {
 	pal  theme.Palette
 }
 
-// allPalettes is all six palettes together, for the tests that hold every one
+// allPalettes is all eight palettes together, for the tests that hold every one
 // to the same rule.
 func allPalettes() []namedPalette {
 	return []namedPalette{
@@ -238,10 +242,12 @@ func allPalettes() []namedPalette {
 		{name: "Phosphor Day", pal: theme.PhosphorDay},
 		{name: "Mono Night", pal: theme.MonoNight},
 		{name: "Mono Day", pal: theme.MonoDay},
+		{name: "Vector Night", pal: theme.VectorNight},
+		{name: "Vector Day", pal: theme.VectorDay},
 	}
 }
 
-// TestPalettesAreFullyOpaque checks every field of all six palettes, including
+// TestPalettesAreFullyOpaque checks every field of all eight palettes, including
 // the fields (Data, OK, Caution, Warn, Key, Shore, Band, BandInk) the older
 // Night-only opacity test above predates.
 func TestPalettesAreFullyOpaque(t *testing.T) {
@@ -283,7 +289,7 @@ func hueFields(pal theme.Palette) []namedColour {
 // invisible in the struct literal but would erase a distinction the operator
 // relies on to read the panel at a glance.
 //
-// Four of the six palettes carry a deliberate repeat among these hues. Mono
+// Four of the eight palettes carry a deliberate repeat among these hues. Mono
 // has no accent hue by design: selection there is made with contrast rather
 // than colour, so Ink, Accent and Data are one value in both Mono palettes.
 // Phosphor Day runs out of room between a pale green page and black for a
@@ -363,7 +369,7 @@ func TestKeyIsDistinctFromFieldAndInk(t *testing.T) {
 // TestIntentionalColourRepeats asserts the equalities every palette carries by
 // design, so that a future edit which splits one of these pairs into its own
 // colour fails here instead of silently adding a shade to the picture. See
-// the doc comments on Palette and on each of the six palette vars in
+// the doc comments on Palette and on each of the eight palette vars in
 // theme.go for why each pair is meant to match.
 func TestIntentionalColourRepeats(t *testing.T) {
 	t.Parallel()
@@ -402,6 +408,12 @@ func TestIntentionalColourRepeats(t *testing.T) {
 		{name: "Mono Day Band repeats Ink", got: theme.MonoDay.Band, want: theme.MonoDay.Ink},
 		{name: "Mono Day BandInk repeats Field", got: theme.MonoDay.BandInk, want: theme.MonoDay.Field},
 		{name: "Mono Day AltHigh repeats Warn", got: theme.MonoDay.AltHigh, want: theme.MonoDay.Warn},
+		{name: "Vector Night AltLow repeats OK", got: theme.VectorNight.AltLow, want: theme.VectorNight.OK},
+		{name: "Vector Night AltMid repeats Ink", got: theme.VectorNight.AltMid, want: theme.VectorNight.Ink},
+		{
+			name: "Vector Night BandInk repeats Ink",
+			got:  theme.VectorNight.BandInk, want: theme.VectorNight.Ink,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -417,9 +429,9 @@ func TestIntentionalColourRepeats(t *testing.T) {
 // TestNightAndDayDiffer walks every field of each look's night and day
 // palettes and checks that the two differ, which is the test that would
 // catch a copy-paste leaving one theme half built from the other's colours.
-// Only Glass is allowed a match, on BandInk, which both Glass themes fix at
-// white on purpose; Phosphor and Mono differ in every field, so their allow
-// set is empty.
+// Only Glass and Vector are allowed a match, on BandInk, which both of
+// their themes fix at white on purpose; Phosphor and Mono differ in every
+// field, so their allow set is empty.
 func TestNightAndDayDiffer(t *testing.T) {
 	t.Parallel()
 
@@ -432,6 +444,10 @@ func TestNightAndDayDiffer(t *testing.T) {
 		{lookName: "Glass", night: theme.Night, day: theme.Day, allowed: map[string]bool{nameBandInk: true}},
 		{lookName: "Phosphor", night: theme.PhosphorNight, day: theme.PhosphorDay, allowed: nil},
 		{lookName: "Mono", night: theme.MonoNight, day: theme.MonoDay, allowed: nil},
+		{
+			lookName: "Vector", night: theme.VectorNight, day: theme.VectorDay,
+			allowed: map[string]bool{nameBandInk: true},
+		},
 	} {
 		t.Run(testCase.lookName, func(t *testing.T) {
 			t.Parallel()
@@ -476,7 +492,7 @@ const (
 	// minLuminanceGap is the floor for the pairs TestContrastPairsAreLegible
 	// checks: half of the full relative-luminance range from black to white.
 	// That is a real minimum a text-on-background pair has to clear, not a
-	// number picked to match what these six palettes happen to measure: the
+	// number picked to match what these eight palettes happen to measure: the
 	// tightest pair, Phosphor Night's Ink against Field and its BandInk
 	// against Band, both measure about 0.698, so even the narrowest palette
 	// clears 0.5 with room to spare. The widest, Glass Night's Ink against
@@ -485,10 +501,10 @@ const (
 
 	// minAccentGap is the floor for how far Accent has to sit from Field: the
 	// active thing has to read against the page it sits on, in every look.
-	// Glass Night's magenta is the tightest of the six at about 0.306, which
-	// is what this floor is set from; every other palette clears it with much
-	// more room.
-	minAccentGap = 0.3
+	// Vector Night is the tightest of the eight at about 0.298, Glass
+	// Night's magenta on a field lifted off black, and Glass Night itself is
+	// next at about 0.306; every other palette clears it with much more room.
+	minAccentGap = 0.29
 )
 
 // relativeLuminance is the WCAG relative luminance of a colour, in [0, 1].
@@ -625,7 +641,7 @@ func TestOnBandReturnsSomethingLegible(t *testing.T) {
 // back untouched, or Glass's cyan clocks would quietly become white ones and
 // the cockpit grammar every other palette is measured against would be gone.
 //
-// The five palettes listed here are every one except MonoDay, and the tightest
+// The seven palettes listed here are every one except MonoDay, and the tightest
 // of them is PhosphorDay's Data at 0.118 against a floor of 0.10, so this is a
 // real margin rather than a coincidence.
 func TestOnBandLeavesTheReadableOnesAlone(t *testing.T) {
@@ -783,6 +799,14 @@ func TestLookPalette(t *testing.T) {
 		},
 		{name: "mono day resolves to MonoDay", look: theme.LookMono, kind: theme.KindDay, want: theme.MonoDay},
 		{
+			name: "vector night resolves to VectorNight",
+			look: theme.LookVector, kind: theme.KindNight, want: theme.VectorNight,
+		},
+		{
+			name: "vector day resolves to VectorDay",
+			look: theme.LookVector, kind: theme.KindDay, want: theme.VectorDay,
+		},
+		{
 			name: "the zero look with night resolves to Night",
 			look: theme.Look(""), kind: theme.KindNight, want: theme.Night,
 		},
@@ -842,7 +866,7 @@ func TestKindNext(t *testing.T) {
 }
 
 // TestParseLook checks --look's allow list the same way TestParse checks
-// --theme's: the three spellings are accepted, everything else is rejected
+// --theme's: the four spellings are accepted, everything else is rejected
 // with ErrUnknownLook, and a rejected value still hands back LookGlass so a
 // caller that forgets to check the error does not start the program on a
 // zero value nothing resolves cleanly.
@@ -858,6 +882,7 @@ func TestParseLook(t *testing.T) {
 		{name: "glass", text: "glass", want: theme.LookGlass},
 		{name: "phosphor", text: "phosphor", want: theme.LookPhosphor},
 		{name: "mono", text: "mono", want: theme.LookMono},
+		{name: "vector", text: "vector", want: theme.LookVector},
 		{name: "empty string is rejected", text: "", wantErr: true},
 		{
 			// --look is an allow list, not free text, so the exact spelling is
@@ -894,8 +919,8 @@ func TestParseLook(t *testing.T) {
 	}
 }
 
-// TestLookNext checks the k key's whole cycle: glass to phosphor to mono and
-// back to glass, with the zero value cycling the same way glass does and the
+// TestLookNext checks the k key's whole cycle: glass to phosphor to mono to
+// vector and back to glass, with the zero value cycling the same way glass does and the
 // cycle closing rather than merely running forward. Missing the return leg
 // would leave a player stuck one look short of the one they started on.
 func TestLookNext(t *testing.T) {
@@ -917,11 +942,19 @@ func TestLookNext(t *testing.T) {
 		}
 	})
 
-	t.Run("mono moves back to glass, completing the cycle", func(t *testing.T) {
+	t.Run("mono moves to vector", func(t *testing.T) {
 		t.Parallel()
 
-		if got := theme.LookMono.Next(); got != theme.LookGlass {
-			t.Errorf("LookMono.Next() = %v, want %v", got, theme.LookGlass)
+		if got := theme.LookMono.Next(); got != theme.LookVector {
+			t.Errorf("LookMono.Next() = %v, want %v", got, theme.LookVector)
+		}
+	})
+
+	t.Run("vector moves back to glass, completing the cycle", func(t *testing.T) {
+		t.Parallel()
+
+		if got := theme.LookVector.Next(); got != theme.LookGlass {
+			t.Errorf("LookVector.Next() = %v, want %v", got, theme.LookGlass)
 		}
 	})
 
@@ -933,16 +966,16 @@ func TestLookNext(t *testing.T) {
 		}
 	})
 
-	t.Run("pressing the key three times from glass returns to glass", func(t *testing.T) {
+	t.Run("pressing the key four times from glass returns to glass", func(t *testing.T) {
 		t.Parallel()
 
-		if got := theme.LookGlass.Next().Next().Next(); got != theme.LookGlass {
-			t.Errorf("LookGlass.Next().Next().Next() = %v, want %v", got, theme.LookGlass)
+		if got := theme.LookGlass.Next().Next().Next().Next(); got != theme.LookGlass {
+			t.Errorf("LookGlass.Next() four times = %v, want %v", got, theme.LookGlass)
 		}
 	})
 }
 
-// TestPaletteNamesItsOwnLook asserts that every one of the six package-level
+// TestPaletteNamesItsOwnLook asserts that every one of the eight package-level
 // palettes carries the Look value that names it, and that resolving a look
 // through Palette hands back a value that still carries that same look. A
 // palette handed to a scene is the only thing that says which look is on, so
@@ -962,6 +995,8 @@ func TestPaletteNamesItsOwnLook(t *testing.T) {
 		{name: "PhosphorDay", pal: theme.PhosphorDay, want: theme.LookPhosphor},
 		{name: "MonoNight", pal: theme.MonoNight, want: theme.LookMono},
 		{name: "MonoDay", pal: theme.MonoDay, want: theme.LookMono},
+		{name: "VectorNight", pal: theme.VectorNight, want: theme.LookVector},
+		{name: "VectorDay", pal: theme.VectorDay, want: theme.LookVector},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -983,6 +1018,8 @@ func TestPaletteNamesItsOwnLook(t *testing.T) {
 		{name: "Phosphor day", look: theme.LookPhosphor, kind: theme.KindDay},
 		{name: "Mono night", look: theme.LookMono, kind: theme.KindNight},
 		{name: "Mono day", look: theme.LookMono, kind: theme.KindDay},
+		{name: "Vector night", look: theme.LookVector, kind: theme.KindNight},
+		{name: "Vector day", look: theme.LookVector, kind: theme.KindDay},
 	} {
 		t.Run(testCase.name+" resolves to a palette naming itself", func(t *testing.T) {
 			t.Parallel()
@@ -1001,7 +1038,7 @@ func TestPaletteNamesItsOwnLook(t *testing.T) {
 // threshold itself with a grey either side of it.
 //
 // It measures the field rather than comparing against one known palette,
-// because there are six palettes now and three of them are light: comparing
+// because there are eight palettes now and four of them are light: comparing
 // against a single value could only ever answer the question for that one
 // palette, and would call PhosphorDay and MonoDay dark because neither of
 // them is theme.Day.
@@ -1027,6 +1064,8 @@ func TestPaletteLight(t *testing.T) {
 		{name: "Glass Night is not light", pal: theme.Night, want: false},
 		{name: "Phosphor Night is not light", pal: theme.PhosphorNight, want: false},
 		{name: "Mono Night is not light", pal: theme.MonoNight, want: false},
+		{name: "Vector Day is light", pal: theme.VectorDay, want: true},
+		{name: "Vector Night is not light", pal: theme.VectorNight, want: false},
 		{name: "the zero value is not light", pal: theme.Palette{}, want: false},
 		{name: "a palette whose only set field is white is light", pal: whiteField, want: true},
 		{name: "a field just below the midpoint is not light", pal: darkGrayField, want: false},
@@ -1037,6 +1076,232 @@ func TestPaletteLight(t *testing.T) {
 
 			if got := testCase.pal.Light(); got != testCase.want {
 				t.Errorf("%s: Light() = %v, want %v", testCase.name, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestVectorDayIsGlassDay pins the differences the vector day palette
+// is allowed: the look it names and its own ground and coast. A light
+// field has nothing under the luma floor to lift, so any other colour that
+// drifted away from Glass Day here would be a second day palette nobody asked
+// for.
+func TestVectorDayIsGlassDay(t *testing.T) {
+	t.Parallel()
+
+	want := theme.Day
+	want.Look = theme.LookVector
+	want.Shore = theme.VectorDay.Shore
+	want.Water = theme.VectorDay.Water
+	want.Land = theme.VectorDay.Land
+
+	if theme.VectorDay != want {
+		t.Errorf("VectorDay = %v, want Day under LookVector %v", theme.VectorDay, want)
+	}
+}
+
+// TestVectorNightKeepsGlassHues checks that the lift touched only the
+// structural colours. Every hue that carries a meaning has to be Glass
+// night's own, or the vector look and the handheld would speak two dialects.
+func TestVectorNightKeepsGlassHues(t *testing.T) {
+	t.Parallel()
+
+	lifted := map[string]bool{
+		nameField: true, nameBand: true, nameRule: true, nameKey: true, nameMuted: true, nameShore: true,
+		nameWater: true, nameLand: true,
+	}
+
+	for _, field := range paletteFields() {
+		t.Run(field.name, func(t *testing.T) {
+			t.Parallel()
+
+			glass, vector := field.get(theme.Night), field.get(theme.VectorNight)
+
+			if lifted[field.name] {
+				if glass == vector {
+					t.Errorf("VectorNight.%s = Night.%s = %v, want it lifted", field.name, field.name, glass)
+				}
+
+				return
+			}
+
+			if glass != vector {
+				t.Errorf("VectorNight.%s = %v, want Night.%s %v", field.name, vector, field.name, glass)
+			}
+		})
+	}
+}
+
+// Rec. 601 luma weights, the luma a video Y plane is built from, and the
+// floor under which dark detail reads as black on a dim panel.
+const (
+	lumaRed   = 0.299
+	lumaGreen = 0.587
+	lumaBlue  = 0.114
+
+	lumaFloor = 20
+
+	// minStructuralStep is the luma two structural colours have to put
+	// between themselves to survive as two shades rather than one. Glass
+	// night's own tightest step, band over field, is about 16.
+	minStructuralStep = 14
+)
+
+// luma is a colour's Rec. 601 luma, nought to 255.
+func luma(col color.RGBA) float64 {
+	return lumaRed*float64(col.R) + lumaGreen*float64(col.G) + lumaBlue*float64(col.B)
+}
+
+// TestVectorNightClearsTheFloor is the reason the look exists:
+// nothing structural sits under the floor, and the field, band, softkey,
+// rule and shore stay a visible step apart in that order, so land (drawn in
+// the field), the band and the coast read as different shades.
+func TestVectorNightClearsTheFloor(t *testing.T) {
+	t.Parallel()
+
+	ladder := []namedColour{
+		{name: nameField, col: theme.VectorNight.Field},
+		{name: nameBand, col: theme.VectorNight.Band},
+		{name: nameKey, col: theme.VectorNight.Key},
+		{name: nameRule, col: theme.VectorNight.Rule},
+		{name: nameShore, col: theme.VectorNight.Shore},
+	}
+
+	below := ladder[0]
+
+	for _, step := range ladder {
+		under := below
+
+		t.Run(step.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := luma(step.col); got < lumaFloor {
+				t.Errorf("VectorNight.%s luma = %.1f, want at least %d", step.name, got, lumaFloor)
+			}
+
+			if step == under {
+				return
+			}
+
+			if gap := luma(step.col) - luma(under.col); gap < minStructuralStep {
+				t.Errorf("VectorNight.%s is %.1f luma over %s, want at least %d",
+					step.name, gap, under.name, minStructuralStep)
+			}
+		})
+
+		below = step
+	}
+}
+
+// TestVectorGround pins the vector look's ground tints and coasts, the values
+// that were picked off rendered stills. They are written out as hex because
+// the picture was judged, not derived, and a test that recomputed them would
+// follow a change nobody looked at.
+func TestVectorGround(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		got  color.RGBA
+		want color.RGBA
+	}{
+		{name: "night water", got: theme.VectorNight.Water, want: color.RGBA{R: 0x17, G: 0x35, B: 0x57, A: 0xFF}},
+		{name: "night land", got: theme.VectorNight.Land, want: color.RGBA{R: 0x2A, G: 0x36, B: 0x34, A: 0xFF}},
+		{name: "night shore", got: theme.VectorNight.Shore, want: color.RGBA{R: 0x8F, G: 0xB0, B: 0xC4, A: 0xFF}},
+		{name: "day water", got: theme.VectorDay.Water, want: color.RGBA{R: 0xB4, G: 0xCD, B: 0xE3, A: 0xFF}},
+		{name: "day land", got: theme.VectorDay.Land, want: color.RGBA{R: 0xD4, G: 0xDD, B: 0xD8, A: 0xFF}},
+		{name: "day shore", got: theme.VectorDay.Shore, want: color.RGBA{R: 0x5A, G: 0x7A, B: 0x90, A: 0xFF}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if testCase.got != testCase.want {
+				t.Errorf("%s = %v, want %v", testCase.name, testCase.got, testCase.want)
+			}
+		})
+	}
+}
+
+// groundMix is an 8 per cent mix of ink into field, rounded per channel, which
+// is how the handheld's ground was drawn before the tints were on the palette.
+func groundMix(field, ink color.RGBA) color.RGBA {
+	channel := func(from, to uint8) uint8 {
+		return uint8(math.Round(float64(from) + (float64(to)-float64(from))*0.08))
+	}
+
+	return color.RGBA{R: channel(field.R, ink.R), G: channel(field.G, ink.G), B: channel(field.B, ink.B), A: 0xFF}
+}
+
+// TestHandheldGroundIsTheOldMix holds the six handheld palettes to the ground
+// they drew before the tints moved onto the palette: water is Data and land is
+// OK, each let into the field by 8 per cent.
+func TestHandheldGroundIsTheOldMix(t *testing.T) {
+	t.Parallel()
+
+	for _, palette := range allPalettes() {
+		if palette.pal.Look == theme.LookVector {
+			continue
+		}
+
+		t.Run(palette.name, func(t *testing.T) {
+			t.Parallel()
+
+			if want := groundMix(palette.pal.Field, palette.pal.Data); palette.pal.Water != want {
+				t.Errorf("%s Water = %v, want %v", palette.name, palette.pal.Water, want)
+			}
+
+			if want := groundMix(palette.pal.Field, palette.pal.OK); palette.pal.Land != want {
+				t.Errorf("%s Land = %v, want %v", palette.name, palette.pal.Land, want)
+			}
+		})
+	}
+}
+
+// TestGroundIsTwoTints holds every palette to the shore overlay's one job:
+// sea, land and the empty field are three different colours.
+func TestGroundIsTwoTints(t *testing.T) {
+	t.Parallel()
+
+	for _, palette := range allPalettes() {
+		t.Run(palette.name, func(t *testing.T) {
+			t.Parallel()
+
+			if palette.pal.Water == palette.pal.Land {
+				t.Errorf("%s Water and Land are both %v", palette.name, palette.pal.Water)
+			}
+
+			if palette.pal.Water == palette.pal.Field || palette.pal.Land == palette.pal.Field {
+				t.Errorf("%s ground %v / %v, want both off the field %v",
+					palette.name, palette.pal.Water, palette.pal.Land, palette.pal.Field)
+			}
+		})
+	}
+}
+
+// minVectorGroundLuma is the Rec. 709 luma the vector night ground has to
+// reach. The luma floor is about 20; at 8 per cent the two tints sat at
+// 33 and 35 and read as one grey under the route tubes.
+const minVectorGroundLuma = 45
+
+// luma709 is a colour's Rec. 709 luma, nought to 255.
+func luma709(col color.RGBA) float64 {
+	return 0.2126*float64(col.R) + 0.7152*float64(col.G) + 0.0722*float64(col.B)
+}
+
+// TestVectorNightGroundIsBright keeps the vector night ground clear of
+// the luma floor by a margin the tubes cannot swallow.
+func TestVectorNightGroundIsBright(t *testing.T) {
+	t.Parallel()
+
+	for _, ground := range []namedColour{
+		{name: nameWater, col: theme.VectorNight.Water},
+		{name: nameLand, col: theme.VectorNight.Land},
+	} {
+		t.Run(ground.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := luma709(ground.col); got < minVectorGroundLuma {
+				t.Errorf("VectorNight.%s luma = %.1f, want at least %d", ground.name, got, minVectorGroundLuma)
 			}
 		})
 	}

@@ -3615,6 +3615,7 @@ func TestCapLabel(t *testing.T) {
 		{name: "the glass look", scene: Scene{look: theme.LookGlass}, entry: lookCap, want: labelGlass},
 		{name: "the phosphor look", scene: Scene{look: theme.LookPhosphor}, entry: lookCap, want: labelPhosphor},
 		{name: "the mono look", scene: Scene{look: theme.LookMono}, entry: lookCap, want: labelMono},
+		{name: "the vector look", scene: Scene{look: theme.LookVector}, entry: lookCap, want: labelVector},
 		{name: "the zero look reads as glass", scene: Scene{}, entry: lookCap, want: labelGlass},
 		{
 			name:  "an unrecognised look reads as glass",
@@ -3758,7 +3759,7 @@ func TestNewStartsOnGlassNightWithoutAPalette(t *testing.T) {
 // TestDrawCapsFitsAtItsWidestState measures the bar the way the scene itself
 // draws it, at the widest state it ever reaches: the 3D view, a dongle with a
 // bias-tee, corridor colour, the longest of the three colour words, the short
-// trail, the mid-band filter, the phosphor look, the longest of the three look
+// trail, the mid-band filter, the phosphor look, the longest of the four look
 // words, and the auto theme at night, whose AUTO·NIGHT is the longest word any
 // cap carries. Corridor colouring never holds a band filter, but 10-25K is
 // wider than any word its own cycle has, so the pair is a bound the bar never

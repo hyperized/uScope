@@ -258,9 +258,10 @@ func (s *session) cycleTheme() {
 	s.repaint()
 }
 
-// cycleLook steps to the next look, glass to phosphor to mono and back, which
-// is what the k key is bound to. Night or day does not move, so a look picked
-// at three in the morning arrives in the dark palette it was reached for in.
+// cycleLook steps to the next look, glass to phosphor to mono to vector
+// and back, which is what the k key is bound to. Night or day does not move,
+// so a look picked at three in the morning arrives in the dark palette it was
+// reached for in.
 func (s *session) cycleLook() {
 	s.look = s.look.Next()
 	s.repaint()

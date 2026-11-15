@@ -150,6 +150,7 @@ func TestLookPalettes(t *testing.T) {
 		{name: "glass", look: LookGlass, wantNight: Night, wantDay: Day},
 		{name: "phosphor", look: LookPhosphor, wantNight: PhosphorNight, wantDay: PhosphorDay},
 		{name: "mono", look: LookMono, wantNight: MonoNight, wantDay: MonoDay},
+		{name: "vector", look: LookVector, wantNight: VectorNight, wantDay: VectorDay},
 		{name: "the zero value reads as glass", look: Look(""), wantNight: Night, wantDay: Day},
 		{name: "an unrecognised look falls back to glass", look: Look("sepia"), wantNight: Night, wantDay: Day},
 	} {
@@ -166,5 +167,26 @@ func TestLookPalettes(t *testing.T) {
 				t.Errorf("%v.palettes() day = %v, want %v", testCase.look, day, testCase.wantDay)
 			}
 		})
+	}
+}
+
+// TestPaletteAs checks that as renames the look and leaves every colour, and
+// the palette it was called on, alone.
+func TestPaletteAs(t *testing.T) {
+	t.Parallel()
+
+	got := Day.as(LookMono)
+
+	if got.Look != LookMono {
+		t.Errorf("Day.as(LookMono).Look = %v, want %v", got.Look, LookMono)
+	}
+
+	got.Look = LookGlass
+	if got != Day {
+		t.Errorf("Day.as(LookMono) changed a colour: %v, want %v", got, Day)
+	}
+
+	if Day.Look != LookGlass {
+		t.Errorf("Day.Look = %v after as, want %v", Day.Look, LookGlass)
 	}
 }

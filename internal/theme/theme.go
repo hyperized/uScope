@@ -4,17 +4,17 @@
 // reaching for named colours, and so the looks DESIGN.md calls for can be
 // swapped at run time without touching a scene.
 //
-// There are two axes and six palettes. A Look is the whole character of the
-// picture and there are three: Glass, Phosphor and Mono. A Kind is night or
-// day inside whichever look is on. The layout grammar underneath them never
+// There are two axes and eight palettes. A Look is the whole character of the
+// picture and there are four: Glass, Phosphor, Mono and Vector. A Kind is
+// night or day inside whichever look is on. The layout grammar underneath them never
 // moves, whichever pair is picked: the same flight strips, the same data
 // block, the same tag hanging off the selected aircraft, the same row of
 // softkeys. Only the colours change. `k` cycles the look, `l` cycles night and
 // day, and --look and --theme pick the pair to start on.
 //
-// Glass is the default and the only one of the three with a vocabulary behind
-// it. It follows the glass cockpit's colour grammar, where a hue is a meaning
-// rather than a decoration: magenta is the active thing, cyan is a data field,
+// Glass is the default and the only look with a vocabulary behind it, which
+// Vector borrows whole. It follows the glass cockpit's colour grammar, where a
+// hue is a meaning rather than a decoration: magenta is the active thing, cyan is a data field,
 // green is engaged or valid, amber is a caution, red is a warning, and
 // controls sit in grey softkeys. A Garmin panel teaches that vocabulary to
 // everyone who has flown behind one, and uScope maps onto it without inventing
@@ -23,6 +23,8 @@
 //
 // Phosphor and Mono keep that grammar and change what it is spoken in; see
 // LookPhosphor and LookMono for what each one is and what it gives up.
+// Vector is a brighter Glass, with the night field lifted off black and the
+// sea and the land in tints of their own; see LookVector.
 //
 // Night is the default inside every look, because the uConsole is a backlit
 // handheld: a light field is a torch in the face at night and eats battery all
@@ -85,7 +87,7 @@ type Palette struct {
 	// Warn is red, and one thing wears it: EMERGENCY, as a filled box with
 	// white text. A warning that looks like every other label is not a warning.
 	//
-	// It is red in all three looks, Mono included. An emergency is a semantic
+	// It is red in every look, Mono included. An emergency is a semantic
 	// rather than an accent, and it is the one word on the board that has to
 	// be read from across a room.
 	Warn color.RGBA
@@ -100,12 +102,21 @@ type Palette struct {
 	Rule color.RGBA
 
 	// Shore is the coastline under the scope, and the quietest colour any of
-	// the six palettes has. Against the field it carries well under half the
+	// the eight palettes has. Against the field it carries well under half the
 	// contrast Muted does, which is the level it was picked for: the rings
 	// carry a number and have to be read, the coast only has to be
 	// recognised, and a coastline as loud as the furniture turns the scope
 	// into a map that happens to have aircraft on it.
 	Shore color.RGBA
+
+	// Water and Land are what the sea and the land are filled with under the
+	// shore overlay. They are finished tints, already mixed into Field, and a
+	// scene paints them as they are rather than fading them again. They live
+	// on the palette because the right strength is not the same everywhere:
+	// Glass wants ground that is barely there, and Vector wants sea and land
+	// that stay apart under brightly coloured route tubes.
+	Water color.RGBA
+	Land  color.RGBA
 
 	// The altitude bands. Aircraft are coloured by how high they are, which
 	// is the one piece of information a top-down scope cannot show by
@@ -136,7 +147,7 @@ type Palette struct {
 	Band    color.RGBA
 	BandInk color.RGBA
 
-	// Look is which of the three this palette belongs to, so a scene that has
+	// Look is which of the four this palette belongs to, so a scene that has
 	// been handed one can name it on the K softkey without being told twice.
 	// It rides on the palette for the reason Light is worked out from the
 	// palette: one value cannot disagree with itself, where a scene holding a
@@ -166,6 +177,43 @@ const (
 	nightKey     = 0x2A3036
 	nightAltHigh = 0xFF8A3D
 	nightShore   = 0x2C3A44
+)
+
+// The Vector Night palette: Glass night with the floor lifted. Glass night
+// has its field at 0, its band at 16 and its shore at 55, and draws the land
+// in the field, so at a glance land, water and coast run together into one
+// dark sheet. These are the structural colours that sit near the floor. The
+// field lands just over 20, and the band, the softkeys, the rules and the
+// muted chrome keep roughly the steps they had above it in Glass. The shore
+// is lifted further, to about 106, because the coast is the one line between
+// land and water that has to read at a glance. The hues (ink, accent, data,
+// OK, caution, warn, the high band) are Glass night's own, so the grammar is
+// the same in both looks; Glass keeps its true black for the battery and for
+// eyes adjusted to the dark.
+//
+// The ground tints are much stronger here than Glass's groundShare. Under
+// the 3D route tubes at 8 per cent, land and sea came out at luma 33 and 35:
+// two greys nobody could tell apart, under full-chroma cyan and amber. The
+// sea takes a blue rather than the IN tube's cyan, so an inbound tube over
+// water stands off it by hue, and the land a low-chroma grey-green that
+// carries neither tube's hue. Both sit at about luma 50. The coast is lifted
+// with them so it keeps its step over the stronger ground.
+//
+// Vector day keeps Day's colours except for the same three, pushed the
+// other way off a light field.
+const (
+	vectorNightField = 0x0F161C
+	vectorNightBand  = 0x1C262E
+	vectorNightRule  = 0x4A555E
+	vectorNightKey   = 0x3A444C
+	vectorNightMuted = 0xA8B2BA
+	vectorNightShore = 0x8FB0C4
+	vectorNightWater = 0x173557
+	vectorNightLand  = 0x2A3634
+
+	vectorDayShore = 0x5A7A90
+	vectorDayWater = 0xB4CDE3
+	vectorDayLand  = 0xD4DDD8
 )
 
 // The Glass Day palette, packed the same way: the same grammar on a cool light
@@ -274,6 +322,19 @@ const (
 	opaque = 0xFF
 )
 
+// groundShare is how far the handheld palettes pull their water off the field
+// towards Data, and their land towards OK.
+//
+// Eight per cent is the whole argument. The tint has to say at a glance which
+// side of a coastline is sea without becoming something anybody reads: an
+// aircraft two pixels wide has to stand off it, the range rings have to stay
+// the loudest lines on the scope, and the coast, the quietest colour in the
+// palette, still has to show against it. Mixing towards Data and OK rather
+// than towards colours of their own keeps each look's character with no table:
+// cyan-black sea on Glass night, deeper green on Phosphor, grey on Mono, and
+// land and sea at the same depth off the field so neither is the louder.
+const groundShare = 0.08
+
 // Night is Glass's dark palette: a true black field with white ink on it,
 // which is the contrast an instrument panel is read at in the dark.
 //
@@ -294,6 +355,8 @@ var Night = Palette{
 	Warn:    rgb(nightWarn),
 	Key:     rgb(nightKey),
 	Shore:   rgb(nightShore),
+	Water:   tint(nightField, nightData),
+	Land:    tint(nightField, nightOK),
 
 	// AltLow repeats OK and AltMid repeats Ink; see the note on the bands.
 	AltLow:  rgb(nightOK),
@@ -322,6 +385,8 @@ var Day = Palette{
 	Warn:    rgb(dayWarn),
 	Key:     rgb(dayKey),
 	Shore:   rgb(dayShore),
+	Water:   tint(dayField, dayData),
+	Land:    tint(dayField, dayOK),
 
 	AltLow:  rgb(dayOK),
 	AltMid:  rgb(dayInk),
@@ -336,6 +401,44 @@ var Day = Palette{
 
 	Look: LookGlass,
 }
+
+// VectorNight is Glass night brightened: the same hues on a field lifted to
+// a dark slate, with the band, rules, softkeys, muted chrome
+// and shore lifted with it. The deliberate repeats are Glass night's.
+//
+//nolint:gochecknoglobals // a palette is data, and color.RGBA cannot be const.
+var VectorNight = Palette{
+	Field:   rgb(vectorNightField),
+	Ink:     rgb(nightInk),
+	Muted:   rgb(vectorNightMuted),
+	Rule:    rgb(vectorNightRule),
+	Accent:  rgb(nightAccent),
+	Data:    rgb(nightData),
+	OK:      rgb(nightOK),
+	Caution: rgb(nightCaution),
+	Warn:    rgb(nightWarn),
+	Key:     rgb(vectorNightKey),
+	Shore:   rgb(vectorNightShore),
+	Water:   rgb(vectorNightWater),
+	Land:    rgb(vectorNightLand),
+
+	AltLow:  rgb(nightOK),
+	AltMid:  rgb(nightInk),
+	AltHigh: rgb(nightAltHigh),
+
+	Band:    rgb(vectorNightBand),
+	BandInk: rgb(nightInk),
+
+	Look: LookVector,
+}
+
+// VectorDay is Glass's Day under the Vector name. A light field has no
+// floor to lift, so it is Day's colours with Vector's stronger ground and the
+// coast darkened to hold against it; Look differs too, which keeps the K cap
+// naming the look that is on.
+//
+//nolint:gochecknoglobals // a palette is data, and color.RGBA cannot be const.
+var VectorDay = vectorDay()
 
 // PhosphorNight is the CRT at night: one green for the field, the ink and the
 // rules, with the selection in bright phosphor on top of it.
@@ -357,6 +460,8 @@ var PhosphorNight = Palette{
 	Warn:    rgb(phosphorNightWarn),
 	Key:     rgb(phosphorNightKey),
 	Shore:   rgb(phosphorNightShore),
+	Water:   tint(phosphorNightField, phosphorNightData),
+	Land:    tint(phosphorNightField, phosphorNightOK),
 
 	AltLow:  rgb(phosphorNightAltLow),
 	AltMid:  rgb(phosphorNightAltMid),
@@ -394,6 +499,8 @@ var PhosphorDay = Palette{
 	Warn:    rgb(phosphorDayWarn),
 	Key:     rgb(phosphorDayKey),
 	Shore:   rgb(phosphorDayShore),
+	Water:   tint(phosphorDayField, phosphorDayData),
+	Land:    tint(phosphorDayField, phosphorDayAccent),
 
 	AltLow:  rgb(phosphorDayAltLow),
 	AltMid:  rgb(phosphorDayAltMid),
@@ -426,6 +533,8 @@ var MonoNight = Palette{
 	Warn:    rgb(monoNightWarn),
 	Key:     rgb(monoNightRule),
 	Shore:   rgb(monoNightShore),
+	Water:   tint(monoNightField, monoNightInk),
+	Land:    tint(monoNightField, monoNightOK),
 
 	AltLow:  rgb(monoNightAltLow),
 	AltMid:  rgb(monoNightAltMid),
@@ -455,6 +564,8 @@ var MonoDay = Palette{
 	Warn:    rgb(monoDayWarn),
 	Key:     rgb(monoDayKey),
 	Shore:   rgb(monoDayShore),
+	Water:   tint(monoDayField, monoDayInk),
+	Land:    tint(monoDayField, monoDayOK),
 
 	AltLow:  rgb(monoDayAltLow),
 	AltMid:  rgb(monoDayAltMid),
@@ -501,7 +612,7 @@ const (
 
 	// midLuminance is where Light puts the line between a dark field and a
 	// light one: halfway up the range from black to white. Nothing sits near
-	// it. The three night fields measure under 0.005 and the three day fields
+	// it. The four night fields measure under 0.008 and the four day fields
 	// over 0.86, so the threshold has more than eight tenths of the range as
 	// margin on either side, and it would take a palette that is genuinely
 	// mid-grey to make the answer a close call.
@@ -558,11 +669,11 @@ func (p Palette) Light() bool {
 // band's own ink comes back instead, because a reading nobody can see is worse
 // than a reading in the wrong colour.
 //
-// One palette needs this and the other five do not. MonoDay has no accent and
+// One palette needs this and the other seven do not. MonoDay has no accent and
 // no data hue, so its Data is its Ink, and its band is an inverted strip
 // filled with that same ink: every reading on the masthead would be black on
 // black, at a measured gap of exactly zero. Its OK and Caution greys are
-// nearly as bad there, at 0.058 and 0.092. Everything the other five set on
+// nearly as bad there, at 0.058 and 0.092. Everything the other seven set on
 // their bands clears the floor with room, the tightest being PhosphorDay's
 // Data at 0.118, so nothing that was judged on a picture moves because this
 // exists.
@@ -576,6 +687,47 @@ func (p Palette) OnBand(col color.RGBA) color.RGBA {
 	}
 
 	return p.BandInk
+}
+
+// as is a copy of the palette that names another look.
+func (p Palette) as(look Look) Palette {
+	p.Look = look
+
+	return p
+}
+
+// vectorDay is Day with Vector's ground and coast.
+func vectorDay() Palette {
+	day := Day.as(LookVector)
+	day.Shore = rgb(vectorDayShore)
+	day.Water = rgb(vectorDayWater)
+	day.Land = rgb(vectorDayLand)
+
+	return day
+}
+
+// tint is ink mixed into field by groundShare, one channel at a time and
+// rounded to the nearest byte, which is the same arithmetic internal/radar's
+// fade uses. The handheld's ground was drawn that way before the tints moved
+// onto the palette, so mixing them identically keeps its flat frames
+// identical.
+func tint(field, ink uint32) color.RGBA {
+	from, to := rgb(field), rgb(ink)
+
+	return color.RGBA{
+		R: tintChannel(from.R, to.R),
+		G: tintChannel(from.G, to.G),
+		B: tintChannel(from.B, to.B),
+		A: opaque,
+	}
+}
+
+// tintChannel mixes one channel. groundShare is in [0, 1], so the result
+// cannot leave the byte.
+func tintChannel(field, ink uint8) uint8 {
+	mixed := float64(field) + (float64(ink)-float64(field))*groundShare
+
+	return uint8(math.Round(mixed)) //nolint:gosec // a mix of bytes.
 }
 
 // Kind names a theme: one of the two a look carries, or Auto, which picks
@@ -600,7 +752,7 @@ const (
 // ErrUnknown is returned for a --theme value that is none of the spellings.
 var ErrUnknown = errors.New("theme: unknown theme")
 
-// ErrUnknownLook is the same for a --look value that names none of the three.
+// ErrUnknownLook is the same for a --look value that names none of the four.
 var ErrUnknownLook = errors.New("theme: unknown look")
 
 // Parse turns a --theme value into a Kind.
@@ -637,17 +789,17 @@ func (k Kind) Next() Kind {
 	}
 }
 
-// Look names one of the three palettes uScope can wear. It is what --look
+// Look names one of the four looks uScope can wear. It is what --look
 // parses into, what the k key cycles, and what a Palette carries so a scene
 // can say which one it is holding.
 type Look string
 
-// The three spellings --look accepts.
+// The four spellings --look accepts.
 const (
 	// LookGlass is the cockpit palette and the default: magenta for the
 	// active thing, cyan for a data field, green for engaged or valid, amber
 	// for a caution, red for a warning, controls in grey softkeys. It is the
-	// only one of the three whose hues carry meanings somebody already knows
+	// only look whose hues carry meanings somebody already knows
 	// before they read the legend.
 	LookGlass Look = "glass"
 
@@ -675,6 +827,15 @@ const (
 	// across a room, so taking it down to a grey would be giving up the one
 	// colour in the look that is genuinely earning its place.
 	LookMono Look = "mono"
+
+	// LookVector is a brighter Glass. Its day is Glass day with stronger
+	// ground. Its night keeps every Glass hue but lifts the field, the band,
+	// the rules and the shore off black, and fills the sea and the land with
+	// tints of their own, so the map under the traffic reads as a map on a
+	// monitor or a projector rather than as one black sheet. What it costs is
+	// the true black Glass keeps for the battery and for night vision, which
+	// is why it is a look of its own rather than a change to Glass.
+	LookVector Look = "vector"
 )
 
 // ParseLook turns a --look value into a Look.
@@ -690,21 +851,25 @@ func ParseLook(text string) (Look, error) {
 		return LookPhosphor, nil
 	case LookMono:
 		return LookMono, nil
+	case LookVector:
+		return LookVector, nil
 	default:
 		return LookGlass, fmt.Errorf("%w: %q", ErrUnknownLook, text)
 	}
 }
 
-// Next cycles to the next look, glass to phosphor to mono and back. This is
-// what the k key is bound to.
+// Next cycles to the next look, glass to phosphor to mono to vector and
+// back. This is what the k key is bound to.
 //
-// Anything that is not one of the two later spellings is treated as glass and
-// moves to phosphor, so the zero value cycles the same way LookGlass does.
+// Anything that is not one of the three later spellings is treated as glass
+// and moves to phosphor, so the zero value cycles the same way LookGlass does.
 func (l Look) Next() Look {
 	switch l {
 	case LookPhosphor:
 		return LookMono
 	case LookMono:
+		return LookVector
+	case LookVector:
 		return LookGlass
 	case LookGlass:
 		fallthrough
@@ -736,6 +901,8 @@ func (l Look) palettes() (Palette, Palette) {
 		return PhosphorNight, PhosphorDay
 	case LookMono:
 		return MonoNight, MonoDay
+	case LookVector:
+		return VectorNight, VectorDay
 	case LookGlass:
 		fallthrough
 	default:
