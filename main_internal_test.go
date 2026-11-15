@@ -3477,3 +3477,63 @@ func TestSourceForPinsTheCorridorField(t *testing.T) {
 		})
 	}
 }
+
+// flagHistory is the --history flag.
+const flagHistory = "--history"
+
+// TestParseFlagsHistory covers --history: off by default, off and empty both
+// mean no file, and - is refused because it reads as stdout.
+func TestParseFlagsHistory(t *testing.T) {
+	t.Parallel()
+
+	const path = "/var/lib/uscope/history"
+
+	for _, testCase := range []struct {
+		name    string
+		args    []string
+		want    string
+		wantErr error
+	}{
+		{name: caseDefault},
+		{name: "off keeps nothing", args: []string{flagHistory, stateOff}},
+		{name: caseEmpty, args: []string{flagHistory, ""}},
+		{name: "a path", args: []string{flagHistory, path}, want: path},
+		{name: "stdout", args: []string{flagHistory, "-"}, wantErr: errHistPath},
+		{name: "a NUL in the path", args: []string{flagHistory, "a\x00b"}, wantErr: errHistPath},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := parseFlags(testCase.args)
+			if !errors.Is(err, testCase.wantErr) {
+				t.Fatalf("parseFlags(%v) error = %v, want errors.Is(%v)", testCase.args, err, testCase.wantErr)
+			}
+
+			if cfg.history != testCase.want {
+				t.Errorf("history = %q, want %q", cfg.history, testCase.want)
+			}
+		})
+	}
+}
+
+// TestWarnNoHistory checks --history under the demo fleet says once that it
+// keeps nothing, and says nothing when it was not given.
+func TestWarnNoHistory(t *testing.T) {
+	t.Parallel()
+
+	var quiet bytes.Buffer
+
+	warnNoHistory(config{}, &quiet, flagDemo)
+
+	if quiet.Len() != 0 {
+		t.Errorf("warnNoHistory without --history wrote %q", quiet.String())
+	}
+
+	var stderr bytes.Buffer
+
+	warnNoHistory(config{history: "/var/lib/uscope/history"}, &stderr, flagDemo)
+
+	if got := stderr.String(); !strings.Contains(got, flagHistory) || !strings.Contains(got, flagDemo) {
+		t.Errorf("warnNoHistory wrote %q, want it to name %s and %s", got, flagHistory, flagDemo)
+	}
+}

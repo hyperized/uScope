@@ -148,6 +148,15 @@ var (
 	errOrbit      = errors.New(appName + ": --orbit must be on or off")
 	errAzimuth    = errors.New(appName + ": --azimuth out of range")
 	errGPSD       = errors.New(appName + ": --gpsd must be off or HOST:PORT")
+	errHistPath   = errors.New(appName + ": --history must be off or a path, and not -")
+)
+
+// The off spelling of --history and the one path it refuses: - reads as
+// stdout everywhere else on a command line, and stdout is not a file
+// anything can be kept in.
+const (
+	stateOff   = "off"
+	stdoutPath = "-"
 )
 
 // config is the validated command line. Everything in it has already been
@@ -226,6 +235,10 @@ type config struct {
 	// strength, already inside the source's bounds.
 	corridorHalfLife time.Duration
 
+	// history is the --history file, already validated, and empty for off.
+	// Only a live source reads it; see sourceFor.
+	history string
+
 	// biasTee powers an LNA over the coax and autoSweep walks the gain grid
 	// once before the first frame. Both only apply when uScope is driving the
 	// radio itself, and both are inert rather than an error anywhere else,
@@ -259,6 +272,7 @@ type rawFlags struct {
 	corridors   string
 	corrField   string
 	halfLife    string
+	history     string
 	scopeRange  string
 	battery     string
 	beast       string
@@ -394,6 +408,8 @@ func bindCorridors(set *flag.FlagSet, raw *rawFlags) {
 		"the airfield lost tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm")
 	set.StringVar(&raw.halfLife, "corridor-half-life", defaultCorridorHalfLife,
 		"how long a lost track takes to fade to half its strength, 10m to 24h")
+	set.StringVar(&raw.history, "history", stateOff,
+		"keep the lost tracks in this file across a restart, live sources only; off keeps nothing")
 }
 
 // bindCamera declares the 3D views' flags: the camera's placement and the
@@ -583,7 +599,31 @@ func (raw rawFlags) limits() error {
 		return fmt.Errorf("%w: got %d, want %d to %d", errFrames, raw.frames, minFrames, maxFrames)
 	}
 
-	return checkBattery(raw.battery)
+	if err := checkBattery(raw.battery); err != nil {
+		return err
+	}
+
+	return checkKept(raw.history, errHistPath)
+}
+
+// checkKept refuses a --history value that cannot be a file to keep: -,
+// which reads like stdout, and a path with a NUL in it. off is the default,
+// and empty means off too. invalid is the flag's own sentinel.
+func checkKept(path string, invalid error) error {
+	if path == stdoutPath || strings.ContainsRune(path, 0) {
+		return fmt.Errorf("%w: got %q", invalid, path)
+	}
+
+	return nil
+}
+
+// statePath is the --history file, or empty for off.
+func statePath(text string) string {
+	if text == stateOff {
+		return ""
+	}
+
+	return text
 }
 
 // validated range-checks everything and produces the config.
@@ -665,6 +705,7 @@ func (raw rawFlags) validated() (config, error) {
 
 		corridorField:    field,
 		corridorHalfLife: halfLife,
+		history:          statePath(raw.history),
 	}, nil
 }
 

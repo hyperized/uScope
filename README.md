@@ -214,8 +214,29 @@ within 10 nm) or `--corridor-field`, and until the first aircraft is lost.
 hours, so there is something to look at. `u` or `--corridors off` hides the
 corridors in every view. The `U TUBES` cap is on the flat views' key bar and
 the bare views' reveal. The 3D view's bar has no room for it, but the key
-works there too. The lost tracks live in memory, so a restart starts the
-corridors from nothing.
+works there too.
+
+The lost tracks live in memory, so a restart starts the corridors from
+nothing unless `--history PATH` names a file to keep them in. With it, uScope
+reads the file back before the first frame and writes it once a minute while
+the tracks change, and once more when it stops. Aircraft still in the sky at
+that point are written as lost at that moment, and become live again the
+moment the feed hears them. A track older than six half-lives, twelve hours at
+the default, is dropped on the way in, the same as it would have been in
+memory. The routes are worked out again from the tracks on the first frame,
+so they come back exactly as they were. The live traffic, its trails and the
+self-locate estimate are not kept. `--history` only does anything with a real
+feed: the demo fleet invents the same tracks every run.
+
+The file is written as a new file renamed over the old one, so a kill part
+way through leaves the previous one whole. A file that will not read, because
+it is truncated, from a newer build or not a history file at all, costs one
+line on stderr and an empty start: the feed fills the corridors in again. A
+failed write costs one line per distinct cause and uScope carries on. At the
+caps, two thousand tracks of 256 fixes, the file is about 16 MB; anything over
+48 MiB is refused unread. `off`, the default, keeps nothing, and `-` is
+refused. Put the file somewhere that survives a reboot, such as
+`~/.local/state/uscope/history`; the directory has to exist already.
 
 ### Looks and themes
 
@@ -419,6 +440,7 @@ starts the four seconds again.
 | `--corridors` | `on` | draw the routes lost aircraft flew as tubes, fading with age, see "Corridors"; `u` flips them |
 | `--corridor-field` | | the airfield tracks are sorted into arrivals and departures by, as an ICAO code; empty takes the nearest within 150 nm of the receiver |
 | `--corridor-half-life` | `2h` | how long a lost track takes to count for half as much in its route, `10m` to `24h` |
+| `--history` | `off` | keep the lost tracks the corridors are drawn from in this file across a restart, live sources only; `off` keeps nothing; see "Corridors" |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--zoom` | `0` | range steps inside the `auto` fit, `-5` to `5`; negative widens, the view keeps following the traffic, `+` and `-` still turn auto off, and a fixed `--range` ignores it |
 | `--tilt` | `35` | the 3D camera's starting elevation in degrees, 10 to 80; `[` and `]` step from it |
