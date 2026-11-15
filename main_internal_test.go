@@ -1005,6 +1005,24 @@ func TestRunFlagError(t *testing.T) {
 	}
 }
 
+func TestRunHelpIsNotAFailure(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+
+	got := run([]string{"--help"}, &stdout, &stderr)
+
+	if got != exitOK {
+		t.Fatalf("run(--help) exit code = %d, want %d", got, exitOK)
+	}
+
+	// The usage is the flag package's and has gone out already, so run adds
+	// no error line of its own.
+	if stderr.Len() != 0 {
+		t.Errorf("run(--help) stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRunAppFailure(t *testing.T) {
 	t.Parallel()
 

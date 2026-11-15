@@ -321,10 +321,6 @@ type command uint8
 const (
 	// cmdNone is every key nothing is bound to at this level. The arrows and
 	// the radar's own keys are taken by the scene before the loop sees them.
-	//
-	// m is deliberately not bound anywhere yet. It is reserved for the shore
-	// overlay, and binding it to something else in the meantime would be a
-	// key to unlearn later.
 	cmdNone command = iota
 	cmdQuit
 	cmdNextTheme
