@@ -3,6 +3,7 @@ package radar
 import (
 	"image/color"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
@@ -348,6 +349,36 @@ func (s *Scene) passes(icao string, altitude float64, callsign string, class sou
 	s.seen.show(entry)
 
 	return true
+}
+
+// coastPasses is passes for a lost trail, on what it was last heard with.
+func (s *Scene) coastPasses(ghost *source.Trail) bool {
+	return s.passes(ghost.ICAO, heardAltitude(ghost.Altitude, ghost.Points), ghost.Callsign, ghost.Class)
+}
+
+// heardAltitude is the altitude the filter judges an aircraft by: the one it
+// reports, or, while that is still undecoded, the last one its track was flown
+// at.
+//
+// uAirwaves forgets an aircraft after a minute of silence and starts it again
+// at zero feet on the next message, and the source stitches the old track onto
+// the new life. At the edge of coverage the altitude can take seconds to
+// follow, or never come before the next loss. Judged by the zero, the whole
+// stitched trail went off the field under a ceiling or a band and came back
+// with a fade-in from nothing, which is the far traffic's trails blinking in
+// and out on a live feed.
+func heardAltitude(altitude float64, fixes []airplane.PositionEntry) float64 {
+	if _, known := source.AltitudeBandOf(altitude); known {
+		return altitude
+	}
+
+	for _, fix := range slices.Backward(fixes) {
+		if _, known := source.AltitudeBandOf(fix.Altitude); known {
+			return fix.Altitude
+		}
+	}
+
+	return altitude
 }
 
 // inBand is the altitude filters with the dead band applied: an aircraft

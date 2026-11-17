@@ -400,3 +400,89 @@ func coastAllocScene(tb testing.TB, kind coastAllocKind, set radar.Settings) (*r
 // coastAllocAt is the render clock the fade-in case is measured at: a second
 // after the newcomers' fade started, so every one of them is half drawn.
 const coastAllocAt = 1500 * time.Millisecond
+
+// revivedPlane is an aircraft as the source hands it over in the first frames
+// after it is heard again: uAirwaves has started it from scratch, so there is
+// no altitude and no position yet, and the source has stitched the track it
+// flew before the gap onto the empty new history.
+func revivedPlane(plane airplane.Snapshot) airplane.Snapshot {
+	return airplane.Snapshot{
+		ICAO:            plane.ICAO,
+		Callsign:        plane.Callsign,
+		LastUpdate:      plane.LastUpdate,
+		MessageCount:    1,
+		PositionHistory: plane.PositionHistory,
+	}
+}
+
+// TestRevivedAircraftKeepsItsTrail checks that an aircraft heard again after a
+// gap keeps its trail under an altitude filter while its new life has no
+// altitude decoded yet, and that the same holds for a lost track whose last
+// report carried none.
+//
+// This is the blink seen on a live feed: a contact at the edge of coverage
+// drops out of uAirwaves, comes back on one message with its altitude still at
+// zero, and the filter took the zero for "in no band" and hid the whole
+// stitched trail until an altitude arrived, then faded it back in from
+// nothing. The track itself says what height the aircraft was flying at.
+//
+// The bare views are the ones asked, because there the trail is the only
+// thing the aircraft puts on the canvas once its model has no position to go
+// at; the full views' column would differ for reasons of its own.
+func TestRevivedAircraftKeepsItsTrail(t *testing.T) {
+	t.Parallel()
+
+	const midAltitudeFt = 18000
+
+	flying := scenePlane("484AC1", "KLM123", 45, 12, midAltitudeFt, 41)
+	revived := sceneFrame(revivedPlane(flying))
+
+	lost := lostTrail(flying, 0)
+	lost.Altitude = 0
+	unheard := coastFrame(lost)
+
+	for _, testCase := range []struct {
+		name   string
+		view   radar.View
+		filter radar.BandFilter
+		frame  source.Frame
+	}{
+		{name: "revived, bare flat, ceiling", view: radar.ViewMinimal, filter: radar.FilterBelowHigh, frame: revived},
+		{name: "revived, bare flat, mid band", view: radar.ViewMinimal, filter: radar.FilterMid, frame: revived},
+		{name: "revived, bare 3D, ceiling", view: radar.ViewMinimal3D, filter: radar.FilterBelowHigh, frame: revived},
+		{name: "revived, bare 3D, mid band", view: radar.ViewMinimal3D, filter: radar.FilterMid, frame: revived},
+		{name: "unheard, bare flat, ceiling", view: radar.ViewMinimal, filter: radar.FilterBelowHigh, frame: unheard},
+		{name: "unheard, bare 3D, ceiling", view: radar.ViewMinimal3D, filter: radar.FilterBelowHigh, frame: unheard},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			set := radar.Settings{View: testCase.view, RangeNm: sceneRangeNm, Filter: testCase.filter}
+
+			// The aircraft is seen flying first, so the filter has a decision
+			// to carry over, and the gap's frame is drawn one tick later.
+			canv, err := canvas.New(panelWidth, panelHeight)
+			if err != nil {
+				t.Fatalf("canvas.New: %v", err)
+			}
+
+			src := &fakeSource{frame: sceneFrame(flying)}
+			scene := radar.New(testFaces(t), src, scope.New(scope.WithCurrent(sceneRangeNm)))
+			scene.Apply(set)
+			scene.Draw(canv, 0)
+
+			src.frame = testCase.frame
+
+			scene.Draw(canv, time.Second/30)
+
+			empty, emptyCanvas, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame())
+			empty.Apply(set)
+			empty.Draw(emptyCanvas, 0)
+			empty.Draw(emptyCanvas, time.Second/30)
+
+			if identical(canv, emptyCanvas) {
+				t.Error("the trail went off the field with the altitude, want it judged by the height it was flown at")
+			}
+		})
+	}
+}

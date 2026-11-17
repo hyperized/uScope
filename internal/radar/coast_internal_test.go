@@ -1,10 +1,12 @@
 package radar
 
 import (
+	"math"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
 )
 
@@ -233,6 +235,36 @@ func TestDeadBandOnBothEdges(t *testing.T) {
 	// An address with no key gets the edges themselves and no memory.
 	if scene.passes("GHOST1", 9600, "", source.TrackTransit) {
 		t.Error("an unkeyed aircraft under the floor passed, want the plain edge")
+	}
+}
+
+// TestHeardAltitude covers where the filter's altitude comes from: the
+// report when there is one, the newest fix that carries one when there is
+// not, and the undecoded report again when the track has none either.
+func TestHeardAltitude(t *testing.T) {
+	t.Parallel()
+
+	track := []airplane.PositionEntry{{Altitude: 12000}, {Altitude: 18000}, {}}
+
+	for _, testCase := range []struct {
+		name     string
+		altitude float64
+		fixes    []airplane.PositionEntry
+		want     float64
+	}{
+		{name: "reported", altitude: 30000, fixes: track, want: 30000},
+		{name: "undecoded, from the track", fixes: track, want: 18000},
+		{name: "NaN, from the track", altitude: math.NaN(), fixes: track, want: 18000},
+		{name: "undecoded, no track"},
+		{name: "undecoded, a track with no altitude on it", fixes: []airplane.PositionEntry{{}, {}}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := heardAltitude(testCase.altitude, testCase.fixes); got != testCase.want {
+				t.Errorf("heardAltitude = %v, want %v", got, testCase.want)
+			}
+		})
 	}
 }
 
