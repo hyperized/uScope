@@ -550,7 +550,7 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 		ghost := &coasting[index]
 
 		share, _ := coastShare(ghost, frame.Now)
-		if s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign, ghost.Class) {
+		if s.coastPasses(ghost) {
 			s.drawTrail3(lay.dst, view, ghost.Points, s.fade(s.ghostColour(*ghost), share))
 		}
 	}
@@ -583,7 +583,7 @@ func (s *Scene) drawTraffic3(lay *layout, view scene3, frame source.Frame) {
 func (s *Scene) drawCoasting3(lay *layout, view scene3, ghost *source.Trail, now time.Time) {
 	share, _ := coastShare(ghost, now)
 	if !positioned(ghost.Latitude, ghost.Longitude) ||
-		!s.passes(ghost.ICAO, ghost.Altitude, ghost.Callsign, ghost.Class) {
+		!s.coastPasses(ghost) {
 		return
 	}
 

@@ -142,7 +142,7 @@ func (s *Scene) groupRows(frame source.Frame) {
 func (s *Scene) groupFor(plane airplane.Snapshot) uint8 {
 	class := s.exposure.corridors.Classify(plane)
 
-	if !s.passes(plane.ICAO, plane.Altitude, plane.Callsign, class) {
+	if !s.passes(plane.ICAO, heardAltitude(plane.Altitude, plane.PositionHistory), plane.Callsign, class) {
 		return groupNone
 	}
 

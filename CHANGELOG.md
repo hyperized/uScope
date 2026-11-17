@@ -6,6 +6,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Under an altitude filter, the trail of an aircraft heard again after a gap
+  no longer vanishes until its altitude is decoded and then fades back in.
+  The filter now judges an aircraft with no altitude yet by the last one on
+  its track, which is what kept the far traffic's trails blinking.
+
 ## [0.2.0] - 2026-11-15
 
 ### Added

@@ -216,7 +216,8 @@ func bandOf(altitude float64) int {
 // The altitude filters remember their last answer for each aircraft and hold
 // it inside a dead band either side of the edge; see inBand. Asking twice in
 // one frame gets the same answer twice, because the band an answer is held in
-// always contains the altitude that produced it.
+// always contains the altitude that produced it. An aircraft with no altitude
+// decoded yet is judged by the last one on its track; see heardAltitude.
 //
 // A coasting aircraft goes through passes, the same rule by its parts, on the
 // altitude and callsign it was last heard with and the class its trail was
@@ -224,7 +225,9 @@ func bandOf(altitude float64) int {
 // not go through it at all: hiding a track on a reading that old would be a
 // decision nobody could check against the picture.
 func (s *Scene) visible(plane airplane.Snapshot) bool {
-	return s.passes(plane.ICAO, plane.Altitude, plane.Callsign, s.filterClass(plane))
+	altitude := heardAltitude(plane.Altitude, plane.PositionHistory)
+
+	return s.passes(plane.ICAO, altitude, plane.Callsign, s.filterClass(plane))
 }
 
 // filterClass is the aircraft's track class when the filter is holding to
