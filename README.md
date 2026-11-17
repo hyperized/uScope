@@ -247,11 +247,11 @@ that work there.
 ### Corridors
 
 Every aircraft that drops out of range leaves its track behind, and uScope
-keeps it for a while. Tracks that flew the same way are bundled into a route,
-and each arrival and departure route is drawn as a tube: the bundle's average
-path down the middle, its spread as the width. Arrivals from several
-directions end on the same runway, so an arrival tube is a cone narrowing
-onto it; a departure opens out the other way. Every track fades by half every
+keeps it for a while. Arrivals that flew the same way are bundled into a
+route, and so are departures, and each route is drawn as a tube: the
+bundle's average path down the middle, its spread as the width. Arrivals
+from several directions end on the same runway, so an arrival tube is a cone
+narrowing onto it; a departure opens out the other way. Every track fades by half every
 two hours (`--corridor-half-life`), so a runway change shows as one set of
 tubes fading out while the next builds up.
 
@@ -261,6 +261,10 @@ nearest within 150 nm of the receiver, or the one you name with
 arrival, drawn cyan. One that began there and ended somewhere else is a
 departure, drawn amber. Everything else is traffic passing through and gets
 no tube; the flat views draw its tracks as thin grey lines.
+
+uScope keeps up to 64 routes. The newest tracks are bundled first, so when a
+long day runs past that, the tracks left out are the oldest and faintest,
+which stay on the flat views as thin lines.
 
 The flat views draw a tube as a translucent band on the ground. The 3D views
 draw it in the air at the route's average altitude, so arrivals slope down to

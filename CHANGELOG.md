@@ -22,6 +22,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no longer vanishes until its altitude is decoded and then fades back in.
   The filter now judges an aircraft with no altitude yet by the last one on
   its track, which is what kept the far traffic's trails blinking.
+- Arrival tubes no longer go missing under a busy sky. Overflights were
+  bundled into routes of their own that are never drawn, and they filled the
+  64 routes uScope keeps: on one busy evening the routes were full within 75
+  minutes, 48 of the 64 were overflights, and 79 of 86 arrivals were refused
+  a route and drawn as thin lines only. Overflights now stay out of the
+  routes, and the newest tracks are bundled first, so on a display left
+  running all day the tracks left out when the routes run out are the oldest
+  rather than the evening's arrivals. On the flat views an overflight's thin
+  grey line is drawn whole again; the stretch that sat inside an undrawn
+  route used to be missing.
 
 ## [0.2.0] - 2026-11-15
 

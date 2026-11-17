@@ -10,11 +10,15 @@ import (
 // How lost tracks are bundled into routes.
 //
 // A corridor is not any one track but the bundle many of them make, so the
-// ring's trails are grouped by where they flew and each group is reduced to a
-// mean path with a spread around it. The radar draws that as a tube: an
-// arrival route narrows onto its runway because the tracks in it converge
-// there, a departure route opens out, and an airway is a pipe of about one
-// width all the way across.
+// ring's arrivals and departures are grouped by where they flew and each
+// group is reduced to a mean path with a spread around it. The radar draws
+// that as a tube: an arrival route narrows onto its runway because the tracks
+// in it converge there, and a departure route opens out.
+//
+// Overflights are left out. The radar draws no tube for one, and under a busy
+// sky they used to take most of the book: an airway opens a route of its own
+// for nearly every overflight, and once the book was full every arrival after
+// that was refused one. Their trails are drawn whole as hairlines instead.
 const (
 	// routeStationNm is how far apart a track is sampled. Every track in a
 	// route is measured at the same distances, which is what lets the members
@@ -23,16 +27,16 @@ const (
 	routeStationNm = 2.0
 
 	// routeMaxRoutes is how many routes are kept. A busy field shows a dozen
-	// or two, and a track that would open the sixty-fifth is drawn as a
-	// hairline instead.
+	// or two with tubes, and about as many again of one or two stray tracks
+	// each, which open a route but never make a tube. A track that would open
+	// the sixty-fifth is drawn as a hairline instead; see compute for which
+	// tracks those are.
 	routeMaxRoutes = 64
 
-	// routeMaxStations is how many stations one route can hold: 320 miles at
-	// two miles a station. A track is 256 fixes at most, about forty minutes,
-	// which at a cruise of 450 knots is just over 300 miles. Arrivals and
-	// departures count from the field; an airway counts from the point abeam
-	// the field, half the stations either way, so a station more than 160
-	// miles along it is left out of the tube.
+	// routeMaxStations is how many stations one route can hold, counted out
+	// from the field: 320 miles at two miles a station. A track is 256 fixes
+	// at most, about forty minutes, which at a cruise of 450 knots is just
+	// over 300 miles.
 	routeMaxStations = 160
 
 	// RouteMaxStations is routeMaxStations for a caller that keeps a fixed
@@ -45,13 +49,6 @@ const (
 	// at twelve miles and lets a spread of entry points at fifty miles share a
 	// route.
 	routeSignatureDeg = 30.0
-
-	// routeTransitHeadingDeg and routeTransitAbeamNm are what an overflight
-	// has to share with a route to join it: a heading within twenty degrees,
-	// so the two directions of one airway are two routes, and a line passing
-	// the field within eight miles of the route's own.
-	routeTransitHeadingDeg = 20.0
-	routeTransitAbeamNm    = 8.0
 
 	// routeMinMembers is the fewest tracks a station needs before it is part
 	// of the tube, and the tube stops at the first station out from the field
@@ -96,15 +93,17 @@ const (
 //nolint:gochecknoglobals // a table, read only.
 var routeSignatureNm = [...]float64{2, 12, 30, 50}
 
-// Route is one corridor: the lost tracks of one class that flew the same way,
-// reduced to a mean path with the spread of the bundle around it.
+// Route is one corridor: the lost arrivals or the lost departures that flew
+// the same way, reduced to a mean path with the spread of the bundle around
+// it.
 //
 // Only routes with a tube at least two stations long are carried. The tube is
-// the stretch out from the field (from abeam it, for an overflight) where at
-// least three tracks agree to within four miles; a track in no route, and the
-// part of a member's track past the end of its tube, is drawn on its own, and
-// its Trail says which part that is.
+// the stretch out from the field where at least three tracks agree to within
+// four miles; a track in no route, and the part of a member's track past the
+// end of its tube, is drawn on its own, and its Trail says which part that
+// is. An overflight is in no route.
 type Route struct {
+	// Class is TrackInbound or TrackOutbound, never TrackTransit.
 	Class TrackClass
 
 	// Strength is how much of a corridor the route makes, from 0 to 1: the
@@ -112,9 +111,7 @@ type Route struct {
 	// over three fresh tracks.
 	Strength float64
 
-	// Stations is the mean path, smoothed, outward from the field for an
-	// arrival or a departure and along the direction of flight for an
-	// overflight.
+	// Stations is the mean path, smoothed, outward from the field.
 	Stations []Station
 }
 
@@ -190,20 +187,14 @@ func (s *stationSum) add(point *stationPoint, weight float64) {
 // the weight its members add up to.
 type routeHead struct {
 	class     TrackClass
-	signature [len(routeSignatureNm)]float64
-	heading   float64
-	abeamNm   float64
+	signature routeSignature
 	weight    float64
 }
 
-// trackShape is one track's half of the match: the signature bearings for an
-// arrival or a departure, the heading and the abeam distance for an
-// overflight.
-type trackShape struct {
-	signature [len(routeSignatureNm)]float64
-	heading   float64
-	abeamNm   float64
-}
+// routeSignature is one track's half of the match: the bearing from the field
+// of its station at each of routeSignatureNm, or of its last station for a
+// track that ends short of that distance.
+type routeSignature [len(routeSignatureNm)]float64
 
 // routeSpan is where one route's stations sit in routeBook.stations while the
 // slice is still growing.
@@ -230,9 +221,9 @@ type routeBook struct {
 
 	// segs holds, for every trail, routeMaxStations entries: the fix segment
 	// each of its stations was laid on, by slot. slots is the range of slots
-	// each trail wrote this compute. Both walks lay stations on consecutive
-	// slots (an overflight that doubles back only resumes after the last one
-	// it laid), so every entry inside the range is this compute's. It is how
+	// each trail wrote this compute. The walk lays stations on consecutive
+	// slots from the field out, so every entry inside the range is this
+	// compute's. It is how
 	// cover finds the fixes a tube covers without walking the track a second
 	// time, at two bytes a slot: 640 kB on a full ring.
 	segs  []uint16
@@ -289,11 +280,17 @@ func (b *routeBook) refresh(trails []Trail, version uint64, now time.Time, field
 
 // compute groups every trail and reduces each group to its stations.
 //
-// Grouping is one greedy pass in the ring's order, oldest first, and a trail
-// joins the first route it matches. The route's signature is its first
-// member's and does not move as others join, which keeps a route from
-// creeping round the field one track at a time until it has swallowed its
-// neighbour.
+// Grouping is one greedy pass, newest first, and a trail joins the first
+// route it matches. The route's signature is its first member's and does not
+// move as others join, which keeps a route from creeping round the field one
+// track at a time until it has swallowed its neighbour.
+//
+// Newest first is what decides who goes without when the book is full. On a
+// display left running for a day the stray arrivals and departures that open
+// a route of their own add up past the cap, and a pass oldest first then
+// spent the book on the morning and refused the evening's arrivals, which are
+// the ones on screen at full strength. Taken newest first, the tracks left
+// out are the oldest, which have faded the most.
 func (b *routeBook) compute(trails []Trail, now time.Time, field *corridors) {
 	b.reset(len(trails))
 
@@ -307,7 +304,7 @@ func (b *routeBook) compute(trails []Trail, now time.Time, field *corridors) {
 
 	frame := newFieldFrame(field.field)
 
-	for index := range trails {
+	for index := len(trails) - 1; index >= 0; index-- {
 		b.member[index] = b.join(&trails[index], index, now, field.halfLife, frame)
 	}
 
@@ -322,9 +319,9 @@ func (b *routeBook) compute(trails []Trail, now time.Time, field *corridors) {
 
 // cover marks the fixes of one member that its route's tube covers: the
 // fixes either side of the segments its stations inside the cut were laid
-// on, read back from what join recorded. A member whose stations all lie
-// outside the cut, an overflight lost before it came abeam say, is left
-// untubed and drawn whole as a hairline.
+// on, read back from what join recorded. Every member has a station at the
+// field end, where every tube starts, so every member of a route with a tube
+// has some of its track inside it.
 func (b *routeBook) cover(trail *Trail, index int, cut routeSpan) {
 	slots := b.slots[index]
 	segs := b.segs[index*routeMaxStations : (index+1)*routeMaxStations]
@@ -333,10 +330,6 @@ func (b *routeBook) cover(trail *Trail, index int, cut routeSpan) {
 	for slot := max(cut.from, slots.from); slot < min(cut.to, slots.to); slot++ {
 		seg := int(segs[slot])
 		first, last = min(first, seg), max(last, seg+1)
-	}
-
-	if last < 0 {
-		return
 	}
 
 	trail.Tubed, trail.TubeFrom, trail.TubeTo = true, first, last
@@ -364,16 +357,18 @@ func (b *routeBook) reset(trails int) {
 }
 
 // join stations one trail, finds or opens its route and adds it in, and
-// returns the route's index, or -1 when the trail is in none.
+// returns the route's index, or -1 when the trail is in none: an overflight,
+// a track of fewer than two fixes, or one that finds the book full.
 func (b *routeBook) join(trail *Trail, index int, now time.Time, halfLife time.Duration, frame fieldFrame) int {
 	b.slots[index] = routeSpan{}
 
-	shape, ok := b.station(trail.Points, trail.Class, frame)
-	if !ok {
+	if trail.Class == TrackTransit || len(trail.Points) < 2 {
 		return -1
 	}
 
-	route := b.match(trail.Class, &shape)
+	signature := b.station(trail.Points, trail.Class, frame)
+
+	route := b.match(trail.Class, &signature)
 	if route < 0 {
 		return -1
 	}
@@ -381,22 +376,16 @@ func (b *routeBook) join(trail *Trail, index int, now time.Time, halfLife time.D
 	weight := trackWeight(now.Sub(trail.LostAt), halfLife)
 	b.heads[route].weight += weight
 
-	base := 0
-	if trail.Class == TrackTransit {
-		base = routeMaxStations / 2
-	}
-
 	sums := b.sums[route]
 	segs := b.segs[index*routeMaxStations : (index+1)*routeMaxStations]
 
 	for at := range b.track {
 		point := &b.track[at]
-		slot := point.k + base
-		sums[slot].add(point, weight)
-		segs[slot] = uint16(min(point.seg, math.MaxUint16)) //nolint:gosec // clamped on the same line.
+		sums[point.k].add(point, weight)
+		segs[point.k] = uint16(min(point.seg, math.MaxUint16)) //nolint:gosec // clamped on the same line.
 	}
 
-	b.slots[index] = routeSpan{from: b.track[0].k + base, to: b.track[len(b.track)-1].k + base + 1}
+	b.slots[index] = routeSpan{from: 0, to: len(b.track)}
 
 	return route
 }
@@ -413,11 +402,11 @@ func trackWeight(age, halfLife time.Duration) float64 {
 	return math.Exp2(-max(age, 0).Seconds() / halfLife.Seconds())
 }
 
-// match is the first route of the same class the shape fits, or a new one
-// started from it, or -1 when the book is full.
-func (b *routeBook) match(class TrackClass, shape *trackShape) int {
+// match is the first route of the same class the signature fits, or a new
+// one started from it, or -1 when the book is full.
+func (b *routeBook) match(class TrackClass, signature *routeSignature) int {
 	for route := range b.count {
-		if b.heads[route].class == class && b.heads[route].fits(shape) {
+		if b.heads[route].class == class && b.heads[route].fits(signature) {
 			return route
 		}
 	}
@@ -428,9 +417,7 @@ func (b *routeBook) match(class TrackClass, shape *trackShape) int {
 
 	route := b.count
 	b.count++
-	b.heads[route] = routeHead{
-		class: class, signature: shape.signature, heading: shape.heading, abeamNm: shape.abeamNm,
-	}
+	b.heads[route] = routeHead{class: class, signature: *signature}
 
 	if b.sums[route] == nil {
 		b.sums[route] = new([routeMaxStations]stationSum)
@@ -439,19 +426,11 @@ func (b *routeBook) match(class TrackClass, shape *trackShape) int {
 	return route
 }
 
-// fits reports whether a track's shape belongs to the route. An overflight
-// matches on heading and abeam distance; anything else matches on every
-// signature bearing, where a bearing either side does not have counts as a
-// match, since a short track cannot disagree about a distance it never flew.
-func (h *routeHead) fits(shape *trackShape) bool {
-	if h.class == TrackTransit {
-		return math.Abs(angleBetween(shape.heading, h.heading)) < routeTransitHeadingDeg &&
-			math.Abs(shape.abeamNm-h.abeamNm) < routeTransitAbeamNm
-	}
-
-	for index, bearing := range shape.signature {
-		mine := h.signature[index]
-		if !math.IsNaN(bearing) && !math.IsNaN(mine) && math.Abs(angleBetween(bearing, mine)) >= routeSignatureDeg {
+// fits reports whether a track's signature belongs to the route: every
+// bearing within routeSignatureDeg of the route's own.
+func (h *routeHead) fits(signature *routeSignature) bool {
+	for index, bearing := range signature {
+		if math.Abs(angleBetween(bearing, h.signature[index])) >= routeSignatureDeg {
 			return false
 		}
 	}
@@ -497,13 +476,12 @@ func (b *routeBook) reduce(frame fieldFrame) {
 // no tube. The rules run in a fixed order, the same as the mock-up they were
 // judged on:
 //
-//   - The run starts at the anchor, the station at the field for an arrival
-//     or a departure and the one nearest abeam the field for an overflight,
-//     and grows away from it while every station has routeMinMembers.
+//   - The run starts at the station at the field and grows outward while
+//     every station has routeMinMembers.
 //   - Each station on the run is averaged over routeSmoothStations around it,
 //     the window clipped to the run.
-//   - The run is cut again, from the same anchor, at the first smoothed
-//     station spread wider than routeMaxSpreadNm.
+//   - The run is cut again, from the field, at the first smoothed station
+//     spread wider than routeMaxSpreadNm.
 //
 // A tube is a claim that the tracks agree on a path. Where too few of them
 // flew, or where they have fanned out to their own entry points, they do not,
@@ -511,91 +489,47 @@ func (b *routeBook) reduce(frame fieldFrame) {
 func (b *routeBook) tube(route int) routeSpan {
 	sums := b.sums[route]
 
-	anchor := 0
-	if b.heads[route].class == TrackTransit {
-		anchor = abeam(sums)
-	}
-
-	run := membersRun(sums, anchor)
-	if run.to-run.from < routeMinStations {
+	run := membersRun(sums)
+	if run.to < routeMinStations {
 		return routeSpan{}
 	}
 
-	for index := run.from; index < run.to; index++ {
+	for index := range run.to {
 		b.raw[index] = stationStats(&sums[index])
 	}
 
 	b.smoothRun(run)
 
-	cut := spreadRun(&b.smooth, anchor, run)
-	if cut.to-cut.from < routeMinStations {
+	cut := spreadRun(&b.smooth, run)
+	if cut.to < routeMinStations {
 		return routeSpan{}
 	}
 
 	return cut
 }
 
-// abeam is the slot nearest the point abeam the field that any member passed,
-// taking the earlier slot on a tie. It is the middle slot when no member
-// passed any, which no route can be, and that slot then fails the members
-// floor.
-func abeam(sums *[routeMaxStations]stationSum) int {
-	base := routeMaxStations / 2
-
-	for offset := range base + 1 {
-		if sums[base-offset].n > 0 {
-			return base - offset
-		}
-
-		if base+offset < routeMaxStations && sums[base+offset].n > 0 {
-			return base + offset
-		}
-	}
-
-	return base
-}
-
-// membersRun grows a run of slots both ways from the anchor while each has at
-// least routeMinMembers members. It is empty when the anchor itself has
-// fewer. An arrival or a departure anchors at slot zero, so it only grows
-// outward.
-func membersRun(sums *[routeMaxStations]stationSum, anchor int) routeSpan {
-	if sums[anchor].n < routeMinMembers {
-		return routeSpan{}
-	}
-
-	low, high := anchor, anchor+1
-
-	for low > 0 && sums[low-1].n >= routeMinMembers {
-		low--
-	}
+// membersRun is the run of slots out from the field while each has at least
+// routeMinMembers members, empty when the one at the field has fewer.
+func membersRun(sums *[routeMaxStations]stationSum) routeSpan {
+	high := 0
 
 	for high < routeMaxStations && sums[high].n >= routeMinMembers {
 		high++
 	}
 
-	return routeSpan{from: low, to: high}
+	return routeSpan{to: high}
 }
 
-// spreadRun cuts a run down to the slots, grown both ways from the anchor,
-// whose smoothed spread is within routeMaxSpreadNm. It is empty when the
-// anchor's own is not.
-func spreadRun(smooth *[routeMaxStations]tubeStation, anchor int, run routeSpan) routeSpan {
-	if smooth[anchor].nm > routeMaxSpreadNm {
-		return routeSpan{}
-	}
-
-	low, high := anchor, anchor+1
-
-	for low > run.from && smooth[low-1].nm <= routeMaxSpreadNm {
-		low--
-	}
+// spreadRun cuts a run down to the slots out from the field whose smoothed
+// spread is within routeMaxSpreadNm, empty when the one at the field is not.
+func spreadRun(smooth *[routeMaxStations]tubeStation, run routeSpan) routeSpan {
+	high := 0
 
 	for high < run.to && smooth[high].nm <= routeMaxSpreadNm {
 		high++
 	}
 
-	return routeSpan{from: low, to: high}
+	return routeSpan{to: high}
 }
 
 // smoothRun averages every station on the run over the window around it into
@@ -633,31 +567,21 @@ func (b *routeBook) smoothRun(run routeSpan) {
 	}
 }
 
-// station samples one track every routeStationNm into b.track and measures
-// its shape, reporting false for a track with fewer than two fixes or with no
-// station at all.
-func (b *routeBook) station(points []airplane.PositionEntry, class TrackClass, frame fieldFrame) (trackShape, bool) {
+// station samples one track of two fixes or more every routeStationNm into
+// b.track, outward from the field, and returns its signature.
+func (b *routeBook) station(points []airplane.PositionEntry, class TrackClass, frame fieldFrame) routeSignature {
 	b.track = b.track[:0]
-
-	if len(points) < 2 {
-		return trackShape{}, false
-	}
-
-	if class == TrackTransit {
-		return b.stationAlong(points, frame)
-	}
-
 	b.stationOut(points, class == TrackInbound, frame)
 
-	var shape trackShape
+	var signature routeSignature
 
 	last := len(b.track) - 1
 	for index, nm := range routeSignatureNm {
 		point := &b.track[min(int(math.Round(nm/routeStationNm)), last)]
-		shape.signature[index] = bearingDeg(point.x, point.y)
+		signature[index] = bearingDeg(point.x, point.y)
 	}
 
-	return shape, true
+	return signature
 }
 
 // stationOut walks a track outward from the field, an arrival from its last
@@ -693,60 +617,6 @@ func (b *routeBook) stationOut(points []airplane.PositionEntry, reverse bool, fr
 
 		walked += legNm
 	}
-}
-
-// stationAlong walks an overflight along its own axis, the line from its first
-// fix to its last, with the point abeam the field as station zero. Stations
-// before that point have negative numbers.
-//
-// A track that doubles back over stations it has already passed keeps the
-// first pass, which on an airway is the only one there is.
-//
-//nolint:varnamelen // k, the axis dx, dy, the ends and s0, s1 along it read as the geometry.
-func (b *routeBook) stationAlong(points []airplane.PositionEntry, frame fieldFrame) (trackShape, bool) {
-	firstX, firstY := frame.offset(&points[0])
-	lastX, lastY := frame.offset(&points[len(points)-1])
-
-	dx, dy := lastX-firstX, lastY-firstY
-	length := math.Hypot(dx, dy)
-
-	if length == 0 {
-		length = 1
-	}
-
-	dx, dy = dx/length, dy/length
-	half := routeMaxStations / 2
-	lastK := math.MinInt
-
-	for index := 0; index+1 < len(points); index++ {
-		from, to := &points[index], &points[index+1]
-		ax, ay := frame.offset(from)
-		bx, by := frame.offset(to)
-		s0, s1 := ax*dx+ay*dy, bx*dx+by*dy
-		span := s1 - s0
-
-		for k := int(math.Ceil(s0 / routeStationNm)); float64(k)*routeStationNm <= s1; k++ {
-			if k <= lastK || k < -half || k >= half {
-				continue
-			}
-
-			share := 0.0
-			if span != 0 {
-				share = (float64(k)*routeStationNm - s0) / span
-			}
-
-			point := interpolate(k, ax, ay, bx, by, from, to, share)
-			point.seg = index
-			b.track = append(b.track, point)
-			lastK = k
-		}
-	}
-
-	if len(b.track) == 0 {
-		return trackShape{}, false
-	}
-
-	return trackShape{heading: bearingDeg(dx, dy), abeamNm: -firstX*dy + firstY*dx}, true
 }
 
 // interpolate is the point share of the way from one fix to the next. The
