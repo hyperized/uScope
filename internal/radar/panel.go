@@ -470,7 +470,10 @@ func (s *Scene) capEngaged(which capToggle) bool {
 	case capBar:
 		return s.minimalBar
 	case capLights:
-		return s.lights
+		// Lit under auto as well as on. The two only differ by day, and
+		// there the picture says which one it is: an engaged cap over an
+		// aircraft with no lights is auto.
+		return s.lights.engaged()
 	case capStars:
 		return s.stars
 	case capCorridors:

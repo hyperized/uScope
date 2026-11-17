@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/sprite"
+	"github.com/hyperized/uScope/pkg/sun"
 )
 
 // The two addresses the phase cases compare, and the frame intervals the
@@ -27,7 +29,7 @@ const (
 // lightScene is a scene with the lights on over pal, the way New leaves it,
 // with nothing else set.
 func lightScene(pal theme.Palette) *Scene {
-	scene := &Scene{lights: true}
+	scene := &Scene{lights: LightsOn}
 	scene.SetPalette(pal)
 
 	return scene
@@ -429,7 +431,7 @@ func TestDrawLights3PutsEachLightOnItsVertex(t *testing.T) {
 			t.Parallel()
 
 			scene := posedAt(cam, point3{north: modelNearNm}, 0, 0, 0)
-			scene.lights = true
+			scene.lights = LightsOn
 			scene.SetPalette(theme.Night)
 			scene.elapsed = momentFor(t, testCase.lit)
 			scene.flashFrom = scene.elapsed
@@ -465,10 +467,10 @@ func TestDrawLights3SkipsWhatIsNotThere(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name   string
-		lights bool
+		lights LightsMode
 	}{
-		{name: "lights off", lights: false},
-		{name: "every vertex refused", lights: true},
+		{name: "lights off", lights: LightsOff},
+		{name: "every vertex refused", lights: LightsOn},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -477,7 +479,7 @@ func TestDrawLights3SkipsWhatIsNotThere(t *testing.T) {
 			scene.lights = testCase.lights
 			scene.SetPalette(theme.Night)
 
-			if testCase.lights {
+			if testCase.lights == LightsOn {
 				scene.posed.seen = [modelVertexCount]bool{}
 			}
 
@@ -509,22 +511,25 @@ func TestDrawLightsFlatSprite(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
 		icon      *sprite.Bitmap
-		lights    bool
+		lights    LightsMode
 		lit       flashes
 		wantPort  color.RGBA
 		wantStarb color.RGBA
 	}{
-		{name: "dark", icon: sprite.Airplane(), lights: true, wantPort: theme.Night.Warn, wantStarb: theme.Night.OK},
 		{
-			name: "strobe lit", icon: sprite.Airplane(), lights: true, lit: flashes{strobe: true},
+			name: "dark", icon: sprite.Airplane(), lights: LightsOn,
+			wantPort: theme.Night.Warn, wantStarb: theme.Night.OK,
+		},
+		{
+			name: "strobe lit", icon: sprite.Airplane(), lights: LightsOn, lit: flashes{strobe: true},
 			wantPort: theme.Night.Ink, wantStarb: theme.Night.Ink,
 		},
 		{
-			name: "beacon lit", icon: sprite.Airplane(), lights: true, lit: flashes{beacon: true},
+			name: "beacon lit", icon: sprite.Airplane(), lights: LightsOn, lit: flashes{beacon: true},
 			wantPort: theme.Night.Warn, wantStarb: theme.Night.OK,
 		},
 		{name: "lights off", icon: sprite.Airplane()},
-		{name: "a sprite with no lights", icon: blob, lights: true},
+		{name: "a sprite with no lights", icon: blob, lights: LightsOn},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -559,13 +564,13 @@ func TestLampScales(t *testing.T) {
 	t.Parallel()
 
 	canv := lightCanvas(t)
-	(&Scene{}).lamp(canv, 10, 10, image.Pt(-6, 1), 2, theme.Night.Warn)
+	(&Scene{}).lamp(canv, 10, 10, image.Pt(-6, 1), 2, theme.Night.Warn, 1)
 
 	if got := countRGBA(canv, theme.Night.Warn); got != 0 {
 		t.Errorf("a lamp off the left edge painted %d pixels, want 0", got)
 	}
 
-	(&Scene{}).lamp(canv, 20, 20, image.Pt(-6, 1), 2, theme.Night.Warn)
+	(&Scene{}).lamp(canv, 20, 20, image.Pt(-6, 1), 2, theme.Night.Warn, 1)
 
 	if got := countRGBA(canv, theme.Night.Warn); got != 4 {
 		t.Errorf("a scale-two lamp painted %d pixels, want a 2x2 block", got)
@@ -775,4 +780,217 @@ func distance(first, second color.RGBA) int {
 	diff := func(a, b uint8) int { return max(int(a)-int(b), int(b)-int(a)) }
 
 	return diff(first.R, second.R) + diff(first.G, second.G) + diff(first.B, second.B)
+}
+
+// unspelledLights is a LightsMode outside the allow list, which only a caller
+// building Settings by hand can hand the scene. It is untyped so the
+// exhaustive linter does not count it as a fourth mode.
+const unspelledLights = "dim"
+
+// TestLightsModeNext checks s walks on, off, auto and back to on, and that a
+// mode nobody spelled starts from off the way the scene reads it.
+func TestLightsModeNext(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		from, want LightsMode
+	}{
+		{from: LightsOn, want: LightsOff},
+		{from: LightsOff, want: LightsAuto},
+		{from: LightsAuto, want: LightsOn},
+		{from: "", want: LightsAuto},
+		{from: unspelledLights, want: LightsAuto},
+	} {
+		t.Run(string(testCase.from), func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.from.next(); got != testCase.want {
+				t.Errorf("%q.next() = %q, want %q", testCase.from, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestApplyLightsReadsUnknownAsOff checks Apply keeps the scene on one of the
+// three spellings, so the cap and the cycle never meet a fourth.
+func TestApplyLightsReadsUnknownAsOff(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []LightsMode{"", unspelledLights, LightsOff, LightsOn, LightsAuto} {
+		scene := &Scene{}
+		scene.Apply(Settings{Lights: mode})
+
+		if want := mode.orDefault(); scene.lights != want {
+			t.Errorf("Apply(%q) left %q, want %q", mode, scene.lights, want)
+		}
+	}
+
+	if (&Scene{lights: unspelledLights}).capEngaged(capLights) {
+		t.Error("an unspelled mode lit the S cap, want it read as off")
+	}
+}
+
+// TestLightsVisibility pins the fade's two ends and the floor under it:
+// nothing from ten degrees up, all of it from the horizon down, a straight
+// slide between, and nothing below lightsFloor.
+func TestLightsVisibility(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		elevation float64
+		want      float64
+	}{
+		{name: "noon", elevation: 45, want: 0},
+		{name: "the sky's last keyframe", elevation: lowSunElevation, want: 0},
+		{name: "under the floor", elevation: 9.5, want: 0},
+		{name: "at the floor", elevation: 9, want: lightsFloor},
+		{name: "half way", elevation: 5, want: 0.5},
+		{name: "sunset", elevation: sun.Sunset, want: 1},
+		{name: "civil twilight", elevation: -3, want: 1},
+		{name: "night", elevation: -35, want: 1},
+		{name: "NaN", elevation: math.NaN(), want: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := lightsVisibility(testCase.elevation); math.Abs(got-testCase.want) > 1e-9 {
+				t.Errorf("lightsVisibility(%v) = %v, want %v", testCase.elevation, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestLightShare checks each mode against what the sun block knows: on and
+// off ignore it, auto reads its elevation, and auto with no receiver position
+// is night, the auto theme's answer for the same case.
+func TestLightShare(t *testing.T) {
+	t.Parallel()
+
+	noon := daylight{known: true, elevation: 40}
+	dusk := daylight{known: true, elevation: 5}
+	nowhere := daylight{elevation: 40}
+
+	for _, testCase := range []struct {
+		name  string
+		mode  LightsMode
+		sky   daylight
+		share float64
+	}{
+		{name: "on at noon", mode: LightsOn, sky: noon, share: 1},
+		{name: "off at night", mode: LightsOff, sky: daylight{known: true, elevation: -20}},
+		{name: "unset", mode: "", sky: dusk},
+		{name: "auto at noon", mode: LightsAuto, sky: noon},
+		{name: "auto at dusk", mode: LightsAuto, sky: dusk, share: 0.5},
+		{name: "auto with no position", mode: LightsAuto, sky: nowhere, share: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{lights: testCase.mode, daylight: testCase.sky}
+			if got := scene.lightShare(); got != testCase.share {
+				t.Errorf("lightShare() = %v, want %v", got, testCase.share)
+			}
+		})
+	}
+}
+
+// TestLightsFadeAcrossDuskAndDawn follows a day at the test receiver through
+// the sun block's own resolve, ten minutes a step: through dusk the share
+// never falls and through dawn it never rises, both run from none to all,
+// and every step is the same function of the elevation, so a dawn at the
+// height of a dusk draws the lights alike.
+func TestLightsFadeAcrossDuskAndDawn(t *testing.T) {
+	t.Parallel()
+
+	const step = 10 * time.Minute
+
+	receiver := source.Receiver{Latitude: 52.3105, Longitude: 4.7683, Mode: source.FixManual}
+	day := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name       string
+		from, to   time.Duration
+		brightens  bool
+		first, end float64
+	}{
+		{name: "dusk", from: 16 * time.Hour, to: 18*time.Hour + 30*time.Minute, brightens: true, first: 0, end: 1},
+		{name: "dawn", from: 4*time.Hour + 30*time.Minute, to: 7 * time.Hour, first: 1, end: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{lights: LightsAuto}
+			previous := testCase.first
+
+			for offset := testCase.from; offset <= testCase.to; offset += step {
+				scene.resolveDaylight(source.Frame{Now: day.Add(offset), Receiver: receiver})
+
+				share, own := scene.lightShare(), lightsVisibility(scene.daylight.elevation)
+				if share != own {
+					t.Fatalf("%v: share %v is not the elevation's own %v", offset, share, own)
+				}
+
+				if testCase.brightens && share < previous || !testCase.brightens && share > previous {
+					t.Errorf("%v: share went from %v to %v", offset, previous, share)
+				}
+
+				previous = share
+			}
+
+			if previous != testCase.end {
+				t.Errorf("the run ended on %v, want %v", previous, testCase.end)
+			}
+		})
+	}
+}
+
+// TestDrawLightsFadesTheColourNotTheShape checks a faded light on the flat
+// sprite: the port tip moves steadily from the sprite's own colour towards the
+// red as the sun goes down, it is the same block at every share, and the
+// floor leaves the tip untouched rather than a few levels off.
+func TestDrawLightsFadesTheColourNotTheShape(t *testing.T) {
+	t.Parallel()
+
+	const centre = 20
+
+	tip := func(elevation float64) (color.RGBA, int) {
+		scene := lightScene(theme.Night)
+		scene.icon = sprite.Airplane()
+		scene.lights = LightsAuto
+		scene.daylight = daylight{known: true, elevation: elevation}
+		scene.elapsed = momentFor(t, flashes{})
+		scene.flashFrom = scene.elapsed
+
+		canv := lightCanvas(t)
+		canv.Clear(theme.Night.Ink)
+		lay := layout{dst: canv, scale: 1}
+		scene.drawLights(&lay, centre, centre, airplane.Snapshot{ICAO: lightICAO})
+
+		return canv.Image().RGBAAt(centre-6, centre+1), countRGBA(canv, theme.Night.Ink)
+	}
+
+	untouched, background := tip(lowSunElevation - 0.5)
+	if untouched != theme.Night.Ink {
+		t.Errorf("under the floor the port tip is %v, want it left at %v", untouched, theme.Night.Ink)
+	}
+
+	previous := untouched
+
+	for _, elevation := range []float64{9, 7, 5, 3, 1, 0} {
+		got, rest := tip(elevation)
+		if rest != background-3 {
+			t.Errorf("at %v degrees %d pixels changed, want the three tips", elevation, background-rest)
+		}
+
+		if distance(got, theme.Night.Warn) >= distance(previous, theme.Night.Warn) {
+			t.Errorf("at %v degrees the port tip %v is no nearer red than %v", elevation, got, previous)
+		}
+
+		previous = got
+	}
+
+	if previous != theme.Night.Warn {
+		t.Errorf("at the horizon the port tip is %v, want the full %v", previous, theme.Night.Warn)
+	}
 }

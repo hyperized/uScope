@@ -75,8 +75,9 @@ func (s *Scene) handleKey(key input.Key) bool {
 // a bar across the top of the two that do not, j gives the bare 3D view its
 // strip board, and anything not bound here falls through to the camera keys, which only the 3D view takes.
 //
-// s turns the aircraft lights on and off in every view. They start on unless
-// --lights off says otherwise, so a press is how they go without a restart.
+// s walks the aircraft lights through on, off and auto in every view, from
+// wherever --lights started them, so a press is how they change without a
+// restart. See LightsMode.next for the order.
 //
 // u turns the corridor tubes on and off in every view, on the one switch
 // --corridors sets. There is no bare pair the way there is for a and m: the
@@ -107,7 +108,7 @@ func (s *Scene) handleRune(value rune) bool {
 	case 'b', 'B':
 		return s.toggleBiasTee()
 	case 's', 'S':
-		s.lights = !s.lights
+		s.lights = s.lights.next()
 	default:
 		return s.handleViewRune(value)
 	}

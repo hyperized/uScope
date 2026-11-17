@@ -133,7 +133,7 @@ var (
 	errMinAirport = errors.New(appName + ": --minimal-airports must be on or off")
 	errMinBar     = errors.New(appName + ": --minimal-bar must be on or off")
 	errMinBoard   = errors.New(appName + ": --minimal-board must be on or off")
-	errLights     = errors.New(appName + ": --lights must be on or off")
+	errLights     = errors.New(appName + ": --lights must be on, off or auto")
 	errRange      = errors.New(appName + ": --range must be auto or a range the scope can show")
 	errBattery    = errors.New(appName + ": --battery must not be empty")
 	errLatitude   = errors.New(appName + ": --lat out of range")
@@ -187,7 +187,7 @@ type config struct {
 	minimalAirports bool
 	minimalBar      bool
 	minimalBoard    bool
-	lights          bool
+	lights          radar.LightsMode
 	stars           radar.Toggle
 	corridors       radar.Toggle
 	rangeNm         float64
@@ -365,7 +365,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 		"draw the flight strip board in a column down the right quarter of minimal3d: on or off. "+
 			"j flips it while it runs")
 	set.StringVar(&raw.lights, "lights", defaultOn,
-		"draw the aircraft's navigation lights, strobes and beacon: on or off")
+		"draw the aircraft's navigation lights, strobes and beacon: on, off, or auto to leave them off "+
+			"in daylight and fade them in as the sun sets. s cycles them while it runs")
 	set.StringVar(&raw.scopeRange, "range", defaultRange,
 		"scope range in nautical miles, or auto to fit the aircraft on the field")
 	// The flag is spelled the American way and the Go identifiers behind it
@@ -993,7 +994,7 @@ func (raw rawFlags) overlays() (radar.Settings, error) {
 		return radar.Settings{}, err
 	}
 
-	lights, err := parseMinimal(raw.lights, errLights)
+	lights, err := parseLights(raw.lights)
 	if err != nil {
 		return radar.Settings{}, err
 	}
@@ -1042,7 +1043,17 @@ func (raw rawFlags) minimalSwitches() (radar.Settings, error) {
 	}, nil
 }
 
-// parseMinimal reads one of the bare views' switches, or --lights, against the
+// parseLights reads --lights against internal/radar's allow list.
+func parseLights(text string) (radar.LightsMode, error) {
+	mode, err := radar.ParseLights(text)
+	if err != nil {
+		return radar.LightsOn, fmt.Errorf("%w: %w", errLights, err)
+	}
+
+	return mode, nil
+}
+
+// parseMinimal reads one of the bare views' switches against the
 // same on/off allow list --shore uses, wrapping a refusal in the flag's own
 // sentinel. It answers a bool because the scene's own default for each is off
 // and a Toggle's zero reads as on; see radar.Settings.MinimalShore.

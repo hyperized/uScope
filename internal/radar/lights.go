@@ -1,6 +1,8 @@
 package radar
 
 import (
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/sprite"
+	"github.com/hyperized/uScope/pkg/sun"
 )
 
 // The exterior lights' timing, brightness and size.
@@ -101,6 +104,135 @@ const (
 	// core nothing to stand out against.
 	monoBeaconAlpha = 0.5
 )
+
+// lightsFloor is the weakest share of their strength the lights are drawn at
+// under LightsAuto. Below it a strobe would be a full-size disc a few levels
+// off whatever it sits on, which reads as a smudge on the screen rather than
+// as a light, so the lights go out instead. It cuts in with the sun at nine
+// degrees, where they have only just begun to fade in.
+const lightsFloor = 0.1
+
+// LightsMode is when the aircraft carry their exterior lights.
+//
+// It is a string type for the reason Toggle is one, but its zero value reads
+// as off rather than on: the field it replaced was a bool, a Settings built by
+// hand had the lights off until it said otherwise, and the tests that compare
+// two frames drawn at different clocks rely on that. The flag's default is
+// LightsOn.
+type LightsMode string
+
+// The three spellings --lights accepts.
+const (
+	// LightsOn draws the lights whatever the time of day.
+	LightsOn LightsMode = "on"
+
+	// LightsOff draws none.
+	LightsOff LightsMode = "off"
+
+	// LightsAuto follows the sun at the receiver: none in full daylight,
+	// fading in as the sun drops to the horizon, all of them from sunset to
+	// sunrise. See lightsVisibility.
+	LightsAuto LightsMode = "auto"
+)
+
+// ErrLights is returned for a lights value outside the allow list.
+var ErrLights = errors.New("radar: value must be on, off or auto")
+
+// ParseLights reads a --lights value against its allow list, case sensitive
+// the way ParseToggle is.
+func ParseLights(text string) (LightsMode, error) {
+	switch mode := LightsMode(text); mode {
+	case LightsOn, LightsOff, LightsAuto:
+		return mode, nil
+	default:
+		return LightsOn, fmt.Errorf("%w: %q", ErrLights, text)
+	}
+}
+
+// orDefault spells the zero LightsMode, and anything outside the three, as
+// the mode it reads as, which is off.
+func (m LightsMode) orDefault() LightsMode {
+	if m == LightsOn || m == LightsAuto {
+		return m
+	}
+
+	return LightsOff
+}
+
+// engaged reports whether the S cap shows its engaged bar for this mode: under
+// on and auto, and not under off or a mode nobody spelled.
+func (m LightsMode) engaged() bool {
+	return m == LightsOn || m == LightsAuto
+}
+
+// next is the mode s moves to: on, off, auto and round again. It is the order
+// the theme's l key walks, the two fixed answers and then the sun's, and it
+// keeps the one press that always turned the lights off from their default.
+func (m LightsMode) next() LightsMode {
+	switch m.orDefault() {
+	case LightsOn:
+		return LightsOff
+	case LightsOff:
+		return LightsAuto
+	case LightsAuto:
+		fallthrough
+	default:
+		return LightsOn
+	}
+}
+
+// lightsVisibility is the share of their strength the lights have under
+// LightsAuto with the sun at elevation: none from lowSunElevation (ten degrees)
+// up, all of it from the horizon down, and a straight slide between, cut to
+// none under lightsFloor.
+//
+// The two ends are the sky's and the auto theme's rather than new numbers.
+// Ten degrees is where the tilted views' sky stops changing and holds its
+// daytime blue, so above it nothing on screen says the day is ending. The
+// horizon is where the auto theme turns to night and the header starts
+// calling it civil twilight, so by the time anything reads dusk the lights
+// are at full strength, and stay there through all of twilight. The stars
+// fade over the six degrees below the horizon instead; starting the lights
+// there would leave the first half of dusk without them.
+//
+// A NaN is night, the side the auto theme errs on.
+func lightsVisibility(elevation float64) float64 {
+	if !(elevation > sun.Sunset) {
+		return 1
+	}
+
+	share := (lowSunElevation - elevation) / (lowSunElevation - sun.Sunset)
+	if share < lightsFloor {
+		return 0
+	}
+
+	return min(share, 1)
+}
+
+// lightShare is how strongly this frame's lights are drawn, 0 for none.
+//
+// Under LightsAuto it reads the elevation the sun block already worked out
+// for this frame, so the lights cost a comparison and never a call to the
+// sun. With no receiver position it is 1, because the auto theme draws night
+// then too, and a picture that is night everywhere else should not be the one
+// place the lights are missing. The fixed themes do not pin it: the lights
+// follow the real sky the way the stars do whatever the palette is.
+func (s *Scene) lightShare() float64 {
+	switch s.lights {
+	case LightsOn:
+		return 1
+	case LightsAuto:
+		if !s.daylight.known {
+			return 1
+		}
+
+		return lightsVisibility(s.daylight.elevation)
+	case LightsOff:
+		fallthrough
+	default:
+		return 0
+	}
+}
 
 // FNV-1a's 64-bit offset basis and prime, from the reference at
 // http://www.isthe.com/chongo/tech/comp/fnv/.
@@ -249,7 +381,8 @@ func (s *Scene) lightInks() lightInks {
 // model it belongs to, before the next aircraft is projected. A light whose
 // vertex the camera refused is skipped like any face touching it.
 func (s *Scene) drawLights3(dst *canvas.Canvas, cam camera3, plane airplane.Snapshot) {
-	if !s.lights {
+	share := s.lightShare()
+	if share <= 0 {
 		return
 	}
 
@@ -257,31 +390,39 @@ func (s *Scene) drawLights3(dst *canvas.Canvas, cam camera3, plane airplane.Snap
 	steady, flash := int(cam.modelSpan*navLightSpan), int(cam.modelSpan*flashLightSpan)
 	beacon := int(cam.modelSpan * beaconLightSpan)
 
-	s.lamp3(dst, vertWingTipLeft, steady, inks.port)
-	s.lamp3(dst, vertWingTipRight, steady, inks.starboard)
-	s.lamp3(dst, vertTail, steady, inks.tail)
+	s.lamp3(dst, vertWingTipLeft, steady, inks.port, share)
+	s.lamp3(dst, vertWingTipRight, steady, inks.starboard, share)
+	s.lamp3(dst, vertTail, steady, inks.tail, share)
 
+	// The fade only reaches the colour. Which frames a flash lights is the
+	// same at every share, so a light fading in keeps the rhythm it will have
+	// at night rather than finding one as it brightens.
 	lit := s.flashesFor(plane.ICAO)
 
 	if lit.strobe {
-		s.lamp3(dst, vertWingTipLeft, flash, inks.strobe)
-		s.lamp3(dst, vertWingTipRight, flash, inks.strobe)
-		s.lamp3(dst, vertTail, flash, inks.strobe)
+		s.lamp3(dst, vertWingTipLeft, flash, inks.strobe, share)
+		s.lamp3(dst, vertWingTipRight, flash, inks.strobe, share)
+		s.lamp3(dst, vertTail, flash, inks.strobe, share)
 	}
 
 	if lit.beacon {
-		s.lamp3(dst, vertBeacon, beacon, inks.beacon)
-		s.lamp3(dst, vertBeacon, beacon/2, inks.beaconCore)
+		s.lamp3(dst, vertBeacon, beacon, inks.beacon, share)
+		s.lamp3(dst, vertBeacon, beacon/2, inks.beaconCore, share)
 	}
 }
 
-// lamp3 fills one light as a disc on a projected vertex.
-func (s *Scene) lamp3(dst *canvas.Canvas, vertex, radius int, col color.RGBA) {
+// lamp3 mixes one light as a disc on a projected vertex, at share of its
+// colour over whatever is under it: a share of 1 is a plain fill.
+//
+// It blends over the picture rather than fading towards the field the way
+// Scene.fade does, because a 3D light sits on the model and on the sky, and a
+// disc of the field's colour on either would look like a hole.
+func (s *Scene) lamp3(dst *canvas.Canvas, vertex, radius int, col color.RGBA, share float64) {
 	if !s.posed.seen[vertex] {
 		return
 	}
 
-	dst.FillCircle(s.posed.atX[vertex], s.posed.atY[vertex], radius, col)
+	dst.BlendCircle(s.posed.atX[vertex], s.posed.atY[vertex], radius, col, share)
 }
 
 // drawLights puts the lights on the flat scope's silhouette centred at x, y:
@@ -301,7 +442,9 @@ func (s *Scene) lamp3(dst *canvas.Canvas, vertex, radius int, col color.RGBA) {
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
 func (s *Scene) drawLights(lay *layout, x, y int, plane airplane.Snapshot) {
 	where, carried := s.icon.Lights()
-	if !s.lights || !carried {
+	share := s.lightShare()
+
+	if share <= 0 || !carried {
 		return
 	}
 
@@ -315,12 +458,12 @@ func (s *Scene) drawLights(lay *layout, x, y int, plane airplane.Snapshot) {
 	turn := sprite.TurnTo(plane.Heading)
 	scale := lay.unit()
 
-	s.lamp(lay.dst, x, y, s.icon.Landing(where.Port, turn), scale, inks.port)
-	s.lamp(lay.dst, x, y, s.icon.Landing(where.Starboard, turn), scale, inks.starboard)
-	s.lamp(lay.dst, x, y, s.icon.Landing(where.Tail, turn), scale, inks.tail)
+	s.lamp(lay.dst, x, y, s.icon.Landing(where.Port, turn), scale, inks.port, share)
+	s.lamp(lay.dst, x, y, s.icon.Landing(where.Starboard, turn), scale, inks.starboard, share)
+	s.lamp(lay.dst, x, y, s.icon.Landing(where.Tail, turn), scale, inks.tail, share)
 
 	if lit.beacon {
-		s.beacon(lay.dst, x, y, s.icon.Landing(where.Beacon, turn), scale, inks)
+		s.beacon(lay.dst, x, y, s.icon.Landing(where.Beacon, turn), scale, inks, share)
 	}
 }
 
@@ -328,10 +471,10 @@ func (s *Scene) drawLights(lay *layout, x, y int, plane airplane.Snapshot) {
 // from x, y: a plus of five pixels at scale one, where a disc of radius two
 // would swallow the fuselage and half of each wing root, and a disc of twice
 // the scale above it. The core is half the radius, a single pixel at scale
-// one.
+// one. Both are mixed in at share, the way lamp3 mixes the 3D lights.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (*Scene) beacon(dst *canvas.Canvas, x, y int, offset image.Point, scale int, inks lightInks) {
+func (*Scene) beacon(dst *canvas.Canvas, x, y int, offset image.Point, scale int, inks lightInks, share float64) {
 	// The block's own centre, not its top-left corner, so the disc sits on
 	// the fuselage at every scale rather than drifting down and right.
 	centreX, centreY := x+offset.X*scale+scale/2, y+offset.Y*scale+scale/2
@@ -341,15 +484,15 @@ func (*Scene) beacon(dst *canvas.Canvas, x, y int, offset image.Point, scale int
 		radius = 2 * scale
 	}
 
-	dst.FillCircle(centreX, centreY, radius, inks.beacon)
-	dst.FillCircle(centreX, centreY, radius/2, inks.beaconCore)
+	dst.BlendCircle(centreX, centreY, radius, inks.beacon, share)
+	dst.BlendCircle(centreX, centreY, radius/2, inks.beaconCore, share)
 }
 
-// lamp fills the block the sprite stamped at offset from x, y, at the scale it
-// was stamped at.
+// lamp mixes col at share into the block the sprite stamped at offset from x,
+// y, at the scale it was stamped at. A share of 1 replaces the block.
 //
 //nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
-func (*Scene) lamp(dst *canvas.Canvas, x, y int, offset image.Point, scale int, col color.RGBA) {
+func (*Scene) lamp(dst *canvas.Canvas, x, y int, offset image.Point, scale int, col color.RGBA, share float64) {
 	left, top := x+offset.X*scale, y+offset.Y*scale
-	dst.FillRect(image.Rect(left, top, left+scale, top+scale), col)
+	dst.BlendRect(image.Rect(left, top, left+scale, top+scale), col, share)
 }

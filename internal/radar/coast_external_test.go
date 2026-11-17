@@ -179,7 +179,7 @@ func TestCoastingAircraftCarriesNoLights(t *testing.T) {
 	t.Parallel()
 
 	set := coastSettings()
-	set.Lights = true
+	set.Lights = radar.LightsOn
 
 	live := drawOnce(t, sceneFrame(highPlane()), set, pressOff)
 	if countColour(live, live.Bounds(), theme.Night.Warn) == 0 {

@@ -203,7 +203,7 @@ func defaultConfig() config {
 		orbit:      radar.ToggleOn,
 		gpsd:       wantDefaultGPSD(),
 
-		lights:          true,
+		lights:          radar.LightsOn,
 		minimalAirports: true,
 
 		corridorHalfLife: source.DefaultCorridorHalfLife,
@@ -3171,21 +3171,23 @@ func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
 	}
 }
 
-// TestParseFlagsLights covers --lights: on by default, off when asked, and
-// the same two-spelling allow list every other on/off flag has.
+// TestParseFlagsLights covers --lights: on by default, off or auto when
+// asked, and an allow list of exactly those three spellings.
 func TestParseFlagsLights(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
 		name    string
 		args    []string
-		want    bool
+		want    radar.LightsMode
 		wantErr error
 	}{
-		{name: caseDefault, want: true},
-		{name: "on", args: []string{flagLights, defaultOn}, want: true},
-		{name: "off", args: []string{flagLights, offValue}, want: false},
+		{name: caseDefault, want: radar.LightsOn},
+		{name: "on", args: []string{flagLights, defaultOn}, want: radar.LightsOn},
+		{name: "off", args: []string{flagLights, offValue}, want: radar.LightsOff},
+		{name: "auto", args: []string{flagLights, string(radar.LightsAuto)}, want: radar.LightsAuto},
 		{name: caseWrongCase, args: []string{flagLights, "Off"}, wantErr: errLights},
+		{name: "auto in capitals", args: []string{flagLights, "AUTO"}, wantErr: radar.ErrLights},
 		{name: "bool spelling", args: []string{flagLights, "no"}, wantErr: errLights},
 		{name: caseEmpty, args: []string{flagLights, ""}, wantErr: errLights},
 	} {

@@ -34,6 +34,11 @@ type daylight struct {
 
 	condition sun.Condition
 
+	// elevation is the sun's height at the receiver in degrees that the
+	// condition was read from, kept for the lights under LightsAuto so they
+	// ride on this answer instead of asking the sun a second time.
+	elevation float64
+
 	// times is the formatted "↑ 05:19 ↓ 22:07", a view into buf. Either half
 	// is missing on a day the sun does not rise or does not set, and both are
 	// on a day it does neither, which leaves the word on its own.
@@ -63,7 +68,8 @@ func (s *Scene) resolveDaylight(frame source.Frame) {
 	}
 
 	lat, lon, now := s.daylight.lat, s.daylight.lon, frame.Now
-	s.daylight.condition = sun.ConditionOf(sun.Elevation(lat, lon, now))
+	s.daylight.elevation = sun.Elevation(lat, lon, now)
+	s.daylight.condition = sun.ConditionOf(s.daylight.elevation)
 
 	out := s.daylight.buf[:0]
 	if rise, found := sun.Rise(lat, lon, now, now.Location()); found {

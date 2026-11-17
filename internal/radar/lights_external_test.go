@@ -1,13 +1,14 @@
 package radar_test
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"testing"
 	"time"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
-	"github.com/hyperized/uScope/internal/input"
+	"github.com/hyperized/uAirwaves/pkg/scope"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/internal/theme"
@@ -84,22 +85,24 @@ func TestLightsPortIsRedAndStarboardGreen(t *testing.T) {
 	}{
 		{
 			name: "3D, seen from behind", heading: 0, wantLeft: true,
-			set: radar.Settings{View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff, Lights: true},
+			set: radar.Settings{
+				View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff, Lights: radar.LightsOn,
+			},
 		},
 		{
 			name: "3D, seen from in front", heading: 0,
 			set: radar.Settings{
 				View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff, Azimuth: 180,
-				Lights: true,
+				Lights: radar.LightsOn,
 			},
 		},
 		{
 			name: "flat, heading north", heading: 0, wantLeft: true,
-			set: radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm, Lights: true},
+			set: radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm, Lights: radar.LightsOn},
 		},
 		{
 			name: "flat, heading south", heading: 180,
-			set: radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm, Lights: true},
+			set: radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm, Lights: radar.LightsOn},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -160,7 +163,7 @@ func TestLightsAreOnlyWhereThereIsAModel(t *testing.T) {
 
 			pictures := [2]*canvas.Canvas{}
 
-			for index, lights := range []bool{true, false} {
+			for index, lights := range []radar.LightsMode{radar.LightsOn, radar.LightsOff} {
 				scene, canv, _ := sceneOn(t, panelWidth, panelHeight, testCase.frame)
 				set := testCase.set
 				set.Lights = lights
@@ -206,7 +209,9 @@ func TestLightsFlashOverTime(t *testing.T) {
 		span  = 2 * time.Second
 	)
 
-	set := radar.Settings{View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff, Lights: true}
+	set := radar.Settings{
+		View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff, Lights: radar.LightsOn,
+	}
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(lightsPlane(0)))
 	scene.Apply(set)
 	scene.Draw(canv, 0)
@@ -240,24 +245,49 @@ func TestLightsAllocations(t *testing.T) {
 		name string
 		set  radar.Settings
 		uhd  bool
+
+		// dusk draws the fleet with the sun five degrees up, where auto
+		// mixes the lights in at half strength rather than filling them.
+		dusk bool
 	}{
-		{name: "the scope", set: radar.Settings{Colour: radar.ColourAltitude, Lights: true}},
+		{name: "the scope", set: radar.Settings{Colour: radar.ColourAltitude, Lights: radar.LightsOn}},
 		{
 			name: "the bare flat view",
-			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal, Lights: true},
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal, Lights: radar.LightsOn},
 		},
 		{
 			name: "the perspective view",
-			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D, Lights: true},
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D, Lights: radar.LightsOn},
 		},
 		{
 			name: "the bare 3D view at 3840x2160",
-			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Lights: true},
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal3D, Lights: radar.LightsOn},
 			uhd:  true,
+		},
+		{
+			name: "the scope with the lights on auto",
+			set:  radar.Settings{Colour: radar.ColourAltitude, Lights: radar.LightsAuto},
+		},
+		{
+			name: "the perspective view with the lights on auto at dusk",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.View3D, Lights: radar.LightsAuto},
+			dusk: true,
+		},
+		{
+			name: "the bare flat view with the lights on auto at dusk",
+			set:  radar.Settings{Colour: radar.ColourAltitude, View: radar.ViewMinimal, Lights: radar.LightsAuto},
+			dusk: true,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			scene, canv := sceneFor(t, false, exposureNone)
+
+			if testCase.dusk {
+				frame := benchFrame()
+				frame.Now = lightsDusk
+				scene = radar.New(testFaces(t), &fakeSource{frame: frame}, scope.New(scope.WithCurrent(60)))
+			}
+
 			canv = sizedFor(t, canv, testCase.uhd)
 			scene.Apply(testCase.set)
 			scene.Draw(canv, 0)
@@ -284,7 +314,7 @@ func TestLightsFlatBeaconFlashes(t *testing.T) {
 
 	const frame = time.Second / 30
 
-	set := radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm, Lights: true}
+	set := radar.Settings{View: radar.ViewMinimal, RangeNm: sceneRangeNm, Lights: radar.LightsOn}
 	scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(lightsPlane(0)))
 	scene.Apply(set)
 
@@ -309,60 +339,77 @@ func TestLightsFlatBeaconFlashes(t *testing.T) {
 	}
 }
 
-// TestLightsKeyToggles checks s turns the lights on and S off again in every
-// view, by comparing frames with ones drawn at the same clocks by a scene that
-// never had them. A fresh scene starts without them.
+// TestLightsKeyCycles checks s walks the lights from off through auto and
+// on and back to off in every view. After each press the scene has to draw
+// exactly what a scene handed that mode through Apply draws, frame for frame
+// at the same clocks, so the cap and the lights are both compared. The clock
+// is noon, where auto and on differ in the picture as well as on the cap.
 //
-// Each frame is drawn past the key bar's hold after the press before it, so
-// a bare view's revealed caps are not part of what is compared.
-func TestLightsKeyToggles(t *testing.T) {
+// Each step is drawn past the key bar's hold after its press, so a bare
+// view's revealed caps are not part of what is compared.
+func TestLightsKeyCycles(t *testing.T) {
 	t.Parallel()
+
+	modes := [...]radar.LightsMode{radar.LightsOff, radar.LightsAuto, radar.LightsOn}
 
 	for _, view := range []radar.View{radar.ViewScope, radar.View3D, radar.ViewMinimal, radar.ViewMinimal3D} {
 		t.Run(string(view), func(t *testing.T) {
 			t.Parallel()
 
+			frame := sceneFrame(lightsPlane(0))
+			frame.Now = lightsNoon
+
 			set := radar.Settings{View: view, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff}
-			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(lightsPlane(0)))
+			scene, canv, _ := sceneOn(t, panelWidth, panelHeight, frame)
 			scene.Apply(set)
 
-			dark, darkCanv, _ := sceneOn(t, panelWidth, panelHeight, sceneFrame(lightsPlane(0)))
-			dark.Apply(set)
+			refs, refCanvs := [len(modes)]*radar.Scene{}, [len(modes)]*canvas.Canvas{}
 
-			for press, key := range []rune{0, 's', 'S'} {
-				if key != 0 && !scene.Handle(input.Key{Kind: input.Rune, Rune: key}) {
-					t.Fatalf("%q was not handled", key)
+			for index, mode := range modes {
+				refs[index], refCanvs[index], _ = sceneOn(t, panelWidth, panelHeight, frame)
+				set.Lights = mode
+				refs[index].Apply(set)
+			}
+
+			// Indexes into modes: off as it starts, then auto, on and off.
+			for step, want := range []int{0, 1, 2, 0} {
+				if step > 0 && !press(scene, 's') {
+					t.Fatal("s was not handled")
 				}
 
-				if lit, want := litAfter(scene, dark, canv, darkCanv, press), press == 1; lit != want {
-					t.Errorf("after press %d the lights are drawn = %v, want %v", press, lit, want)
+				if clock, same := drawsAsRef(scene, canv, refs[:], refCanvs[:], want, step); !same {
+					t.Errorf("after %d presses at %v the picture is not %s's", step, clock, modes[want])
 				}
+			}
+
+			if identical(refCanvs[1], refCanvs[2]) {
+				t.Error("auto and on drew the same picture at noon, so the cycle shows nothing")
 			}
 		})
 	}
 }
 
-// litAfter reports whether scene draws anything dark does not over a strobe
-// period of frames, the first of them past the key bar's hold after press
-// number step.
-//
-// One frame is not enough. The test aircraft is in the band drawn in Ink, and
-// a strobe turns the flat sprite's three tips to Ink as well, so a frame that
-// happens to land on a strobe with the beacon dark carries no light at all.
-func litAfter(scene, dark *radar.Scene, canv, darkCanv *canvas.Canvas, step int) bool {
-	const frame = time.Second / 10
-
+// drawsAsRef draws scene and every reference at the same three clocks, the
+// first of them past the key bar's hold after press number step, and reports
+// the first clock at which scene's picture is not refs[want]'s.
+func drawsAsRef(scene *radar.Scene, canv *canvas.Canvas, refs []*radar.Scene, refCanvs []*canvas.Canvas,
+	want, step int,
+) (time.Duration, bool) {
 	start := time.Duration(step) * 2 * pastKeyBarHold
-	lit := false
 
-	for at := start; at < start+3*time.Second; at += frame {
-		scene.Draw(canv, at)
-		dark.Draw(darkCanv, at)
+	for clock := start; clock < start+time.Second; clock += time.Second / 3 {
+		scene.Draw(canv, clock)
 
-		lit = lit || !identical(canv, darkCanv)
+		for index, ref := range refs {
+			ref.Draw(refCanvs[index], clock)
+		}
+
+		if !identical(canv, refCanvs[want]) {
+			return clock, false
+		}
 	}
 
-	return lit
+	return 0, true
 }
 
 // lightsCapBox is the S cap in the full views' bar at the panel's resolution,
@@ -372,7 +419,8 @@ func litAfter(scene, dark *radar.Scene, canv, darkCanv *canvas.Canvas, step int)
 var lightsCapBox = image.Rect(414, 682, 476, 704)
 
 // TestLightsCapFollowsTheKey checks the S cap's engaged bar is off on a
-// fresh scene, where the lights start off, and on after a press of s.
+// fresh scene, where the lights start off, and on after a press of s, which
+// puts them on auto. TestLightsKeyCycles compares the cap in all three modes.
 func TestLightsCapFollowsTheKey(t *testing.T) {
 	t.Parallel()
 
@@ -394,4 +442,119 @@ func TestLightsCapFollowsTheKey(t *testing.T) {
 	if got := countColour(canv, engaged, theme.Night.OK); got == 0 {
 		t.Error("after s: no OK pixels under the lights cap, want the engaged bar")
 	}
+}
+
+// The clocks the auto cases draw at, for the test receiver near Schiphol on
+// the day sceneClock is on. At noon the sun is 41 degrees up, at lightsDusk
+// it is five, half way through the fade, and at lightsMidnight it is 35 below.
+//
+//nolint:gochecknoglobals // a time.Time cannot be a constant.
+var (
+	lightsNoon     = time.Date(2026, time.September, 15, 11, 40, 0, 0, time.UTC)
+	lightsDusk     = time.Date(2026, time.September, 15, 17, 18, 0, 0, time.UTC)
+	lightsMidnight = time.Date(2026, time.September, 15, 23, 40, 0, 0, time.UTC)
+)
+
+// TestParseLights checks the allow list --lights is read against: the three
+// spellings and nothing else, case sensitive, with ErrLights for the rest.
+func TestParseLights(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		text    string
+		want    radar.LightsMode
+		wantErr bool
+	}{
+		{text: "on", want: radar.LightsOn},
+		{text: "off", want: radar.LightsOff},
+		{text: "auto", want: radar.LightsAuto},
+		{text: "Auto", want: radar.LightsOn, wantErr: true},
+		{text: "true", want: radar.LightsOn, wantErr: true},
+		{text: "", want: radar.LightsOn, wantErr: true},
+	} {
+		t.Run(testCase.text, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := radar.ParseLights(testCase.text)
+			if errors.Is(err, radar.ErrLights) != testCase.wantErr || got != testCase.want {
+				t.Errorf("ParseLights(%q) = %q, %v, want %q and an error %v",
+					testCase.text, got, err, testCase.want, testCase.wantErr)
+			}
+		})
+	}
+}
+
+// TestLightsAutoFollowsTheSun checks auto against the two fixed modes on one
+// still in each bare view: at noon it is off to the pixel, at midnight it is
+// on to the pixel, and so it is with no receiver position at all, which the
+// auto theme also takes for night. The palette is fixed and does not pin it:
+// the night palette at noon draws none and the day palette at midnight draws
+// them all, the way the stars follow the sun whatever the theme.
+func TestLightsAutoFollowsTheSun(t *testing.T) {
+	t.Parallel()
+
+	noon, midnight, nowhere := lightsFrameAt(lightsNoon), lightsFrameAt(lightsMidnight), lightsFrameAt(lightsNoon)
+	nowhere.Receiver.Mode, nowhere.Receiver.HasFix = source.FixNone, false
+
+	for _, view := range []radar.View{radar.ViewMinimal, radar.ViewMinimal3D} {
+		for _, testCase := range []struct {
+			name    string
+			frame   source.Frame
+			pal     theme.Palette
+			matches radar.LightsMode
+		}{
+			{name: "noon, night palette", frame: noon, pal: theme.Night, matches: radar.LightsOff},
+			{name: "midnight, night palette", frame: midnight, pal: theme.Night, matches: radar.LightsOn},
+			{name: "midnight, day palette", frame: midnight, pal: theme.Day, matches: radar.LightsOn},
+			{name: "noon with no position", frame: nowhere, pal: theme.Night, matches: radar.LightsOn},
+		} {
+			t.Run(string(view)+" "+testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				still := lightsStill{frame: testCase.frame, pal: testCase.pal, view: view}
+				auto, fixed := still.draw(t, radar.LightsAuto), still.draw(t, testCase.matches)
+
+				other := radar.LightsOn
+				if testCase.matches == radar.LightsOn {
+					other = radar.LightsOff
+				}
+
+				if !identical(auto, fixed) {
+					t.Errorf("auto drew a different picture from %s", testCase.matches)
+				}
+
+				if identical(auto, still.draw(t, other)) {
+					t.Error("on and off drew the same picture, so the comparison shows nothing")
+				}
+			})
+		}
+	}
+}
+
+// lightsFrameAt is the light tests' aircraft over the test receiver at now.
+func lightsFrameAt(now time.Time) source.Frame {
+	frame := sceneFrame(lightsPlane(0))
+	frame.Now = now
+
+	return frame
+}
+
+// lightsStill is one still the auto cases compare: a frame, a fixed palette
+// and a view, at a quarter of the panel's area to keep the cases cheap.
+type lightsStill struct {
+	frame source.Frame
+	pal   theme.Palette
+	view  radar.View
+}
+
+// draw renders the still with the lights in mode on a fresh scene.
+func (still lightsStill) draw(tb testing.TB, mode radar.LightsMode) *canvas.Canvas {
+	tb.Helper()
+
+	scene, canv, _ := sceneOn(tb, panelWidth/2, panelHeight/2, still.frame)
+	scene.SetPalette(still.pal)
+	scene.Apply(radar.Settings{View: still.view, RangeNm: sceneRangeNm, Orbit: radar.ToggleOff, Lights: mode})
+	scene.Draw(canv, 0)
+
+	return canv
 }

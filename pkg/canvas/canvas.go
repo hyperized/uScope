@@ -251,6 +251,49 @@ func (c *Canvas) FillCircle(centerX, centerY, radius int, col color.RGBA) {
 	}
 }
 
+// BlendCircle mixes col into the disc FillCircle would fill, at alpha,
+// instead of replacing it.
+//
+// The disc is the same pixels FillCircle covers. An alpha of one or more is
+// FillCircle, byte for byte, and one that is NaN, zero or negative draws
+// nothing, the same contract BlendPolygon keeps. The mix is the fixed-point
+// one BlendPolygon uses, so a channel can land one step from Blend's.
+func (c *Canvas) BlendCircle(centerX, centerY, radius int, col color.RGBA, alpha float64) {
+	if math.IsNaN(alpha) || alpha <= 0 || radius < 0 {
+		return
+	}
+
+	if alpha >= 1 {
+		c.FillCircle(centerX, centerY, radius, col)
+
+		return
+	}
+
+	for dy := -radius; dy <= radius; dy++ {
+		half := int(math.Sqrt(float64(radius*radius - dy*dy)))
+		c.blendSpan(centerX-half, centerX+half, centerY+dy, col, alpha)
+	}
+}
+
+// BlendRect mixes col into rect at alpha, with FillRect's clipping. Alpha
+// means what it does for BlendCircle: one or more is FillRect byte for byte,
+// and NaN, zero or negative draws nothing.
+func (c *Canvas) BlendRect(rect image.Rectangle, col color.RGBA, alpha float64) {
+	if math.IsNaN(alpha) || alpha <= 0 {
+		return
+	}
+
+	if alpha >= 1 {
+		c.FillRect(rect, col)
+
+		return
+	}
+
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		c.blendSpan(rect.Min.X, rect.Max.X-1, y, col, alpha)
+	}
+}
+
 // hline fills the inclusive span from x0 to x1 on row y.
 //
 // It clips once and then writes the run directly, doubling the filled part

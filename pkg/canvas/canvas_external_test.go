@@ -2039,3 +2039,86 @@ func TestFillPolygonZonedAllocs(t *testing.T) {
 		t.Errorf("FillPolygonZoned allocated %v times per run, want 0", allocs)
 	}
 }
+
+// assertHalfBlendOver checks blended is white mixed half into the background
+// wherever filled is white, and the background everywhere else.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func assertHalfBlendOver(t *testing.T, blended, filled *canvas.Canvas) {
+	t.Helper()
+
+	want := color.RGBA{R: 178, G: 148, B: 228, A: 0xFF}
+
+	for y := range blendSide {
+		for x := range blendSide {
+			if filled.Image().RGBAAt(x, y) != canvas.White {
+				assertPixel(t, blended, x, y, blendBackground())
+
+				continue
+			}
+
+			if got := blended.Image().RGBAAt(x, y); !nearRGBA(got, want) {
+				t.Errorf("inside (%d, %d) = %v, want about %v", x, y, got, want)
+			}
+		}
+	}
+}
+
+// TestBlendCircleAndRect covers BlendCircle and BlendRect: a translucent
+// shape covers exactly the pixels its opaque twin fills and mixes them, an
+// alpha of one or more is the opaque twin byte for byte, and an alpha with
+// nothing to show leaves the canvas alone.
+func TestBlendCircleAndRect(t *testing.T) {
+	t.Parallel()
+
+	rect := image.Rect(-2, 3, 7, 20)
+
+	shapes := []struct {
+		name  string
+		blend func(*canvas.Canvas, float64)
+		fill  func(*canvas.Canvas)
+	}{
+		{
+			name:  "circle",
+			blend: func(c *canvas.Canvas, alpha float64) { c.BlendCircle(5, 6, 4, canvas.White, alpha) },
+			fill:  func(c *canvas.Canvas) { c.FillCircle(5, 6, 4, canvas.White) },
+		},
+		{
+			name:  "circle off the edge",
+			blend: func(c *canvas.Canvas, alpha float64) { c.BlendCircle(-1, 11, 3, canvas.White, alpha) },
+			fill:  func(c *canvas.Canvas) { c.FillCircle(-1, 11, 3, canvas.White) },
+		},
+		{
+			name:  "rect",
+			blend: func(c *canvas.Canvas, alpha float64) { c.BlendRect(rect, canvas.White, alpha) },
+			fill:  func(c *canvas.Canvas) { c.FillRect(rect, canvas.White) },
+		},
+	}
+
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+
+			blended, filled := fresh(t), fresh(t)
+			shape.blend(blended, 0.5)
+			shape.fill(filled)
+			assertHalfBlendOver(t, blended, filled)
+
+			for _, alpha := range []float64{1, 1.5} {
+				opaque := fresh(t)
+				shape.blend(opaque, alpha)
+				assertSamePix(t, opaque, filled)
+			}
+
+			for _, alpha := range []float64{0, -0.5, math.NaN()} {
+				untouched := fresh(t)
+				shape.blend(untouched, alpha)
+				assertSamePix(t, untouched, fresh(t))
+			}
+		})
+	}
+
+	canv := fresh(t)
+	canv.BlendCircle(5, 5, -1, canvas.White, 0.5)
+	assertSamePix(t, canv, fresh(t))
+}
