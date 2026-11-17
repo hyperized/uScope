@@ -135,7 +135,11 @@ on, and carries its lights: red on the left wingtip, green on the right, white
 on the tail, white strobes, and a red beacon on the fuselage flashing 46 times
 a minute. The strobes double-flash twenty times a minute, slower than a real
 aircraft's, because on a screen the real cadence pulls the eye away from the
-traffic. `s` turns the lights off.
+traffic. `s` turns the lights off, and a second press puts them on auto:
+none in daylight, fading in as the sun drops below ten degrees and at full
+strength from sunset to sunrise. `--lights auto` starts there. Auto goes by
+the sun at the receiver whatever the theme, the way the stars do, and with
+no position known it treats the sky as dark.
 
 The right column is the selected flight on top, the rows below it and the
 legend at the bottom. Until you pick one, the selection follows the nearest
@@ -364,7 +368,7 @@ true at once and the answer is a compromise.
 | `t` | cycle the trails: off, short, long, all. All keeps the trails of aircraft that have gone quiet |
 | `a` | airfield markers on or off; the bare views keep their own switch |
 | `m` | coastline, sea and land on or off; the bare views keep their own switch |
-| `s` | the aircraft lights on or off |
+| `s` | the aircraft lights: on, off, or auto by the sun |
 | `u` | the corridor tubes on or off |
 | `c` | colour by altitude, by airline or by corridor; puts the filter back to all |
 | `f` | filter to one legend entry, then back to all. By altitude the stops are `<10K`, `10-25K`, `>25K` and `<25K`, by corridor `IN`, `OUT`, `OTHER` and `<25K`, by airline each operator in the legend |
@@ -415,7 +419,7 @@ between the arrows and the brackets.
 | `--minimal-shore` | `off` | coastline, sea and land in `minimal` and `minimal3d` |
 | `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d` |
 | `--minimal-board` | `off` | the flight strip board down the right quarter of `minimal3d` |
-| `--lights` | `on` | the aircraft lights |
+| `--lights` | `on` | the aircraft lights: `on`, `off`, or `auto` to leave them off in daylight |
 | `--stars` | `on` | stars in the 3D views' night sky |
 | `--corridors` | `on` | the corridor tubes |
 | `--corridor-field` | | the airfield tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm |

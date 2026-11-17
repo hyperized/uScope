@@ -403,12 +403,13 @@ type Scene struct {
 	// that turns once every two minutes be seen to turn at all.
 	stars bool
 
-	// lights is whether the aircraft carry their exterior lights, which the s
-	// key toggles, and flashFrom is the render clock the frame before this
-	// one was drawn at. The strobes and the beacon are lit by what happened
-	// between the two readings rather than at the instant of either; see
-	// flashLit.
-	lights    bool
+	// lights is when the aircraft carry their exterior lights, which the s
+	// key cycles, one of the three spellings once Apply has run and the zero
+	// value, read as off, before it. flashFrom is the render clock the frame
+	// before this one was drawn at. The strobes and the beacon are lit by
+	// what happened between the two readings rather than at the instant of
+	// either; see flashLit.
+	lights    LightsMode
 	flashFrom time.Duration
 
 	// corridors is whether the lost tracks are drawn as the corridor

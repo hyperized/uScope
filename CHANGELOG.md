@@ -6,6 +6,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `--lights auto` leaves the aircraft lights off in daylight and brings them
+  in as the sun goes down: none with the sun ten degrees up or more, a fade
+  from there to the horizon, and full strength from sunset to sunrise, at the
+  receiver's position and whatever the theme. With no position known they
+  stay on. On a display left running all day the beacons and strobes were
+  the busiest thing on the screen at noon. `s` now cycles on, off and auto;
+  `on` is still the default, and `on` and `off` draw exactly what they did.
+
 ### Fixed
 
 - Under an altitude filter, the trail of an aircraft heard again after a gap

@@ -281,11 +281,12 @@ type Settings struct {
 	// bare. The full views have their own column and never read it.
 	Board bool
 
-	// Lights is whether the aircraft carry their exterior lights: red and
-	// green on the wingtips, white on the tail, the strobes and the beacon.
-	// A plain bool like the bare views' pair. The default lives in the flag,
-	// which is on, so a Settings built by hand has them off until it says so.
-	Lights bool
+	// Lights is when the aircraft carry their exterior lights: red and green
+	// on the wingtips, white on the tail, the strobes and the beacon. Zero,
+	// and any spelling outside the three, reads as LightsOff, which is what
+	// the bool this replaced meant when nobody set it. The default lives in
+	// the flag, which is on.
+	Lights LightsMode
 
 	// RangeNm pins the scope to a range in nautical miles and turns auto range
 	// off with it. Zero means nobody asked, which leaves the scope fitting
@@ -367,7 +368,7 @@ func (s *Scene) Apply(set Settings) {
 	s.minimalAirports = set.MinimalAirports
 	s.minimalBar = set.MinimalBar
 	s.board = set.Board
-	s.lights = set.Lights
+	s.lights = set.Lights.orDefault()
 	s.shown = set.View
 	s.applyRange(set.RangeNm)
 	s.applyRecentre(set.Recentre)
