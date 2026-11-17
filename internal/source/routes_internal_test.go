@@ -2,6 +2,7 @@ package source
 
 import (
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -95,13 +96,12 @@ func TestRoutesGroupByShape(t *testing.T) {
 			groups: 2,
 		},
 		{
-			name: "three overflights on one airway are one route",
+			name: "three overflights on one airway are in no route",
 			trails: []Trail{
 				routeLine(TrackTransit, -40, 10, 40, 10, 30000, 30000),
 				routeLine(TrackTransit, -40, 11, 40, 11, 32000, 32000),
 				routeLine(TrackTransit, -40, 9, 40, 9, 34000, 34000),
 			},
-			groups: 1, routes: 1, tubed: 3,
 		},
 		{
 			name: "two arrivals are a route with no tube",
@@ -112,24 +112,8 @@ func TestRoutesGroupByShape(t *testing.T) {
 			groups: 1,
 		},
 		{
-			name: "the two directions of one airway are two routes",
-			trails: []Trail{
-				routeLine(TrackTransit, -40, 10, 40, 10, 30000, 30000),
-				routeLine(TrackTransit, 40, 10, -40, 10, 30000, 30000),
-			},
-			groups: 2,
-		},
-		{
-			name: "two parallel airways are two routes",
-			trails: []Trail{
-				routeLine(TrackTransit, -40, 10, 40, 10, 30000, 30000),
-				routeLine(TrackTransit, -40, 30, 40, 30, 30000, 30000),
-			},
-			groups: 2,
-		},
-		{
 			name:   "a track of one fix is in no route",
-			trails: []Trail{{ICAO: "R1", Points: []airplane.PositionEntry{routeFix(1, 1, 1000)}}},
+			trails: []Trail{{ICAO: "R1", Points: []airplane.PositionEntry{routeFix(1, 1, 1000)}, Class: TrackInbound}},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -286,26 +270,79 @@ func TestTrackWeight(t *testing.T) {
 	}
 }
 
-// TestRouteBookFull checks a track that would open one route past the cap is
-// left out rather than pushing another route out.
+// routeBent is a track that leaves the field on one bearing and turns onto
+// another twelve miles out, flown out for a departure and in for an arrival:
+// two bearings ten degrees apart or more on either leg are a track no route
+// of the other shares, which is how a test runs up more routes than the book
+// holds.
+func routeBent(class TrackClass, outDeg, turnDeg float64, lostAt time.Time) Trail {
+	const turnNm, farNm = 12.0, 40.0
+
+	out, turn := outDeg*math.Pi/halfCircle, turnDeg*math.Pi/halfCircle
+	turnX, turnY := turnNm*math.Sin(out), turnNm*math.Cos(out)
+	farX, farY := turnX+farNm*math.Sin(turn), turnY+farNm*math.Cos(turn)
+
+	near := routeLine(class, 0, 0, turnX, turnY, 200, 4000)
+	far := routeLine(class, turnX, turnY, farX, farY, 4000, 12000)
+	trail := Trail{ICAO: "R00002", Points: append(near.Points, far.Points[1:]...), LostAt: lostAt, Class: class}
+
+	if class == TrackInbound {
+		slices.Reverse(trail.Points)
+	}
+
+	return trail
+}
+
+// strays is a day of stray arrivals and departures, each on a shape of its
+// own and an hour older than the one after it, more than the book holds.
+func strays(count int, newest time.Time) []Trail {
+	trails := make([]Trail, 0, count)
+
+	for index := range count {
+		class := TrackInbound
+		if index%2 == 1 {
+			class = TrackOutbound
+		}
+
+		shape := index / 2
+		trails = append(trails, routeBent(class, float64(shape%12)*30, float64(shape/12)*45,
+			newest.Add(-time.Duration(count-index)*time.Minute)))
+	}
+
+	return trails
+}
+
+// TestRouteBookFull checks the book fills to its cap and no further, and that
+// the tracks it has no room for are the oldest: grouping runs newest first,
+// so every route is opened by a track newer than any it refused.
 func TestRouteBookFull(t *testing.T) {
 	t.Parallel()
 
-	trails := make([]Trail, 0, routeMaxRoutes+1)
-
-	for index := range routeMaxRoutes + 1 {
-		// One airway every ten miles north of the field, all flown east, so
-		// no two pass the field close enough to share a route.
-		northNm := float64(index) * 10
-		trails = append(trails, routeLine(TrackTransit, -10, northNm, 10, northNm, 30000, 30000))
-	}
+	trails := strays(3*routeMaxRoutes, routeEpoch)
 
 	var book routeBook
 
 	book.refresh(trails, 1, routeEpoch, &routeField)
 
-	if book.count != routeMaxRoutes || book.member[routeMaxRoutes] != -1 {
-		t.Errorf("routes %d, last member %d; want %d and none", book.count, book.member[routeMaxRoutes], routeMaxRoutes)
+	if book.count != routeMaxRoutes {
+		t.Fatalf("routes = %d, want the cap of %d", book.count, routeMaxRoutes)
+	}
+
+	newestRefused, oldestOpener := -1, len(trails)
+	opened := make(map[int]bool, routeMaxRoutes)
+
+	for index, route := range slices.Backward(book.member) {
+		if route < 0 {
+			newestRefused = max(newestRefused, index)
+		} else if !opened[route] {
+			opened[route] = true
+			oldestOpener = min(oldestOpener, index)
+		}
+	}
+
+	if newestRefused < 0 || newestRefused >= oldestOpener {
+		t.Errorf("newest refused track %d, oldest track to open a route %d; want some refused, all older",
+			newestRefused, oldestOpener)
 	}
 
 	// A second compute reuses the sums it zeroes, which is the path a
@@ -317,42 +354,91 @@ func TestRouteBookFull(t *testing.T) {
 	}
 }
 
-// TestStationAlongEdges checks the overflight walk's three odd cases: a track
-// that doubles back keeps its first pass, a track that starts and ends on one
-// spot still has an axis, and a track entirely outside the station window has
-// no stations.
-func TestStationAlongEdges(t *testing.T) {
+// TestRoutesUnderABusySky checks the two ways a full book used to cost the
+// newest arrivals their tube: a sky full of overflights lost before them,
+// which once opened a route each, and a long day of stray arrivals and
+// departures that each opened one of their own. Three arrivals down one
+// final, lost last, make a tube either way.
+func TestRoutesUnderABusySky(t *testing.T) {
 	t.Parallel()
 
-	frame := newFieldFrame(routeField.field)
+	overflights := make([]Trail, 0, 2*routeMaxRoutes)
 
-	var book routeBook
+	for index := range 2 * routeMaxRoutes {
+		// One airway every five miles, flown both ways, so no two would
+		// have shared a route.
+		northNm := float64(index/2)*5 - 150
+		startNm, endNm := -60.0, 60.0
 
-	back := []airplane.PositionEntry{
-		routeFix(-10, 5, 30000), routeFix(10, 5, 30000), routeFix(0, 5, 30000), routeFix(20, 5, 30000),
-	}
-	if _, ok := book.stationAlong(back, frame); !ok {
-		t.Fatal("a track that doubles back has no stations")
-	}
-
-	for index := 1; index < len(book.track); index++ {
-		if book.track[index].k <= book.track[index-1].k {
-			t.Fatalf("station %d repeats or goes back: %d after %d", index, book.track[index].k, book.track[index-1].k)
+		if index%2 == 1 {
+			startNm, endNm = endNm, startNm
 		}
+
+		overflight := routeLine(TrackTransit, startNm, northNm, endNm, northNm, 34000, 34000)
+		overflight.LostAt = routeEpoch.Add(-time.Hour)
+		overflights = append(overflights, overflight)
 	}
 
-	loop := []airplane.PositionEntry{routeFix(0, 5, 30000), routeFix(3, 5, 30000), routeFix(0, 5, 30000)}
-	book.track = book.track[:0]
-
-	if _, ok := book.stationAlong(loop, frame); !ok {
-		t.Error("a track that ends where it began has no stations")
+	final := []Trail{
+		routeLine(TrackInbound, 30, 0.5, 4, 0, 9000, 1500),
+		routeLine(TrackInbound, 30, 0, 4, 0, 9000, 1500),
+		routeLine(TrackInbound, 30, -0.5, 4, 0, 9000, 1500),
 	}
 
-	far := []airplane.PositionEntry{routeFix(400, 0, 30000), routeFix(410, 0, 30000)}
-	book.track = book.track[:0]
+	for _, testCase := range []struct {
+		name   string
+		before []Trail
+	}{
+		{name: "overflights", before: overflights},
+		{name: "a day of strays", before: strays(3*routeMaxRoutes, routeEpoch.Add(-time.Hour))},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 
-	if _, ok := book.stationAlong(far, frame); ok {
-		t.Error("a track past the window has stations")
+			trails := append(slices.Clone(testCase.before), final...)
+
+			_, trails = computeRoutes(trails)
+
+			for index, trail := range trails[len(trails)-len(final):] {
+				if !trail.Tubed {
+					t.Errorf("arrival %d down the final is in no tube", index)
+				}
+			}
+		})
+	}
+}
+
+// TestOverflightsDrawWhole checks an overflight comes out of the ring with no
+// tube claimed on it, so the flat views draw its whole hairline. Three on one
+// airway used to make a route of their own: the radar draws no tube for
+// through traffic, and Loose then handed back only the ends either side of
+// the tube that was never drawn.
+func TestOverflightsDrawWhole(t *testing.T) {
+	t.Parallel()
+
+	ring := newGhosts()
+	ring.corridors = routeField
+
+	for index, northNm := range []float64{9, 10, 11} {
+		trail := routeLine(TrackTransit, -40, northNm, 40, northNm, 30000, 30000)
+		trail.ICAO = string(rune('A'+index)) + "00000"
+		ring.push(trail)
+	}
+
+	got := ring.frame(nil, Receiver{}, routeEpoch)
+
+	if len(got.trails) != 3 || len(got.routes) != 0 {
+		t.Fatalf("trails %d, routes %d; want 3 and none", len(got.trails), len(got.routes))
+	}
+
+	for index := range got.trails {
+		trail := &got.trails[index]
+
+		before, after := trail.Loose()
+		if trail.Tubed || len(before) != len(trail.Points) || after != nil {
+			t.Errorf("overflight %d: tubed %v, loose %d of %d fixes; want all of it loose",
+				index, trail.Tubed, len(before), len(trail.Points))
+		}
 	}
 }
 
@@ -398,12 +484,12 @@ func TestAngleBetween(t *testing.T) {
 // handSums is a route's sums written by hand: one station per entry of
 // members, each with that many members, its mean a mile east per station and
 // its spread from spreads, so the tube rules can be driven station by station.
-func handSums(first int, members []int, spreads []float64) *[routeMaxStations]stationSum {
+func handSums(members []int, spreads []float64) *[routeMaxStations]stationSum {
 	var sums [routeMaxStations]stationSum
 
 	for index, count := range members {
 		eastNm := float64(index)
-		sums[first+index] = stationSum{
+		sums[index] = stationSum{
 			w: 1, wx: eastNm, wxx: eastNm*eastNm + spreads[index]*spreads[index],
 			wa: 1, wal: 30000, waa: 30000 * 30000, n: count,
 		}
@@ -413,17 +499,14 @@ func handSums(first int, members []int, spreads []float64) *[routeMaxStations]st
 }
 
 // TestTubeRules checks the three rules in their order on hand-built sums: the
-// members floor stops the run, the spread cut stops it again from the same
-// anchor after smoothing, and a run left under two stations is no tube.
+// members floor stops the run, the spread cut stops it again from the field
+// after smoothing, and a run left under two stations is no tube.
 func TestTubeRules(t *testing.T) {
 	t.Parallel()
-
-	base := routeMaxStations / 2
 
 	for _, testCase := range []struct {
 		name    string
 		class   TrackClass
-		first   int
 		members []int
 		spreads []float64
 		want    routeSpan
@@ -456,30 +539,6 @@ func TestTubeRules(t *testing.T) {
 			class: TrackInbound, members: []int{3, 3, 3, 3},
 			spreads: []float64{0, 0, 12, 12},
 		},
-		{
-			name:  "an overflight grows both ways from abeam",
-			class: TrackTransit, first: base - 3, members: []int{2, 3, 3, 3, 3, 3, 2},
-			spreads: []float64{0, 0, 0, 0, 0, 0, 0},
-			want:    routeSpan{from: base - 2, to: base + 3},
-		},
-		{
-			name:  "an overflight never abeam anchors on the nearest station flown",
-			class: TrackTransit, first: base + 4, members: []int{3, 3, 3},
-			spreads: []float64{0, 0, 0},
-			want:    routeSpan{from: base + 4, to: base + 7},
-		},
-		{
-			name:  "an overflight thin abeam is no tube, however busy further on",
-			class: TrackTransit, first: base, members: []int{2, 5, 5, 5},
-			spreads: []float64{0, 0, 0, 0},
-		},
-		{
-			name:  "the spread cuts an overflight both ways from abeam",
-			class: TrackTransit, first: base - 4, members: []int{3, 3, 3, 3, 3, 3, 3, 3, 3},
-			spreads: []float64{9, 9, 0, 0, 0, 0, 0, 9, 9},
-			// Smoothed from base-4: 6, 4.5, 3.6, 1.8, 0, 1.8, 3.6, 4.5, 6.
-			want: routeSpan{from: base - 2, to: base + 3},
-		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -488,41 +547,12 @@ func TestTubeRules(t *testing.T) {
 
 			book.count = 1
 			book.heads[0].class = testCase.class
-			book.sums[0] = handSums(testCase.first, testCase.members, testCase.spreads)
+			book.sums[0] = handSums(testCase.members, testCase.spreads)
 
 			if got := book.tube(0); got != testCase.want {
 				t.Errorf("tube = %+v, want %+v", got, testCase.want)
 			}
 		})
-	}
-}
-
-// TestAbeam checks the anchor search: the slot abeam when flown, the earlier
-// of two equally near, and the middle slot when nothing was flown at all.
-func TestAbeam(t *testing.T) {
-	t.Parallel()
-
-	base := routeMaxStations / 2
-
-	for _, testCase := range []struct {
-		name  string
-		flown []int
-		want  int
-	}{
-		{name: "abeam", flown: []int{base, base + 1}, want: base},
-		{name: "a tie takes the earlier", flown: []int{base - 2, base + 2}, want: base - 2},
-		{name: "only the last slot", flown: []int{routeMaxStations - 1}, want: routeMaxStations - 1},
-		{name: "only the first slot", flown: []int{0}, want: 0},
-		{name: "nothing flown", want: base},
-	} {
-		var sums [routeMaxStations]stationSum
-		for _, slot := range testCase.flown {
-			sums[slot].n = 1
-		}
-
-		if got := abeam(&sums); got != testCase.want {
-			t.Errorf("%s: abeam = %d, want %d", testCase.name, got, testCase.want)
-		}
 	}
 }
 
@@ -626,17 +656,17 @@ func TestRouteCutAtTheFan(t *testing.T) {
 }
 
 // TestRouteThatLosesItsTube checks a route whose tracks never agree, three
-// overflights the full eight miles apart abeam the field, is not emitted, and
-// that its members arrive untubed, loose from end to end.
+// arrivals from one direction lost five miles apart, is not emitted, and that
+// its members arrive untubed, loose from end to end.
 func TestRouteThatLosesItsTube(t *testing.T) {
 	t.Parallel()
 
 	var book routeBook
 
 	trails := []Trail{
-		routeLine(TrackTransit, -40, 0, 40, 0, 30000, 30000),
-		routeLine(TrackTransit, -40, 7, 40, 7, 30000, 30000),
-		routeLine(TrackTransit, -40, -7, 40, -7, 30000, 30000),
+		routeLine(TrackInbound, 0, 50, 0, 20, 9000, 3000),
+		routeLine(TrackInbound, 5, 50, 5, 20, 9000, 3000),
+		routeLine(TrackInbound, -5, 50, -5, 20, 9000, 3000),
 	}
 
 	routes := book.refresh(trails, 1, routeEpoch, &routeField)
@@ -650,31 +680,6 @@ func TestRouteThatLosesItsTube(t *testing.T) {
 			t.Errorf("member %d: tubed %v, loose %d of %d; want all of it loose",
 				index, trails[index].Tubed, len(before), len(trails[index].Points))
 		}
-	}
-}
-
-// TestRouteMemberOutsideItsTube checks an overflight that joined a route but
-// was lost before it reached the stretch the tube covers is left untubed, and
-// that a member covering only part of it is loose either side.
-func TestRouteMemberOutsideItsTube(t *testing.T) {
-	t.Parallel()
-
-	_, trails := computeRoutes([]Trail{
-		routeLine(TrackTransit, -20, 5, 20, 5, 30000, 30000),
-		routeLine(TrackTransit, -20, 5, 20, 5, 30000, 30000),
-		routeLine(TrackTransit, -20, 5, 20, 5, 30000, 30000),
-		routeLine(TrackTransit, -60, 5, -40, 5, 30000, 30000),
-		routeLine(TrackTransit, -40, 5, 40, 5, 30000, 30000),
-	})
-
-	if trails[3].Tubed {
-		t.Error("a member lost before the tube began is tubed")
-	}
-
-	before, after := trails[4].Loose()
-	if !trails[4].Tubed || len(before) < 2 || len(after) < 2 {
-		t.Errorf("a member longer than the tube: tubed %v, loose %d before and %d after; want both ends loose",
-			trails[4].Tubed, len(before), len(after))
 	}
 }
 
