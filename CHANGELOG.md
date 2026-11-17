@@ -32,6 +32,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rather than the evening's arrivals. On the flat views an overflight's thin
   grey line is drawn whole again; the stretch that sat inside an undrawn
   route used to be missing.
+- Altitudes no longer jump by thousands of feet for a few seconds, which
+  under an altitude filter made cruising aircraft and their trails pop in
+  and out, and a single stray reply can no longer raise an emergency squawk.
+  uAirwaves 0.3.0 weighs altitudes and squawks from replies that carry the
+  aircraft address only in their parity before applying them.
+
 
 ## [0.2.0] - 2026-11-15
 
