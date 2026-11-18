@@ -97,6 +97,10 @@ func (c *Canvas) LineAA(x0, y0, x1, y1 float64, col color.RGBA) {
 	// right, so the loop below always advances one pixel along the axis with
 	// more ground to cover, and LineAA(a, b, c, d) and LineAA(c, d, a, b)
 	// produce the same image.
+	if c.missesCanvas(x0, y0, x1, y1, 1) {
+		return
+	}
+
 	run := orientRun(x0, y0, x1, y1)
 	gradient := run.gradient
 	interY := run.startMinor + gradient*(run.firstCol-run.startMajor)

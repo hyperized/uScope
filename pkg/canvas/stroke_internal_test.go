@@ -208,3 +208,78 @@ func TestCoverBandClipsToTheCanvas(t *testing.T) {
 		})
 	}
 }
+
+// TestLinesStopAtTheFarEdge runs a line from inside the canvas well past its
+// right-hand edge, which both anti-aliased methods leave by giving up on the
+// columns beyond rather than walking them.
+func TestLinesStopAtTheFarEdge(t *testing.T) {
+	t.Parallel()
+
+	for _, width := range []int{1, 2} {
+		t.Run(map[int]string{1: "width 1", 2: "width 2"}[width], func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := New(4, 4)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			canv.StrokeLineAA(0, 1, 40, 1, width, White)
+
+			for x := range 4 {
+				assertPixelAt(t, canv, x, 1, White)
+			}
+		})
+	}
+}
+
+func TestMissesCanvas(t *testing.T) {
+	t.Parallel()
+
+	canv, err := New(10, 10)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name           string
+		x0, y0, x1, y1 float64
+		want           bool
+	}{
+		{name: "inside", x0: 2, y0: 2, x1: 8, y1: 8},
+		{name: "crossing", x0: -20, y0: 5, x1: 30, y1: 5},
+		{name: "left", x0: -20, y0: 5, x1: -4, y1: 2, want: true},
+		{name: "right", x0: 14, y0: 5, x1: 30, y1: 2, want: true},
+		{name: "above", x0: 2, y0: -4, x1: 8, y1: -9, want: true},
+		{name: "below", x0: 2, y0: 14, x1: 8, y1: 19, want: true},
+		{name: "a band's reach off the left still touches", x0: -2, y0: 5, x1: -3, y1: 5},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := canv.missesCanvas(testCase.x0, testCase.y0, testCase.x1, testCase.y1, 2); got != testCase.want {
+				t.Errorf("missesCanvas = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestLinesOffTheCanvasDrawNothing hands both anti-aliased methods lines
+// that lie wholly past one edge.
+func TestLinesOffTheCanvasDrawNothing(t *testing.T) {
+	t.Parallel()
+
+	canv, err := New(10, 10)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	canv.LineAA(-20, 5, -6, 2, White)
+	canv.StrokeLineAA(14, 5, 30, 2, 2, White)
+
+	for _, value := range canv.img.Pix {
+		if value != 0 {
+			t.Fatal("a line off the canvas painted on it")
+		}
+	}
+}

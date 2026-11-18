@@ -46,6 +46,10 @@ func (c *Canvas) StrokeLineAA(x0, y0, x1, y1 float64, width int, col color.RGBA)
 		return
 	}
 
+	if c.missesCanvas(x0, y0, x1, y1, float64(width)) {
+		return
+	}
+
 	run := orientRun(x0, y0, x1, y1)
 	band := float64(width)
 	lift := (band - 1) / 2
@@ -64,6 +68,23 @@ func (c *Canvas) StrokeLineAA(x0, y0, x1, y1 float64, width int, col color.RGBA)
 
 		interY += run.gradient
 	}
+}
+
+// missesCanvas reports whether a line between the two points, reach pixels
+// thick, cannot touch the canvas: its box, grown by reach and a pixel for the
+// rounding of the ends, lies wholly to one side.
+//
+// A perspective scene hands over a good many lines that run entirely off the
+// picture, since its camera only refuses points far outside it, and walking
+// one of those column by column to find nothing to paint is wasted work.
+//
+//nolint:varnamelen // x0, y0, x1, y1 is how Line spells the same four values.
+func (c *Canvas) missesCanvas(x0, y0, x1, y1, reach float64) bool {
+	rect := c.img.Rect
+	grow := reach + 1
+
+	return max(x0, x1)+grow < float64(rect.Min.X) || min(x0, x1)-grow >= float64(rect.Max.X) ||
+		max(y0, y1)+grow < float64(rect.Min.Y) || min(y0, y1)-grow >= float64(rect.Max.Y)
 }
 
 // lanes is the canvas seen from a line walking along its major axis: the
