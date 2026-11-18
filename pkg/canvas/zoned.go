@@ -3,7 +3,6 @@ package canvas
 import (
 	"image"
 	"image/color"
-	"slices"
 )
 
 // zoneCrossing is where one zone's edge meets the current row: the first
@@ -134,13 +133,11 @@ func (c *Canvas) sweepLayers(layers []ZonedLayer, area image.Rectangle) {
 
 		for index := range c.sweeps {
 			sweep := &c.sweeps[index]
-			sweep.active = retire(sweep.active, y)
 			sweep.active, sweep.next = admit(sweep.active, sweep.edges, sweep.next, y)
 			live = live || len(sweep.active) > 0
 			pending = pending || sweep.next < len(sweep.edges)
 		}
 
-		c.zoneActive = retire(c.zoneActive, y)
 		c.zoneActive, zoneNext = admit(c.zoneActive, c.zoneEdges, zoneNext, y)
 
 		// Nothing on this row and nothing left to admit means every
@@ -154,11 +151,29 @@ func (c *Canvas) sweepLayers(layers []ZonedLayer, area image.Rectangle) {
 		}
 
 		for index := range c.sweeps {
-			advance(c.sweeps[index].active)
+			c.sweeps[index].active = stepRow(c.sweeps[index].active, y+1)
 		}
 
-		advance(c.zoneActive)
+		c.zoneActive = stepRow(c.zoneActive, y+1)
 	}
+}
+
+// stepRow is advance and the next row's retire in one pass: every edge that
+// still crosses row y moves onto it, and the rest are dropped. Each edge's x
+// takes the same additions it would in the two passes, so nothing moves.
+//
+//nolint:varnamelen // y is the pixel-addressing idiom used throughout this package.
+func stepRow(active []polyEdge, y int) []polyEdge {
+	kept := active[:0]
+
+	for _, edge := range active {
+		if edge.bottom > y {
+			edge.x += edge.slope
+			kept = append(kept, edge)
+		}
+	}
+
+	return kept
 }
 
 // fillRowLayers paints one row: each layer's even-odd spans, less whatever
@@ -202,12 +217,14 @@ func (c *Canvas) fillRowLayers(layers []ZonedLayer, y int, area image.Rectangle)
 // rowSpans lists the pixels this layer covers on the current row, left to
 // right, which is fillRow's even-odd pairing clipped to area.
 func (l *layerSweep) rowSpans(area image.Rectangle) {
+	// The active edges are kept in the order the last row sorted them into,
+	// which is almost always still the order, as with the zones.
+	insertByX(l.active)
+
 	l.crossings = l.crossings[:0]
 	for _, edge := range l.active {
 		l.crossings = append(l.crossings, edge.x)
 	}
-
-	slices.Sort(l.crossings)
 
 	l.spans = l.spans[:0]
 
