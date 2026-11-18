@@ -61,12 +61,24 @@ type Canvas struct {
 	active    []polyEdge
 	crossings []float64
 
+	// spare is the buffer the edges are sorted into, swapped with whichever
+	// list was sorted, and tops the sort's count of edges per row.
+	spare []polyEdge
+	tops  []int
+
 	// The same again for FillPolygonZoned's zones, which are swept beside
 	// the rings rather than mixed in with them: a zone decides the colour of
 	// a span and never whether it is painted.
 	zoneEdges     []polyEdge
 	zoneActive    []polyEdge
 	zoneCrossings []zoneCrossing
+
+	// FillLayersZoned's own: a sweep per layer, and the spans the layers
+	// above the one being painted have claimed on the current row, with a
+	// second list to merge the next layer's into.
+	sweeps  []layerSweep
+	covered []span
+	merged  []span
 }
 
 // New allocates a canvas of width by height pixels.
@@ -174,8 +186,16 @@ func (c *Canvas) FillRect(rect image.Rectangle, col color.RGBA) {
 		return
 	}
 
-	for y := area.Min.Y; y < area.Max.Y; y++ {
-		c.hline(area.Min.X, area.Max.X-1, y, col)
+	// The first row is painted and the rest copied from it, one memmove a
+	// row rather than the handful hline's doubling takes.
+	c.hline(area.Min.X, area.Max.X-1, area.Min.Y, col)
+
+	start := c.img.PixOffset(area.Min.X, area.Min.Y)
+	first := c.img.Pix[start : start+area.Dx()*bytesPerPixel]
+
+	for y := area.Min.Y + 1; y < area.Max.Y; y++ {
+		off := c.img.PixOffset(area.Min.X, y)
+		copy(c.img.Pix[off:off+len(first)], first)
 	}
 }
 
@@ -321,11 +341,32 @@ func (c *Canvas) hline(x0, x1, y int, col color.RGBA) {
 
 	start := c.img.PixOffset(from, y)
 	end := c.img.PixOffset(to, y) + bytesPerPixel
-	row := c.img.Pix[start:end:end]
+	paint(c.img.Pix[start:end:end], col)
+}
 
-	row[0], row[1], row[2], row[3] = col.R, col.G, col.B, col.A
+// paintSeed is how many bytes paint writes a word at a time before it starts
+// doubling with copy: below about this a memmove call costs more than the
+// stores it saves.
+const paintSeed = 64
 
-	for filled := bytesPerPixel; filled < len(row); filled *= 2 {
+// paint fills row, a whole number of pixels, with col.
+func paint(row []byte, col color.RGBA) {
+	const secondPixel = 32
+
+	pixel := binary.LittleEndian.Uint32([]byte{col.R, col.G, col.B, col.A})
+	word := uint64(pixel) | uint64(pixel)<<secondPixel
+	seed := min(len(row), paintSeed)
+
+	off := 0
+	for ; off+2*bytesPerPixel <= seed; off += 2 * bytesPerPixel {
+		binary.LittleEndian.PutUint64(row[off:off+2*bytesPerPixel], word)
+	}
+
+	if off < seed {
+		binary.LittleEndian.PutUint32(row[off:off+bytesPerPixel], pixel)
+	}
+
+	for filled := seed; filled < len(row); filled *= 2 {
 		copy(row[filled:], row[:filled])
 	}
 }
@@ -364,6 +405,13 @@ func (c *Canvas) blendSpan(x0, x1, y int, col color.RGBA, alpha float64) {
 		half    = 0x80
 		lowByte = 0xFF
 		opaqueA = 0xFF000000
+
+		wideRedBlue = 0x00FF00FF00FF00FF
+		wideHalves  = 0x0080008000800080
+		wideGreen   = 0x000000FF000000FF
+		wideHalf    = 0x0000008000000080
+		wideOpaque  = 0xFF000000FF000000
+		secondPixel = 32
 	)
 
 	next := uint32(math.Round(min(alpha, 1) * weightOne))
@@ -377,8 +425,24 @@ func (c *Canvas) blendSpan(x0, x1, y int, col color.RGBA, alpha float64) {
 
 	// Red and blue are blended together in one multiply, green in another:
 	// half the arithmetic of a channel at a time, and the same rounding.
-	for off := 0; off < len(row); off += bytesPerPixel {
-		pix := row[off : off+bytesPerPixel : off+bytesPerPixel]
+	// Two pixels at a time go through one 64-bit word with the same lanes
+	// twice over; the odd pixel at the end, if any, goes alone.
+	pairs := len(row) &^ (2*bytesPerPixel - 1)
+	wideRB := uint64(srcRB) | uint64(srcRB)<<secondPixel
+	wideG := uint64(srcG) | uint64(srcG)<<secondPixel
+
+	for off := 0; off < pairs; off += 2 * bytesPerPixel {
+		pix := row[off : off+2*bytesPerPixel : off+2*bytesPerPixel]
+		old := binary.LittleEndian.Uint64(pix)
+
+		rb := ((old&wideRedBlue)*uint64(prev) + wideRB + wideHalves) >> weightBits & wideRedBlue
+		g := ((old>>weightBits&wideGreen)*uint64(prev) + wideG + wideHalf) >> weightBits & wideGreen
+
+		binary.LittleEndian.PutUint64(pix, rb|g<<weightBits|wideOpaque)
+	}
+
+	if pairs < len(row) {
+		pix := row[pairs : pairs+bytesPerPixel : pairs+bytesPerPixel]
 		old := binary.LittleEndian.Uint32(pix)
 
 		rb := ((old&redBlue)*prev + srcRB + halves) >> weightBits & redBlue

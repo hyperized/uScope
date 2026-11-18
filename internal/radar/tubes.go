@@ -367,8 +367,7 @@ func (s *Scene) blendFaces(dst *canvas.Canvas, from, to int) {
 
 	for index := from; index < to; index++ {
 		patch := &s.tubePatches[index]
-		s.tubeRings[0] = s.tubePoints[patch.from:patch.to]
-		dst.BlendPolygon(s.tubeRings[:], clip, patch.ink, patch.alpha)
+		dst.BlendQuad([4]image.Point(s.tubePoints[patch.from:patch.to]), clip, patch.ink, patch.alpha)
 	}
 }
 

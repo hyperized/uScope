@@ -16,6 +16,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the busiest thing on the screen at noon. `s` now cycles on, off and auto;
   `on` is still the default, and `on` and `off` draw exactly what they did.
 
+### Changed
+
+- The tilted views draw faster, and the picture is the same byte for byte.
+  Most of the time went into anti-aliased lines, the tube faces and the
+  ground, which now fills its water and land in one pass and no longer has
+  the sky cleared underneath it first. On an M2 Pro a bare 3D frame at
+  3840x2160 over the real coastline takes 5 to 7 ms where it took about 10,
+  and the bare 3D view at 1280x720 with the strip board 1.4 ms where it took
+  1.8.
+
 ### Fixed
 
 - Tubes no longer stay on screen for hours after the traffic that made them

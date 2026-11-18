@@ -1,7 +1,6 @@
 package canvas
 
 import (
-	"cmp"
 	"image"
 	"image/color"
 	"math"
@@ -92,13 +91,81 @@ func (c *Canvas) fill(rings [][]image.Point, clip image.Rectangle, col color.RGB
 		return
 	}
 
-	slices.SortFunc(c.edges, byTopRow)
+	c.edges, c.spare = sortByTop(c.edges, c.spare, &c.tops)
 	c.sweep(area, col, alpha)
 }
 
-// byTopRow orders edges by the first row they appear on, which is the order
-// the sweep admits them in.
-func byTopRow(left, right polyEdge) int { return cmp.Compare(left.top, right.top) }
+// sortByTop orders edges by the first row they appear on, which is the order
+// the sweep admits them in, and returns the sorted list and the buffer that
+// held it before, for the next call to sort into.
+//
+// A coastline hands over thousands of edges and a corridor tube's strip a
+// handful, a few thousand times a frame, and neither sort suits both. The
+// thousands go through a counting sort on the row, over only the rows the
+// edges start on: a comparison sort was a tenth of the land fill, and a
+// histogram as tall as the clip cost every small strip a pass over the whole
+// clip's height. The handful go through an insertion sort in place. Edges
+// that start on the same row keep the order they came in, which nothing
+// relies on, since every row's crossings are sorted by where they sit before
+// they are used. counts is the histogram's scratch, grown and kept.
+func sortByTop(edges, spare []polyEdge, counts *[]int) ([]polyEdge, []polyEdge) {
+	if len(edges) <= shortEdgeList {
+		insertByTop(edges)
+
+		return edges, spare
+	}
+
+	first, last := edges[0].top, edges[0].top
+	for index := range edges {
+		first, last = min(first, edges[index].top), max(last, edges[index].top)
+	}
+
+	rows := last - first + 2
+	if cap(*counts) < rows {
+		*counts = make([]int, rows)
+	}
+
+	tally := (*counts)[:rows]
+	clear(tally)
+
+	for index := range edges {
+		tally[edges[index].top-first+1]++
+	}
+
+	for row := 1; row < rows; row++ {
+		tally[row] += tally[row-1]
+	}
+
+	spare = slices.Grow(spare[:0], len(edges))[:len(edges)]
+
+	for index := range edges {
+		slot := edges[index].top - first
+		spare[tally[slot]] = edges[index]
+		tally[slot]++
+	}
+
+	return spare, edges
+}
+
+// shortEdgeList is the longest edge list sortByTop sorts by insertion. A
+// strip of a tube is four edges; past a few dozen the counting sort wins.
+const shortEdgeList = 32
+
+// insertByTop sorts edges by their first row, in place, keeping ties in the
+// order they came in.
+func insertByTop(edges []polyEdge) {
+	for index := 1; index < len(edges); index++ {
+		edge := edges[index]
+
+		slot := index
+		for slot > 0 && edges[slot-1].top > edge.top {
+			edges[slot] = edges[slot-1]
+			slot--
+		}
+
+		edges[slot] = edge
+	}
+}
 
 // buildEdges turns every ring into the edges that cross a scanline inside
 // area.

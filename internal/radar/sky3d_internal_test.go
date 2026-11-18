@@ -1,9 +1,11 @@
 package radar
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -414,7 +416,7 @@ func TestPaintSky(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	scene.paintSky(canv, box)
+	scene.paintSky(canv, box, nil)
 
 	if got := canv.Image().RGBAAt(10, horizon); got != scene.sky.horizon {
 		t.Errorf("under the horizon with the shore on is %v, want the horizon colour %v", got, scene.sky.horizon)
@@ -425,7 +427,7 @@ func TestPaintSky(t *testing.T) {
 	}
 
 	scene.minimalShore = false
-	scene.paintSky(canv, box)
+	scene.paintSky(canv, box, nil)
 
 	if got := canv.Image().RGBAAt(10, box.Max.Y-1); got != scene.pal.Field {
 		t.Errorf("under the horizon with no ground is %v, want the field", got)
@@ -436,7 +438,7 @@ func TestPaintSky(t *testing.T) {
 	full.sky.known = false
 
 	canv.Clear(canvas.Red)
-	full.paintSky(canv, box)
+	full.paintSky(canv, box, nil)
 
 	if got := canv.Image().RGBAAt(10, 10); got != canvas.Red {
 		t.Errorf("the full view with no sun painted %v over its frame", got)
@@ -493,6 +495,78 @@ func TestHazeEndsOnTheHorizon(t *testing.T) {
 		if distance(pair.end, far) >= distance(pair.end, pair.near) {
 			t.Errorf("the %s's last band %v is nearer where it started %v than the horizon %v",
 				pair.name, pair.end, pair.near, far)
+		}
+	}
+}
+
+// TestSkyLeavesGroundRows checks the rows the sky leaves uncleared are ones
+// the ground then paints edge to edge: the same frame drawn over a red canvas
+// and over a blue one comes out identical, and the sky did skip rows, so the
+// comparison means something.
+func TestSkyLeavesGroundRows(t *testing.T) {
+	t.Parallel()
+
+	set, err := shore.Load()
+	if err != nil {
+		t.Fatalf("shore.Load: %v", err)
+	}
+
+	var pictures [2][]byte
+
+	for index, under := range []color.RGBA{canvas.Red, canvas.Blue} {
+		scene, frame := skyScene(t, -3, theme.Night)
+		scene.minimalShore, scene.shoreSet = true, set
+
+		canv := blankCanvas(t)
+		canv.Clear(under)
+
+		lay := layout{dst: canv, scope: canv.Bounds()}
+		scene.draw3D(&lay, frame, 0)
+
+		if !slices.Contains(scene.groundRows, true) {
+			t.Fatal("the sky cleared every row, so nothing was left for the ground")
+		}
+
+		if scene.hazeReady {
+			t.Error("the ground left the haze marked ready for the next frame")
+		}
+
+		pictures[index] = canv.Image().Pix
+	}
+
+	if !bytes.Equal(pictures[0], pictures[1]) {
+		t.Error("a row the sky skipped kept what the canvas held before the frame")
+	}
+}
+
+// TestGroundRowsWithoutGround checks no row is left uncleared when no ground
+// will be drawn: the shore off, or a view with nothing plottable.
+func TestGroundRowsWithoutGround(t *testing.T) {
+	t.Parallel()
+
+	scene, frame := skyScene(t, -3, theme.Night)
+	canv := blankCanvas(t)
+
+	view, drawable := scene.measure3D(&layout{dst: canv, scope: canv.Bounds()}, frame, 0)
+	if !drawable {
+		t.Fatal("measure3D found no room")
+	}
+
+	unplottable := view
+	unplottable.plottable = false
+
+	for _, testCase := range []struct {
+		name  string
+		view  scene3
+		shore bool
+	}{
+		{name: "shore off", view: view},
+		{name: "nothing plottable", view: unplottable, shore: true},
+	} {
+		scene.minimalShore = testCase.shore
+
+		if rows := scene.groundRows3(canv, testCase.view); len(rows) != 0 || scene.hazeReady {
+			t.Errorf("%s: %d rows marked, haze ready %v, want none", testCase.name, len(rows), scene.hazeReady)
 		}
 	}
 }

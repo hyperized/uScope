@@ -406,23 +406,44 @@ func TestAppendEdgeNormalisesDirection(t *testing.T) {
 	}
 }
 
-func TestByTopRow(t *testing.T) {
+func TestSortByTop(t *testing.T) {
 	t.Parallel()
 
+	// spread is a list long enough for the counting sort, its rows running
+	// down from 99 with every third one repeated.
+	spread := make([]int, 3*shortEdgeList)
+	for index := range spread {
+		spread[index] = 99 - index + index%3
+	}
+
 	for _, testCase := range []struct {
-		name        string
-		left, right polyEdge
-		want        int
+		name string
+		tops []int
 	}{
-		{name: "left starts earlier", left: polyEdge{top: 1}, right: polyEdge{top: 5}, want: -1},
-		{name: "left starts later", left: polyEdge{top: 5}, right: polyEdge{top: 1}, want: 1},
-		{name: "same start row", left: polyEdge{top: 3}, right: polyEdge{top: 3}, want: 0},
+		{name: "no edges", tops: nil},
+		{name: "a short list already in order", tops: []int{10, 11, 15, 19}},
+		{name: "a short list last row first", tops: []int{19, 15, 11, 10}},
+		{name: "a short list with ties", tops: []int{14, 10, 14, 12, 14, 10}},
+		{name: "a long list", tops: spread},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := byTopRow(testCase.left, testCase.right); got != testCase.want {
-				t.Errorf("byTopRow(%+v, %+v) = %d, want %d", testCase.left, testCase.right, got, testCase.want)
+			edges := make([]polyEdge, len(testCase.tops))
+			for index, top := range testCase.tops {
+				edges[index] = polyEdge{top: top, winding: index}
+			}
+
+			want := slices.Clone(edges)
+			slices.SortStableFunc(want, func(left, right polyEdge) int { return left.top - right.top })
+
+			// A short counts buffer has to be grown, a spare with room reused.
+			counts := make([]int, 1)
+			spare := make([]polyEdge, 0, 1)
+
+			got, _ := sortByTop(edges, spare, &counts)
+			if !slices.Equal(got, want) {
+				t.Errorf("sortByTop = %+v, want %+v", got, want)
 			}
 		})
 	}
@@ -709,5 +730,97 @@ func assertBlended(t *testing.T, canv *Canvas, want image.Rectangle) {
 				t.Errorf("pixel (%d, %d) = %v, want untouched", x, y, got)
 			}
 		}
+	}
+}
+
+// TestBlendSpanPairsMatchOnePixelAtATime holds the two-pixel words in
+// blendSpan to the one-pixel formula: every pixel of spans of odd and even
+// length over varied backgrounds, at a spread of alphas.
+func TestBlendSpanPairsMatchOnePixelAtATime(t *testing.T) {
+	t.Parallel()
+
+	const width = 37
+
+	ink := color.RGBA{R: 0xC8, G: 0x3A, B: 0x91, A: 0xFF}
+
+	for _, alpha := range []float64{0.004, 0.1, 0.33, 0.5, 0.77, 0.999} {
+		for _, span := range []int{1, 2, 3, 36, 37} {
+			canv, err := New(width, 1)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			for index := range canv.img.Pix {
+				canv.img.Pix[index] = uint8(index*97 + 13) //nolint:gosec // a pattern, wrapping on purpose.
+			}
+
+			want := slices.Clone(canv.img.Pix)
+			next := uint32(math.Round(alpha * 256))
+
+			for pixel := range span {
+				for channel, ink := range []uint8{ink.R, ink.G, ink.B} {
+					at := pixel*bytesPerPixel + channel
+					//nolint:gosec // the sum is under 2^16 before the shift.
+					want[at] = uint8((uint32(want[at])*(256-next) + uint32(ink)*next + 0x80) >> 8)
+				}
+
+				want[pixel*bytesPerPixel+3] = opaque
+			}
+
+			canv.blendSpan(0, span-1, 0, ink, alpha)
+
+			if !slices.Equal(canv.img.Pix, want) {
+				t.Errorf("alpha %v, span %d: got %v, want %v", alpha, span, canv.img.Pix, want)
+			}
+		}
+	}
+}
+
+// TestPaintEveryLength fills rows of every length either side of paintSeed
+// and checks each pixel, so the word stores, the odd pixel after them and
+// the doubling all meet the same answer.
+func TestPaintEveryLength(t *testing.T) {
+	t.Parallel()
+
+	ink := color.RGBA{R: 1, G: 2, B: 3, A: 4}
+
+	for pixels := 1; pixels <= 3*paintSeed/bytesPerPixel+1; pixels++ {
+		row := make([]byte, pixels*bytesPerPixel)
+		paint(row, ink)
+
+		for at := 0; at < len(row); at += bytesPerPixel {
+			if got := (color.RGBA{R: row[at], G: row[at+1], B: row[at+2], A: row[at+3]}); got != ink {
+				t.Fatalf("%d pixels: pixel %d = %v, want %v", pixels, at/bytesPerPixel, got, ink)
+			}
+		}
+	}
+}
+
+func TestMergeSpans(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		left, right []span
+		want        []span
+	}{
+		{name: "both empty", want: nil},
+		{name: "one side empty", left: []span{{1, 3}, {6, 8}}, want: []span{{1, 3}, {6, 8}}},
+		{
+			name: "disjoint interleave",
+			left: []span{{1, 2}, {10, 12}}, right: []span{{5, 6}},
+			want: []span{{1, 2}, {5, 6}, {10, 12}},
+		},
+		{name: "touching spans join", left: []span{{1, 4}}, right: []span{{5, 9}}, want: []span{{1, 9}}},
+		{name: "overlap joins", left: []span{{1, 6}}, right: []span{{3, 9}}, want: []span{{1, 9}}},
+		{name: "one inside another", left: []span{{1, 20}}, right: []span{{3, 4}, {8, 9}}, want: []span{{1, 20}}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := mergeSpans(nil, testCase.left, testCase.right); !slices.Equal(got, testCase.want) {
+				t.Errorf("mergeSpans(%v, %v) = %v, want %v", testCase.left, testCase.right, got, testCase.want)
+			}
+		})
 	}
 }

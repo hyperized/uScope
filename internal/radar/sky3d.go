@@ -225,7 +225,11 @@ func (s *Scene) skyClears() bool {
 // all, and a floor of sunset orange under the traffic would be the loudest
 // thing in the picture; the field there puts a dark land against the sky,
 // which is what a horizon is.
-func (s *Scene) paintSky(window *canvas.Canvas, box image.Rectangle) {
+//
+// The rows marked in covered are left alone: the ground's water is about to
+// paint every pixel of them, so clearing them first would only be written
+// over. Stars drawn on them are written over the same way.
+func (s *Scene) paintSky(window *canvas.Canvas, box image.Rectangle, covered []bool) {
 	if !s.sky.known && !s.skyClears() {
 		return
 	}
@@ -235,7 +239,7 @@ func (s *Scene) paintSky(window *canvas.Canvas, box image.Rectangle) {
 		below = s.sky.horizon
 	}
 
-	window.ClearRows(s.skyRows(box, window.Bounds()), below)
+	window.ClearRowsExcept(s.skyRows(box, window.Bounds()), below, covered)
 }
 
 // skyRows is the sky's gradient for a window onto box, one colour per row
