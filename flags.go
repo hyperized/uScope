@@ -234,8 +234,9 @@ type config struct {
 	// built; see sourceError.
 	corridorField string
 
-	// corridorHalfLife is how long a lost track takes to fade to half its
-	// strength, already inside the source's bounds.
+	// corridorHalfLife is how long a lost track takes to count for half as
+	// much, and a route to fade out once nothing flies it, already inside the
+	// source's bounds.
 	corridorHalfLife time.Duration
 
 	// history is the --history file, already validated, and empty for off.
@@ -416,7 +417,8 @@ func bindCorridors(set *flag.FlagSet, raw *rawFlags) {
 	set.StringVar(&raw.corrField, "corridor-field", "",
 		"the airfield lost tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm")
 	set.StringVar(&raw.halfLife, "corridor-half-life", defaultCorridorHalfLife,
-		"how long a lost track takes to fade to half its strength, 10m to 24h")
+		"how long a lost track takes to count for half as much, and how long a route is drawn once nothing flies it, "+
+			"10m to 24h")
 	set.StringVar(&raw.history, "history", stateOff,
 		"keep the lost tracks in this file across a restart, live sources only; off keeps nothing")
 }

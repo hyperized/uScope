@@ -305,9 +305,10 @@ func WithCorridorField(icao string) LiveOption {
 	return func(l *Live) { l.corridorField = icao }
 }
 
-// WithCorridorHalfLife replaces how long a lost track takes to fade to half
-// its strength. A value CheckCorridorHalfLife refuses, zero included, leaves
-// the default.
+// WithCorridorHalfLife replaces how long a lost track takes to count for
+// half as much, which is also how long a route is drawn once nothing flies
+// it. A value CheckCorridorHalfLife refuses, zero included, leaves the
+// default.
 func WithCorridorHalfLife(halfLife time.Duration) LiveOption {
 	return func(l *Live) {
 		if CheckCorridorHalfLife(halfLife) == nil {

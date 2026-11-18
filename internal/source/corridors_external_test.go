@@ -3,6 +3,7 @@ package source_test
 import (
 	"errors"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -432,5 +433,48 @@ func TestCorridorsClassifyAllocatesNothing(t *testing.T) {
 	allocs := testing.AllocsPerRun(100, func() { _ = corridors.Classify(plane) })
 	if allocs != 0 {
 		t.Fatalf("Classify allocated %v times, want 0", allocs)
+	}
+}
+
+// TestDemoRoutesClearWhenQuiet checks a quiet sky clears through the public
+// frame: the demo's invented history makes tubes at full strength, and with
+// nothing lost for two hours after it, the default half-life, every route has
+// faded to nothing while the frame still carries the tracks themselves.
+func TestDemoRoutesClearWhenQuiet(t *testing.T) {
+	t.Parallel()
+
+	now := fixedNow
+
+	demo, err := source.NewDemo(source.WithDemoClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("NewDemo: %v", err)
+	}
+
+	first := demo.Frame()
+
+	full := slices.IndexFunc(first.Routes, func(r source.Route) bool { return r.Strength == 1 })
+	if full < 0 {
+		t.Fatalf("the demo's first frame has %d routes and none at full strength", len(first.Routes))
+	}
+
+	var newest time.Time
+
+	for _, ghost := range first.Ghosts {
+		if ghost.LostAt.After(newest) {
+			newest = ghost.LostAt
+		}
+	}
+
+	now = newest.Add(source.DefaultCorridorHalfLife)
+	quiet := demo.Frame()
+
+	for index, route := range quiet.Routes {
+		if route.Strength != 0 {
+			t.Errorf("route %d at %g a half-life after the last loss, want 0", index, route.Strength)
+		}
+	}
+
+	if len(quiet.Ghosts) == 0 {
+		t.Error("the quiet frame lost the tracks as well as the tubes")
 	}
 }
