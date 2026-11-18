@@ -406,23 +406,44 @@ func TestAppendEdgeNormalisesDirection(t *testing.T) {
 	}
 }
 
-func TestByTopRow(t *testing.T) {
+func TestSortByTop(t *testing.T) {
 	t.Parallel()
 
+	// spread is a list long enough for the counting sort, its rows running
+	// down from 99 with every third one repeated.
+	spread := make([]int, 3*shortEdgeList)
+	for index := range spread {
+		spread[index] = 99 - index + index%3
+	}
+
 	for _, testCase := range []struct {
-		name        string
-		left, right polyEdge
-		want        int
+		name string
+		tops []int
 	}{
-		{name: "left starts earlier", left: polyEdge{top: 1}, right: polyEdge{top: 5}, want: -1},
-		{name: "left starts later", left: polyEdge{top: 5}, right: polyEdge{top: 1}, want: 1},
-		{name: "same start row", left: polyEdge{top: 3}, right: polyEdge{top: 3}, want: 0},
+		{name: "no edges", tops: nil},
+		{name: "a short list already in order", tops: []int{10, 11, 15, 19}},
+		{name: "a short list last row first", tops: []int{19, 15, 11, 10}},
+		{name: "a short list with ties", tops: []int{14, 10, 14, 12, 14, 10}},
+		{name: "a long list", tops: spread},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := byTopRow(testCase.left, testCase.right); got != testCase.want {
-				t.Errorf("byTopRow(%+v, %+v) = %d, want %d", testCase.left, testCase.right, got, testCase.want)
+			edges := make([]polyEdge, len(testCase.tops))
+			for index, top := range testCase.tops {
+				edges[index] = polyEdge{top: top, winding: index}
+			}
+
+			want := slices.Clone(edges)
+			slices.SortStableFunc(want, func(left, right polyEdge) int { return left.top - right.top })
+
+			// A short counts buffer has to be grown, a spare with room reused.
+			counts := make([]int, 1)
+			spare := make([]polyEdge, 0, 1)
+
+			got, _ := sortByTop(edges, spare, &counts)
+			if !slices.Equal(got, want) {
+				t.Errorf("sortByTop = %+v, want %+v", got, want)
 			}
 		})
 	}

@@ -3,7 +3,6 @@ package canvas
 import (
 	"image"
 	"image/color"
-	"slices"
 )
 
 // zoneCrossing is where one zone's edge meets the current row: the first
@@ -46,8 +45,8 @@ func (c *Canvas) FillPolygonZoned(rings, zones [][]image.Point, clip image.Recta
 
 	c.zoneEdges = buildEdges(c.zoneEdges[:0], zones, area)
 
-	slices.SortFunc(c.edges, byTopRow)
-	slices.SortFunc(c.zoneEdges, byTopRow)
+	c.edges, c.spare = sortByTop(c.edges, c.spare, &c.tops)
+	c.zoneEdges, c.spare = sortByTop(c.zoneEdges, c.spare, &c.tops)
 	c.sweepZoned(area, inks)
 }
 

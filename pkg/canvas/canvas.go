@@ -61,6 +61,11 @@ type Canvas struct {
 	active    []polyEdge
 	crossings []float64
 
+	// spare is the buffer the edges are sorted into, swapped with whichever
+	// list was sorted, and tops the sort's count of edges per row.
+	spare []polyEdge
+	tops  []int
+
 	// The same again for FillPolygonZoned's zones, which are swept beside
 	// the rings rather than mixed in with them: a zone decides the colour of
 	// a span and never whether it is painted.
