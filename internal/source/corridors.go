@@ -29,10 +29,11 @@ const (
 )
 
 const (
-	// DefaultCorridorHalfLife is how long a lost track takes to fade to half
-	// its strength. Two hours keeps a morning's runway configuration visible
-	// through the afternoon and lets it fade by the evening, when the wind may
-	// have turned it.
+	// DefaultCorridorHalfLife is how long a lost track takes to count for half
+	// as much, and how long a route goes on being drawn once its traffic has
+	// stopped. Two hours holds a runway in use through the gaps between its
+	// flights and clears one the wind has turned the traffic off within two
+	// hours of its last arrival.
 	DefaultCorridorHalfLife = 2 * time.Hour
 
 	// corridorFieldNm is how close to the field a track has to end to count as

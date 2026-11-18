@@ -18,6 +18,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Tubes no longer stay on screen for hours after the traffic that made them
+  has gone. A route's strength was its tracks' weights added up and capped at
+  three tracks' worth, so a route that collected forty arrivals in an evening
+  held full strength for hours after the last of them. Replayed against a
+  recorded evening, every one of its 15 tubes was still at full strength three
+  hours after the last aircraft. A tube now stays at full strength for a
+  quarter of `--corridor-half-life` after its route was last flown, then fades
+  smoothly and is gone at one half-life: half an hour and two hours at the
+  default. A route flown every twenty or thirty minutes stays steady between
+  flights. In the 3D views the fade moves every frame, not once a minute.
 - Under an altitude filter, the trail of an aircraft heard again after a gap
   no longer vanishes until its altitude is decoded and then fades back in.
   The filter now judges an aircraft with no altitude yet by the last one on

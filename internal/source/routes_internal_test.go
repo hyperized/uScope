@@ -709,3 +709,224 @@ func BenchmarkRouteCompute(b *testing.B) {
 		book.refresh(trails, 1, routeEpoch, &routeField)
 	}
 }
+
+// drawnStrength is the weakest route strength the radar draws a tube at:
+// its corridorMinStrength over its tubeLineStrength. It is spelled out here
+// rather than imported, because the radar imports this package.
+const drawnStrength = 0.015 / 0.75
+
+// flown is count arrivals down one final from the north, one every gap, the
+// newest lost at last, ordered oldest first the way the ring keeps them. Each
+// is laid a little east or west of the centreline so the station sums have a
+// spread to carry.
+func flown(count int, gap time.Duration, last time.Time) []Trail {
+	trails := make([]Trail, 0, count)
+
+	for index := range count {
+		offset := float64(index%5-2) * 0.3
+		trail := routeLine(TrackInbound, offset, 30, 0, 0, 9000, 200)
+		trail.LostAt = last.Add(-time.Duration(count-1-index) * gap)
+		trails = append(trails, trail)
+	}
+
+	return trails
+}
+
+func TestRouteRecency(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name            string
+		quiet, halfLife time.Duration
+		want            float64
+	}{
+		{name: "just flown", quiet: 0, halfLife: time.Hour, want: 1},
+		{name: "end of the hold", quiet: 15 * time.Minute, halfLife: time.Hour, want: 1},
+		{name: "halfway down", quiet: 37*time.Minute + 30*time.Second, halfLife: time.Hour, want: 0.5},
+		{name: "one half-life", quiet: time.Hour, halfLife: time.Hour, want: 0},
+		{name: "long gone", quiet: 10 * time.Hour, halfLife: time.Hour, want: 0},
+		{name: "scales with the half-life", quiet: 75 * time.Minute, halfLife: 2 * time.Hour, want: 0.5},
+		{name: "lost after now", quiet: -time.Hour, halfLife: time.Hour, want: 1},
+		{name: "no half-life", quiet: 10 * time.Hour, halfLife: 0, want: 1},
+	} {
+		if got := routeRecency(testCase.quiet, testCase.halfLife); math.Abs(got-testCase.want) > 1e-12 {
+			t.Errorf("%s: recency = %g, want %g", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+// TestRoutesFadeWhenQuiet is the night with nothing flying. Forty arrivals
+// down one final used to hold the route at full strength for nearly four
+// half-lives after the last of them, because the summed weight is capped at
+// three tracks. It now holds for a quarter of a half-life, then falls every
+// second it is looked at, the same whether the routes were recomputed that
+// second or not, and is under the radar's threshold before one half-life is
+// out and at nothing by then. Three tracks fade on the same clock as forty.
+func TestRoutesFadeWhenQuiet(t *testing.T) {
+	t.Parallel()
+
+	for _, count := range []int{3, 10, 40} {
+		trails := flown(count, 5*time.Minute, routeEpoch)
+
+		var book routeBook
+
+		previous := 2.0
+
+		for second := 0; second <= int(time.Hour/time.Second); second++ {
+			now := routeEpoch.Add(time.Duration(second) * time.Second)
+
+			routes := book.refresh(trails, 1, now, &routeField)
+			if len(routes) != 1 {
+				t.Fatalf("%d tracks, %ds: routes = %d, want 1", count, second, len(routes))
+			}
+
+			strength := routes[0].Strength
+			quiet := time.Duration(second) * time.Second
+
+			switch {
+			case quiet <= 15*time.Minute && count >= 10 && strength != 1:
+				t.Fatalf("%d tracks, %s quiet: strength %g, want held at 1", count, quiet, strength)
+			case quiet > 15*time.Minute && strength >= previous:
+				t.Fatalf("%d tracks, %s quiet: strength %g after %g, want falling", count, quiet, strength, previous)
+			case previous <= 1 && previous-strength > 0.001:
+				t.Fatalf("%d tracks, %s quiet: strength fell %g in a second, want smooth",
+					count, quiet, previous-strength)
+			case quiet >= 57*time.Minute && strength >= drawnStrength:
+				t.Fatalf("%d tracks, %s quiet: strength %g, want under the radar's threshold", count, quiet, strength)
+			default:
+			}
+
+			previous = strength
+		}
+
+		if previous != 0 {
+			t.Errorf("%d tracks: strength %g one half-life on, want none", count, previous)
+		}
+	}
+}
+
+// TestQuietRouteKeepsItsShape checks a fading tube does not move. Its members
+// all lose weight at the same rate, which leaves every weighted mean and
+// spread where it was, so the stations a minute's recompute produces late in
+// the fade are the ones it started with, even though the members were lost
+// hours apart and the oldest now counts for almost nothing.
+func TestQuietRouteKeepsItsShape(t *testing.T) {
+	t.Parallel()
+
+	trails := flown(12, 20*time.Minute, routeEpoch)
+
+	var book routeBook
+
+	first := slices.Clone(book.refresh(trails, 1, routeEpoch, &routeField)[0].Stations)
+	late := book.refresh(trails, 1, routeEpoch.Add(50*time.Minute), &routeField)[0].Stations
+
+	if book.generation != 2 || len(late) != len(first) {
+		t.Fatalf("generation %d with %d stations, want a recompute with %d", book.generation, len(late), len(first))
+	}
+
+	for index := range first {
+		was, now := first[index], late[index]
+
+		for _, pair := range [][2]float64{
+			{was.Latitude, now.Latitude}, {was.Longitude, now.Longitude},
+			{was.Altitude, now.Altitude}, {was.SpreadNm, now.SpreadNm}, {was.SpreadFt, now.SpreadFt},
+		} {
+			// Only the sum-of-squares rounding is left: a millionth of a
+			// foot on the altitude spread.
+			if math.Abs(pair[0]-pair[1]) > 1e-5 {
+				t.Fatalf("station %d moved from %+v to %+v", index, was, now)
+			}
+		}
+	}
+}
+
+// TestRouteHeldBetweenFlights checks a route flown every 25 minutes, at the
+// default half-life, stays at full strength through every gap rather than
+// dimming and coming back with each arrival.
+func TestRouteHeldBetweenFlights(t *testing.T) {
+	t.Parallel()
+
+	field := routeField
+	field.halfLife = DefaultCorridorHalfLife
+
+	trails := flown(15, 25*time.Minute, routeEpoch)
+
+	var book routeBook
+
+	for minute := range 25 {
+		routes := book.refresh(trails, 1, routeEpoch.Add(time.Duration(minute)*time.Minute), &field)
+		if len(routes) != 1 || routes[0].Strength != 1 {
+			t.Fatalf("%d minutes after the last arrival: %d routes, want one at full strength", minute, len(routes))
+		}
+	}
+}
+
+// TestRunwayChange checks the old runway's tube fades over the same span a
+// quiet night takes while the new runway's builds up. Arrivals come from the
+// north every five minutes until the change and from the south after it.
+func TestRunwayChange(t *testing.T) {
+	t.Parallel()
+
+	old := flown(24, 5*time.Minute, routeEpoch)
+
+	// Three arrivals on the new runway, the newest just lost, are most of a
+	// corridor at once, and the few more that follow make all of one.
+	for _, step := range []struct {
+		after          time.Duration
+		newMin         float64
+		oldMin, oldMax float64
+	}{
+		{after: 15 * time.Minute, newMin: 0.9, oldMin: 1, oldMax: 1},
+		{after: 40 * time.Minute, newMin: 1, oldMin: 0.3, oldMax: 0.7},
+		{after: time.Hour, newMin: 1},
+	} {
+		now := routeEpoch.Add(step.after)
+		fresh := flown(int(step.after/(5*time.Minute)), 5*time.Minute, now)
+
+		for index := range fresh {
+			// The new runway's arrivals come in from the south.
+			for fix := range fresh[index].Points {
+				point := &fresh[index].Points[fix]
+				point.Latitude = 2*routeField.field.Latitude - point.Latitude
+			}
+		}
+
+		var book routeBook
+
+		trails := append(slices.Clone(old), fresh...)
+		routes := book.refresh(trails, 1, now, &routeField)
+
+		if len(routes) != 2 {
+			t.Fatalf("%s after the change: routes = %d, want 2", step.after, len(routes))
+		}
+
+		// Grouping runs newest first, so the new runway's route is the first.
+		newer, older := routes[0].Strength, routes[1].Strength
+		if newer < step.newMin || older < step.oldMin || older > step.oldMax {
+			t.Errorf("%s after the change: new runway %g, old %g; want %g or more and %g to %g",
+				step.after, newer, older, step.newMin, step.oldMin, step.oldMax)
+		}
+	}
+}
+
+// TestRouteRefreshAllocatesNothing checks the path every frame takes between
+// computes, which now ages each route's strength, stays free.
+//
+//nolint:paralleltest // AllocsPerRun panics inside a parallel test.
+func TestRouteRefreshAllocatesNothing(t *testing.T) {
+	trails := flown(10, 5*time.Minute, routeEpoch)
+
+	var book routeBook
+
+	book.refresh(trails, 1, routeEpoch, &routeField)
+
+	at := routeEpoch
+
+	allocs := testing.AllocsPerRun(100, func() {
+		at = at.Add(time.Millisecond)
+		book.refresh(trails, 1, at, &routeField)
+	})
+	if allocs != 0 {
+		t.Errorf("refresh between computes allocates %g times, want 0", allocs)
+	}
+}

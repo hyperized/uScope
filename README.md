@@ -251,9 +251,13 @@ keeps it for a while. Arrivals that flew the same way are bundled into a
 route, and so are departures, and each route is drawn as a tube: the
 bundle's average path down the middle, its spread as the width. Arrivals
 from several directions end on the same runway, so an arrival tube is a cone
-narrowing onto it; a departure opens out the other way. Every track fades by half every
-two hours (`--corridor-half-life`), so a runway change shows as one set of
-tubes fading out while the next builds up.
+narrowing onto it; a departure opens out the other way. A tube stays at full
+strength while its route is being flown. Once nothing has flown it for half
+an hour it starts to fade, and two hours after its last aircraft it is gone
+(`--corridor-half-life`, `2h`). A quiet night clears the sky, and a runway
+change shows as one set of tubes fading out while the next builds up. Each
+track also counts for half as much every half-life, so a route's average
+path leans towards the aircraft that flew it most recently.
 
 Each track is sorted once, when it is lost, against one airfield: the
 nearest within 150 nm of the receiver, or the one you name with
@@ -427,7 +431,7 @@ between the arrows and the brackets.
 | `--stars` | `on` | stars in the 3D views' night sky |
 | `--corridors` | `on` | the corridor tubes |
 | `--corridor-field` | | the airfield tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm |
-| `--corridor-half-life` | `2h` | how long a lost track takes to count for half as much, `10m` to `24h` |
+| `--corridor-half-life` | `2h` | how long a lost track takes to count for half as much, and how long a tube lasts once nothing flies its route, `10m` to `24h` |
 | `--history` | `off` | keep the lost tracks in this file across a restart; live sources only |
 | `--exaggerate` | `8` | how far the 3D view stretches altitude into height, 1 to 20 |
 | `--tilt` | `35` | the 3D camera's starting elevation in degrees, 10 to 80 |

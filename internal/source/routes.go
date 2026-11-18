@@ -83,6 +83,14 @@ const (
 	// Three recent arrivals down the same approach are a corridor; one is an
 	// aeroplane that happened to come that way.
 	routeFullTracks = 3.0
+
+	// routeQuietHold and routeQuietGone are, in half-lives, how long after its
+	// newest track a route starts to fade and when it has faded out. At the
+	// default two hours that is half an hour held, then gone within the two
+	// hours. The hold is what keeps a route flown every twenty or thirty
+	// minutes from dimming between flights; see routeRecency.
+	routeQuietHold = 0.25
+	routeQuietGone = 1.0
 )
 
 // routeSignatureNm is where an arrival or a departure is compared with a
@@ -108,7 +116,10 @@ type Route struct {
 
 	// Strength is how much of a corridor the route makes, from 0 to 1: the
 	// members' weights summed, each halving every half-life since it was lost,
-	// over three fresh tracks.
+	// over three fresh tracks, times how recently the route was last flown.
+	// The second half is what clears a route once its traffic stops, however
+	// many tracks it collected; see routeRecency. It is aged on every Frame,
+	// so it moves smoothly from one frame to the next.
 	Strength float64
 
 	// Stations is the mean path, smoothed, outward from the field.
@@ -183,12 +194,20 @@ func (s *stationSum) add(point *stationPoint, weight float64) {
 	}
 }
 
-// routeHead is what a route is matched by, taken from its first member, and
-// the weight its members add up to.
+// routeHead is what a route is matched by, taken from its first member, the
+// weight its members add up to and when the newest of them was lost.
 type routeHead struct {
 	class     TrackClass
 	signature routeSignature
 	weight    float64
+	newest    time.Time
+}
+
+// routeFade is what an emitted route's strength is aged from: its members'
+// summed weight at the compute and when its newest member was lost.
+type routeFade struct {
+	weight float64
+	newest time.Time
 }
 
 // routeSignature is one track's half of the match: the bearing from the field
@@ -206,10 +225,9 @@ type routeSpan struct {
 // needs between computes, so a compute after the first allocates only when
 // the ring holds more than it ever has.
 //
-// It is recomputed when the ring changes and once a minute otherwise, because
-// the members' weights age: a route's strength and its mean path both lean
-// towards the newer tracks as the older ones fade. Between computes the same
-// routes go back out.
+// It is recomputed when the ring changes and once a minute otherwise. Between
+// computes the same routes go back out, with only their strength aged to the
+// caller's clock.
 type routeBook struct {
 	heads [routeMaxRoutes]routeHead
 	sums  [routeMaxRoutes]*[routeMaxStations]stationSum
@@ -235,6 +253,10 @@ type routeBook struct {
 	stations []Station
 	spans    [routeMaxRoutes]routeSpan
 	out      []Route
+
+	// fades is what each route in out has its strength aged from, by the
+	// same index.
+	fades [routeMaxRoutes]routeFade
 
 	// cuts is each route's tube as a range of station slots, empty when the
 	// route has none. raw and smooth are one route's stations before and
@@ -263,19 +285,68 @@ func (b *routeBook) stale(version uint64, now time.Time) bool {
 	return since < 0 || since >= corridorExpireEvery
 }
 
-// refresh recomputes the routes when they are stale and hands back the ones
-// to draw. trails is the ring's own list, and the Tubed flag on each is
-// written here.
+// refresh recomputes the routes when they are stale, ages their strength to
+// now, and hands back the ones to draw. trails is the ring's own list, and
+// the Tubed flag on each is written here.
 func (b *routeBook) refresh(trails []Trail, version uint64, now time.Time, field *corridors) []Route {
-	if !b.stale(version, now) {
-		return b.out
+	if b.stale(version, now) {
+		b.version, b.at, b.computed = version, now, true
+		b.generation++
+		b.compute(trails, now, field)
 	}
 
-	b.version, b.at, b.computed = version, now, true
-	b.generation++
-	b.compute(trails, now, field)
+	b.age(now, field.halfLife)
 
 	return b.out
+}
+
+// age sets every route's strength for now.
+//
+// The summed weight is carried forward from the compute rather than summed
+// again, which is exact for every member lost before the compute: they all
+// halve on the same clock, so the sum at the compute times the decay since is
+// the sum now. A member stamped after the compute's clock, which only a
+// clock stepped backwards produces, counts as fresh until the next compute, a
+// minute later at most. Carrying the sum is what lets the strength move on
+// every frame instead of stepping once a minute with the recompute. The mean path needs no such care, because the
+// same decay on every member leaves every weighted mean and spread where it
+// was; a quiet route fades without its tube moving.
+func (b *routeBook) age(now time.Time, halfLife time.Duration) {
+	decay := trackWeight(now.Sub(b.at), halfLife)
+
+	for index := range b.out {
+		fade := &b.fades[index]
+		b.out[index].Strength = min(1, fade.weight*decay/routeFullTracks) *
+			routeRecency(now.Sub(fade.newest), halfLife)
+	}
+}
+
+// routeRecency is how much of a route is left quiet after its newest track
+// was lost: all of it for routeQuietHold half-lives, then falling on a
+// smoothstep to none at routeQuietGone.
+//
+// The summed weight alone cannot clear a route. It is capped at three tracks'
+// worth for the strength, so a route that collected forty in an evening has
+// thirteen times what full strength needs and spent log2(40/3), nearly four
+// half-lives, at full strength after its last arrival, and longer again
+// before it dropped under the radar's threshold. That kept a night sky full of
+// tubes with nothing flying. Tying the fade to the newest track instead says
+// what the picture is for: a route stays while it is being flown and goes
+// within a half-life of being abandoned, however busy it once was.
+//
+// The smoothstep starts and ends flat, so a route coming off its hold and one
+// about to vanish both change slowly. A quiet span below zero, which a clock
+// stepped backwards produces, counts as none, and a half-life that is not
+// positive never fades anything, the same as trackWeight.
+func routeRecency(quiet, halfLife time.Duration) float64 {
+	if halfLife <= 0 {
+		return 1
+	}
+
+	share := (quiet.Seconds()/halfLife.Seconds() - routeQuietHold) / (routeQuietGone - routeQuietHold)
+	share = min(max(share, 0), 1)
+
+	return 1 - share*share*(3-2*share)
 }
 
 // compute groups every trail and reduces each group to its stations.
@@ -374,7 +445,12 @@ func (b *routeBook) join(trail *Trail, index int, now time.Time, halfLife time.D
 	}
 
 	weight := trackWeight(now.Sub(trail.LostAt), halfLife)
-	b.heads[route].weight += weight
+	head := &b.heads[route]
+	head.weight += weight
+
+	if trail.LostAt.After(head.newest) {
+		head.newest = trail.LostAt
+	}
 
 	sums := b.sums[route]
 	segs := b.segs[index*routeMaxStations : (index+1)*routeMaxStations]
@@ -463,9 +539,10 @@ func (b *routeBook) reduce(frame fieldFrame) {
 			continue
 		}
 
+		head := &b.heads[route]
+		b.fades[len(b.out)] = routeFade{weight: head.weight, newest: head.newest}
 		b.out = append(b.out, Route{
-			Class:    b.heads[route].class,
-			Strength: min(1, b.heads[route].weight/routeFullTracks),
+			Class:    head.class,
 			Stations: b.stations[span.from:span.to:span.to],
 		})
 	}
