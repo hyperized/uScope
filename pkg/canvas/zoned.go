@@ -3,6 +3,7 @@ package canvas
 import (
 	"image"
 	"image/color"
+	"slices"
 )
 
 // zoneCrossing is where one zone's edge meets the current row: the first
@@ -33,63 +34,143 @@ type zoneCrossing struct {
 // Nothing is painted when inks is empty. Like FillPolygon it allocates
 // nothing once the canvas's scratch has grown.
 func (c *Canvas) FillPolygonZoned(rings, zones [][]image.Point, clip image.Rectangle, inks []color.RGBA) {
+	c.FillLayersZoned([]ZonedLayer{{Rings: rings, Inks: inks}}, zones, clip)
+}
+
+// ZonedLayer is one set of rings for FillLayersZoned, with the inks its
+// pixels take by zone count.
+type ZonedLayer struct {
+	Rings [][]image.Point
+	Inks  []color.RGBA
+}
+
+// FillLayersZoned is FillPolygonZoned for each layer in turn, each over the
+// ones before it, all against the same zones: the picture is exactly the one
+// those calls in that order would leave.
+//
+// It is one sweep rather than one per layer, and each pixel is written once,
+// by the topmost layer that covers it. Ground flooded with water and land
+// painted back over it was two sweeps that walked the same zones twice and
+// wrote every pixel of the land twice.
+//
+// A layer with no inks paints nothing and hides nothing. Like FillPolygon it
+// allocates nothing once the canvas's scratch has grown to the most layers
+// and the largest of each it has been handed.
+func (c *Canvas) FillLayersZoned(layers []ZonedLayer, zones [][]image.Point, clip image.Rectangle) {
 	area := clip.Intersect(c.img.Rect)
-	if area.Empty() || len(inks) == 0 {
+	if area.Empty() {
 		return
 	}
 
-	c.edges = buildEdges(c.edges[:0], rings, area)
-	if len(c.edges) == 0 {
+	c.sweeps = c.sweeps[:0]
+
+	for index, layer := range layers {
+		if len(layer.Inks) > 0 {
+			c.sweeps = c.prepareLayer(c.sweeps, index, layer.Rings, area)
+		}
+	}
+
+	if len(c.sweeps) == 0 {
 		return
 	}
 
 	c.zoneEdges = buildEdges(c.zoneEdges[:0], zones, area)
-
-	c.edges, c.spare = sortByTop(c.edges, c.spare, &c.tops)
 	c.zoneEdges, c.spare = sortByTop(c.zoneEdges, c.spare, &c.tops)
-	c.sweepZoned(area, inks)
+	c.sweepLayers(layers, area)
 }
 
-// sweepZoned is sweep with a second active list for the zones beside the
-// rings'. The zones are stepped on every row, painted or not, because an edge
-// that is not advanced on a row would sit in the wrong place on the next.
-func (c *Canvas) sweepZoned(area image.Rectangle, inks []color.RGBA) {
-	c.active, c.zoneActive = c.active[:0], c.zoneActive[:0]
-	next, zoneNext := 0, 0
+// layerSweep is one layer's share of the sweep: which layer it is, its edges
+// sorted by top row, the ones crossing the current row, how far through the
+// edges admission has got, and the row's crossings and the spans they make.
+//
+// It holds the layer's index rather than its inks. Anything taken from the
+// caller's layers and kept on the canvas would make the compiler move the
+// caller's inks to the heap, which on a per-frame path is an allocation a
+// frame.
+type layerSweep struct {
+	layer     int
+	edges     []polyEdge
+	active    []polyEdge
+	next      int
+	crossings []float64
+	spans     []span
+}
+
+// span is a run of pixels on one row, both ends included.
+type span struct{ from, to int }
+
+// prepareLayer appends the sweep for one layer, reusing whatever scratch the
+// slot it lands in held last time.
+func (c *Canvas) prepareLayer(
+	sweeps []layerSweep, layer int, rings [][]image.Point, area image.Rectangle,
+) []layerSweep {
+	if len(sweeps) < cap(sweeps) {
+		sweeps = sweeps[:len(sweeps)+1]
+	} else {
+		sweeps = append(sweeps, layerSweep{})
+	}
+
+	sweep := &sweeps[len(sweeps)-1]
+
+	sweep.layer, sweep.next = layer, 0
+	sweep.active = sweep.active[:0]
+	sweep.edges = buildEdges(sweep.edges[:0], rings, area)
+	sweep.edges, c.spare = sortByTop(sweep.edges, c.spare, &c.tops)
+
+	return sweeps
+}
+
+// sweepLayers walks the rows of area with an active list per layer and one
+// for the zones. The zones are stepped on every row, painted or not, because
+// an edge that is not advanced on a row would sit in the wrong place on the
+// next.
+func (c *Canvas) sweepLayers(layers []ZonedLayer, area image.Rectangle) {
+	c.zoneActive = c.zoneActive[:0]
+	zoneNext := 0
 
 	//nolint:varnamelen // y is the pixel-addressing idiom used throughout this package.
 	for y := area.Min.Y; y < area.Max.Y; y++ {
-		c.active = retire(c.active, y)
-		c.active, next = admit(c.active, c.edges, next, y)
+		live, pending := false, false
+
+		for index := range c.sweeps {
+			sweep := &c.sweeps[index]
+			sweep.active = retire(sweep.active, y)
+			sweep.active, sweep.next = admit(sweep.active, sweep.edges, sweep.next, y)
+			live = live || len(sweep.active) > 0
+			pending = pending || sweep.next < len(sweep.edges)
+		}
+
 		c.zoneActive = retire(c.zoneActive, y)
 		c.zoneActive, zoneNext = admit(c.zoneActive, c.zoneEdges, zoneNext, y)
 
 		// Nothing on this row and nothing left to admit means every
 		// remaining row is empty too, whatever the zones are doing.
-		if len(c.active) == 0 && next == len(c.edges) {
+		if !live && !pending {
 			return
 		}
 
-		if len(c.active) > 0 {
-			c.fillRowZoned(y, area, inks)
+		if live {
+			c.fillRowLayers(layers, y, area)
 		}
 
-		advance(c.active)
+		for index := range c.sweeps {
+			advance(c.sweeps[index].active)
+		}
+
 		advance(c.zoneActive)
 	}
 }
 
-// fillRowZoned paints one row's even-odd spans, each cut where a zone's edge
-// crosses it into pieces of one colour.
+// fillRowLayers paints one row: each layer's even-odd spans, less whatever
+// the layers over it cover, cut where a zone's edge crosses them into pieces
+// of one colour.
 //
-// The zone crossings are sorted once and walked once across the whole row,
-// because the spans arrive left to right: the count a span starts on is the
-// count the one before it ended on plus whatever lies between them.
+// The layers are taken from the top down, so covered holds every pixel some
+// layer above has already claimed and each pixel is written by the first
+// layer to reach it.
 //
 //nolint:varnamelen // y is the pixel-addressing idiom used throughout this package.
-func (c *Canvas) fillRowZoned(y int, area image.Rectangle, inks []color.RGBA) {
-	c.sortCrossings()
-
+func (c *Canvas) fillRowLayers(layers []ZonedLayer, y int, area image.Rectangle) {
 	// The active zones are kept in the order the last row sorted them into,
 	// which a row later is almost always still the order, so an insertion
 	// sort over the list itself is one pass. A fresh sort of the crossings
@@ -101,18 +182,106 @@ func (c *Canvas) fillRowZoned(y int, area image.Rectangle, inks []color.RGBA) {
 		c.zoneCrossings = append(c.zoneCrossings, zoneCrossing{at: pixelAt(edge.x), winding: edge.winding})
 	}
 
-	walk := zoneWalk{crossings: c.zoneCrossings}
+	c.covered = c.covered[:0]
 
-	for index := 0; index+1 < len(c.crossings); index += 2 {
-		from := max(pixelAt(c.crossings[index]), area.Min.X)
-		to := min(pixelAt(c.crossings[index+1])-1, area.Max.X-1)
+	for index := len(c.sweeps) - 1; index >= 0; index-- {
+		sweep := &c.sweeps[index]
+		sweep.rowSpans(area)
 
-		for from <= to {
-			end := walk.reach(from, to)
-			c.hline(from, end, y, inks[min(walk.depth(), len(inks)-1)])
-			from = end + 1
+		walk := zoneWalk{crossings: c.zoneCrossings}
+		for _, piece := range sweep.spans {
+			c.paintUncovered(&walk, piece, y, layers[sweep.layer].Inks)
+		}
+
+		if index > 0 {
+			c.covered, c.merged = mergeSpans(c.merged[:0], c.covered, sweep.spans), c.covered
 		}
 	}
+}
+
+// rowSpans lists the pixels this layer covers on the current row, left to
+// right, which is fillRow's even-odd pairing clipped to area.
+func (l *layerSweep) rowSpans(area image.Rectangle) {
+	l.crossings = l.crossings[:0]
+	for _, edge := range l.active {
+		l.crossings = append(l.crossings, edge.x)
+	}
+
+	slices.Sort(l.crossings)
+
+	l.spans = l.spans[:0]
+
+	for index := 0; index+1 < len(l.crossings); index += 2 {
+		from := max(pixelAt(l.crossings[index]), area.Min.X)
+		to := min(pixelAt(l.crossings[index+1])-1, area.Max.X-1)
+
+		if from <= to {
+			l.spans = append(l.spans, span{from: from, to: to})
+		}
+	}
+}
+
+// paintUncovered paints the parts of piece that covered leaves open, each
+// in the ink of its zone count. Both piece and covered run left to right, so
+// the walk through the zones only ever moves forward.
+//
+//nolint:varnamelen // y is the pixel-addressing idiom used throughout this package.
+func (c *Canvas) paintUncovered(walk *zoneWalk, piece span, y int, inks []color.RGBA) {
+	from := piece.from
+
+	for _, hidden := range c.covered {
+		if hidden.to < from {
+			continue
+		}
+
+		if hidden.from > piece.to {
+			break
+		}
+
+		c.paintZoned(walk, from, hidden.from-1, y, inks)
+		from = hidden.to + 1
+	}
+
+	c.paintZoned(walk, from, piece.to, y, inks)
+}
+
+// paintZoned paints the pixels from x0 to x1 on row y, cut where the zone
+// count changes.
+//
+//nolint:varnamelen // from, to bound a span, as they do in fillRow.
+func (c *Canvas) paintZoned(walk *zoneWalk, x0, x1, y int, inks []color.RGBA) {
+	from, to := x0, x1
+
+	for from <= to {
+		end := walk.reach(from, to)
+		c.hline(from, end, y, inks[min(walk.depth(), len(inks)-1)])
+		from = end + 1
+	}
+}
+
+// mergeSpans is the union of two lists of disjoint spans, each left to right,
+// appended to dst as one such list. Spans that touch or overlap come out as
+// one.
+func mergeSpans(dst, left, right []span) []span {
+	for len(left) > 0 || len(right) > 0 {
+		var next span
+
+		if len(right) == 0 || (len(left) > 0 && left[0].from <= right[0].from) {
+			next, left = left[0], left[1:]
+		} else {
+			next, right = right[0], right[1:]
+		}
+
+		if last := len(dst) - 1; last >= 0 && next.from <= dst[last].to+1 {
+			dst[last].to = max(dst[last].to, next.to)
+
+			continue
+		}
+
+		dst = append(dst, next)
+	}
+
+	return dst
 }
 
 // insertByX sorts edges by where they sit on the current row, in place.

@@ -72,6 +72,13 @@ type Canvas struct {
 	zoneEdges     []polyEdge
 	zoneActive    []polyEdge
 	zoneCrossings []zoneCrossing
+
+	// FillLayersZoned's own: a sweep per layer, and the spans the layers
+	// above the one being painted have claimed on the current row, with a
+	// second list to merge the next layer's into.
+	sweeps  []layerSweep
+	covered []span
+	merged  []span
 }
 
 // New allocates a canvas of width by height pixels.

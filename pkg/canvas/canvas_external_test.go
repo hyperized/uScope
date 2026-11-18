@@ -2122,3 +2122,135 @@ func TestBlendCircleAndRect(t *testing.T) {
 	canv.BlendCircle(5, 5, -1, canvas.White, 0.5)
 	assertSamePix(t, canv, fresh(t))
 }
+
+// layerRings are the shapes the FillLayersZoned tests stack: a ring with a
+// hole, a slanted triangle that crosses it, and a small square, so a row can
+// carry a span of one layer cut by two others.
+func layerRings() [3][][]image.Point {
+	return [3][][]image.Point{
+		{squareRing(2, 2, 38, 38), squareRing(12, 12, 28, 28)},
+		{{{0, 5}, {40, 15}, {5, 35}}},
+		{squareRing(18, 0, 22, 40), squareRing(30, 8, 34, 12)},
+	}
+}
+
+// TestFillLayersZonedMatchesCallsInTurn pins the contract: the layers in one
+// sweep leave exactly the picture FillPolygonZoned would leave called once
+// per layer in order, zones, clip and holes included, and a layer without
+// inks neither paints nor hides anything.
+func TestFillLayersZonedMatchesCallsInTurn(t *testing.T) {
+	t.Parallel()
+
+	rings := layerRings()
+	zones := [][]image.Point{squareRing(6, 6, 34, 34), {{20, 0}, {40, 20}, {20, 40}, {0, 20}}}
+	shallow := []color.RGBA{canvas.Yellow, canvas.Cyan}
+
+	for _, testCase := range []struct {
+		name   string
+		clip   image.Rectangle
+		layers []canvas.ZonedLayer
+	}{
+		{
+			name: "two layers",
+			clip: image.Rect(0, 0, 40, 40),
+			layers: []canvas.ZonedLayer{
+				{Rings: rings[0], Inks: zonedInks},
+				{Rings: rings[1], Inks: shallow},
+			},
+		},
+		{
+			name: "three layers clipped",
+			clip: image.Rect(3, 4, 37, 33),
+			layers: []canvas.ZonedLayer{
+				{Rings: rings[0], Inks: zonedInks},
+				{Rings: rings[1], Inks: shallow},
+				{Rings: rings[2], Inks: zonedInks[1:]},
+			},
+		},
+		{
+			name: "a layer with no inks hides nothing",
+			clip: image.Rect(0, 0, 40, 40),
+			layers: []canvas.ZonedLayer{
+				{Rings: rings[0], Inks: zonedInks},
+				{Rings: rings[2], Inks: nil},
+				{Rings: rings[1], Inks: shallow},
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, want := mustCanvas(t, 40), mustCanvas(t, 40)
+
+			got.FillLayersZoned(testCase.layers, zones, testCase.clip)
+
+			for _, layer := range testCase.layers {
+				want.FillPolygonZoned(layer.Rings, zones, testCase.clip, layer.Inks)
+			}
+
+			if !bytes.Equal(got.Image().Pix, want.Image().Pix) {
+				t.Error("FillLayersZoned differs from FillPolygonZoned called once per layer")
+			}
+
+			if bytes.Equal(got.Image().Pix, mustCanvas(t, 40).Image().Pix) {
+				t.Error("FillLayersZoned painted nothing, so the comparison proves nothing")
+			}
+		})
+	}
+}
+
+// TestFillLayersZonedPaintsNothing pins the early outs: no layers, no layer
+// with inks, and a clip off the canvas.
+func TestFillLayersZonedPaintsNothing(t *testing.T) {
+	t.Parallel()
+
+	rings := layerRings()
+
+	for _, testCase := range []struct {
+		name   string
+		clip   image.Rectangle
+		layers []canvas.ZonedLayer
+	}{
+		{name: "no layers", clip: image.Rect(0, 0, 40, 40)},
+		{name: "no inks", clip: image.Rect(0, 0, 40, 40), layers: []canvas.ZonedLayer{{Rings: rings[0]}}},
+		{
+			name:   "clip off the canvas",
+			clip:   image.Rect(50, 50, 60, 60),
+			layers: []canvas.ZonedLayer{{Rings: rings[0], Inks: zonedInks}},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustCanvas(t, 40)
+			canv.FillLayersZoned(testCase.layers, nil, testCase.clip)
+
+			if !bytes.Equal(canv.Image().Pix, mustCanvas(t, 40).Image().Pix) {
+				t.Error("FillLayersZoned painted something")
+			}
+		})
+	}
+}
+
+// TestFillLayersZonedAllocs pins that the layered fill allocates nothing once
+// the canvas's scratch has grown, with the layers and their inks on the
+// caller's stack, which is how a per-frame caller hands them over.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestFillLayersZonedAllocs(t *testing.T) {
+	canv := mustCanvas(t, 40)
+	rings := layerRings()
+	zones := [][]image.Point{squareRing(6, 6, 34, 34)}
+
+	fill := func() {
+		inks := [...]color.RGBA{canvas.Red, canvas.Green}
+		layers := [...]canvas.ZonedLayer{{Rings: rings[0], Inks: inks[:]}, {Rings: rings[1], Inks: inks[1:]}}
+		canv.FillLayersZoned(layers[:], zones, canv.Bounds())
+	}
+
+	fill()
+
+	if allocs := testing.AllocsPerRun(100, fill); allocs != 0 {
+		t.Errorf("FillLayersZoned allocated %v times per run, want 0", allocs)
+	}
+}

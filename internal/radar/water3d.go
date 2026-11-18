@@ -41,7 +41,7 @@ const (
 	// levels off the water tint, and at twelve every step was a visible arc.
 	// Thirty-two keeps a step to six or seven levels at the worst, which
 	// reads as a gradient. The bands cost a few crossings per row each, not a
-	// fill each (see floodGround3); a blend per pixel would be smoother again
+	// fill each (see projectHaze3); a blend per pixel would be smoother again
 	// and would cost a read-modify-write over half a 4K frame on every frame.
 	hazeBands = 32
 
@@ -167,7 +167,7 @@ func (s *Scene) hazeInk(col color.RGBA, band int) color.RGBA {
 }
 
 // landInks3 is the land's colour for every count of haze circles around a
-// pixel, which is how FillPolygonZoned hands the bands over: none is past the
+// pixel, which is how FillLayersZoned hands the bands over: none is past the
 // haze and takes the horizon colour, all of them is the full tint's own disc
 // and takes landInk, and each count between is a band of the fade.
 //
@@ -256,8 +256,8 @@ func (v scene3) groundPointAt(latitude, longitude float64) groundPoint {
 //
 // The ground runs on past the reach and fades, in bands, into the colour of
 // the sky at the horizon: the sky's horizon colour when the sun is known, the
-// field when it is not. The land fades with it; see fillLand3. It used to stop at the reach, which
-// left the sea ending on a hard ellipse with black beyond it, a horizon line
+// field when it is not. The land fades with it; see collectLandRings3. It
+// used to stop at the reach, which left the sea ending on a hard ellipse with black beyond it, a horizon line
 // the bare view exists not to have. The tint is full out to the far side of
 // the reach, so the traffic, the coastline and the rings all sit on the ground
 // they always did; see haze3 for where the fade is measured from.
@@ -267,30 +267,42 @@ func (v scene3) groundPointAt(latitude, longitude float64) groundPoint {
 // reason the plate used to stop at the reach, and measuring it moved the
 // argument: walking the cells of a box a thousand miles across takes
 // microseconds, and what costs is projecting the seventy-odd thousand points
-// in it. fillLand3 skips the rings the camera cannot see before projecting
-// any of them, which leaves the whole tilted ground at about two milliseconds
+// in it. collectLandRings3 skips the rings the camera cannot see before
+// projecting any of them, which leaves the whole tilted ground at about two milliseconds
 // a 4K frame over the real coastline. The coastline outlines run out into
 // the haze as well and fade with it; see drawCoast3.
 //
 // Both halves run through the Scene's ring scratch one after the other: the
-// bands go into it, are filled, and the land rings take the buffer back. That
+// bands go into it and are copied out, and the land rings take the buffer
+// back. That
 // is what keeps a fill on a per-frame path free of allocations once the
 // scratch has grown, which is what both tilted views need it to be.
 func (s *Scene) fillGround3(dst *canvas.Canvas, view scene3, haze haze3) {
 	box := dst.Bounds()
 
-	s.floodGround3(dst, view, haze, box)
-	s.fillLand3(dst, view, haze, box)
+	s.projectHaze3(view, haze)
+	s.collectLandRings3(view, haze, box)
+
+	// The water is the lower layer and the land the one over it, filled in
+	// one sweep, so a pixel of land is written once rather than flooded
+	// first and painted back.
+	water, land := s.waterInks3(), s.landInks3()
+	layers := [...]canvas.ZonedLayer{
+		{Rings: s.hazeRings[hazeBands:], Inks: water[:]},
+		{Rings: s.landRings, Inks: land[:]},
+	}
+
+	dst.FillLayersZoned(layers[:], s.hazeRings, box)
 }
 
-// floodGround3 paints the ground: the disc at full tint, then each band of the
-// haze around it.
+// projectHaze3 projects the haze's circles into hazeRings: the water is the
+// outermost of them filled, coloured by how many of the circles enclose each
+// pixel, and the land is coloured by the same count.
 //
-// It is one fill of the haze's outermost circle, coloured by how many of the
-// circles enclose each pixel, so every pixel of the ground is painted once
-// and the bands cost a few crossings per row rather than a sweep each. The
-// bands used to be one even-odd annulus per fill, which was the same picture
-// at twelve bands and more than twice the frame time at thirty-two.
+// The flood is one fill of the outermost circle rather than one per band, so
+// the bands cost a few crossings per row rather than a sweep each. The bands
+// used to be one even-odd annulus per fill, which was the same picture at
+// twelve bands and more than twice the frame time at thirty-two.
 //
 // The circles are projected as ringSegments straight pieces, the same
 // sixty-four drawCircle3 draws a range ring as. There is no FillCircle for
@@ -300,13 +312,12 @@ func (s *Scene) fillGround3(dst *canvas.Canvas, view scene3, haze haze3) {
 // addRingStep where it passes behind the lens.
 //
 // All the circles go into the scratch before any of them is sliced, for the
-// reason the land rings are recorded as spans: see landPoints. They stay in
-// hazeRings after the flood, because the land fill is coloured by the same
-// ones. They are projected through the land scratch, the one addRingStep
+// reason the land rings are recorded as spans: see landPoints. They are
+// projected through the land scratch, the one addRingStep
 // writes, and copied out of it before the land takes it back: a couple of
 // thousand points, against tens of thousands of land points that would
 // otherwise grow two buffers to the land's size in turn.
-func (s *Scene) floodGround3(dst *canvas.Canvas, view scene3, haze haze3, box image.Rectangle) {
+func (s *Scene) projectHaze3(view scene3, haze haze3) {
 	var starts [hazeBands + 2]int
 
 	s.landPoints = s.landPoints[:0]
@@ -323,9 +334,6 @@ func (s *Scene) floodGround3(dst *canvas.Canvas, view scene3, haze haze3, box im
 	for band := 0; band <= hazeBands; band++ {
 		s.hazeRings = append(s.hazeRings, s.hazePoints[starts[band]:starts[band+1]:starts[band+1]])
 	}
-
-	inks := s.waterInks3()
-	dst.FillPolygonZoned(s.hazeRings[hazeBands:], s.hazeRings, box, inks[:])
 }
 
 // waterInks3 is the water's colour for every count of haze circles around a
@@ -362,9 +370,10 @@ func (s *Scene) addCircle3(view scene3, centre point3, radius float64) {
 	}
 }
 
-// fillLand3 paints every land ring under the ground back out of it, in one
-// even-odd pass, coloured band by band by the haze's circles: landInk
-// inside the full tint, fading out to the horizon colour past the haze.
+// collectLandRings3 projects every land ring the ground paints back out of
+// the water into landRings. They are filled in one even-odd pass, coloured
+// band by band by the haze's circles: landInk inside the full tint, fading
+// out to the horizon colour past the haze.
 //
 // The rings come from the cache rather than from the shore set, and two kinds
 // are skipped before a point of them is projected. A ring whose box on the
@@ -381,7 +390,7 @@ func (s *Scene) addCircle3(view scene3, centre point3, radius float64) {
 // the part past it is painted the horizon colour over a clear already that
 // colour, which is what lets the fill be clipped to the window while the
 // ground is round.
-func (s *Scene) fillLand3(dst *canvas.Canvas, view scene3, haze haze3, box image.Rectangle) {
+func (s *Scene) collectLandRings3(view scene3, haze haze3, box image.Rectangle) {
 	s.landPoints = s.landPoints[:0]
 	s.landSpans = s.landSpans[:0]
 
@@ -399,9 +408,6 @@ func (s *Scene) fillLand3(dst *canvas.Canvas, view scene3, haze haze3, box image
 	for _, span := range s.landSpans {
 		s.landRings = append(s.landRings, s.landPoints[span.start:span.end:span.end])
 	}
-
-	inks := s.landInks3()
-	dst.FillPolygonZoned(s.landRings, s.hazeRings, box, inks[:])
 }
 
 // collectLand3 projects one land ring onto the floor of the world and records

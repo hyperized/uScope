@@ -795,3 +795,32 @@ func TestPaintEveryLength(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeSpans(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		left, right []span
+		want        []span
+	}{
+		{name: "both empty", want: nil},
+		{name: "one side empty", left: []span{{1, 3}, {6, 8}}, want: []span{{1, 3}, {6, 8}}},
+		{
+			name: "disjoint interleave",
+			left: []span{{1, 2}, {10, 12}}, right: []span{{5, 6}},
+			want: []span{{1, 2}, {5, 6}, {10, 12}},
+		},
+		{name: "touching spans join", left: []span{{1, 4}}, right: []span{{5, 9}}, want: []span{{1, 9}}},
+		{name: "overlap joins", left: []span{{1, 6}}, right: []span{{3, 9}}, want: []span{{1, 9}}},
+		{name: "one inside another", left: []span{{1, 20}}, right: []span{{3, 4}, {8, 9}}, want: []span{{1, 20}}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := mergeSpans(nil, testCase.left, testCase.right); !slices.Equal(got, testCase.want) {
+				t.Errorf("mergeSpans(%v, %v) = %v, want %v", testCase.left, testCase.right, got, testCase.want)
+			}
+		})
+	}
+}
