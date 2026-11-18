@@ -273,6 +273,14 @@ type Scene struct {
 	hazePoints []image.Point
 	hazeRings  [][]image.Point
 
+	// hazeReady says the circles in hazeRings were projected for the frame
+	// being drawn, before the sky, so the ground need not project them
+	// again; the ground clears it as it uses them. groundRows marks the rows
+	// of the window the ground's water will cover edge to edge, which the
+	// sky leaves alone. See groundRows3.
+	hazeReady  bool
+	groundRows []bool
+
 	// sky is the tilted views' sky: the sun it was last worked out from and
 	// the colours and rows that came to. See sky3d.go.
 	sky sky3

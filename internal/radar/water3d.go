@@ -280,7 +280,11 @@ func (v scene3) groundPointAt(latitude, longitude float64) groundPoint {
 func (s *Scene) fillGround3(dst *canvas.Canvas, view scene3, haze haze3) {
 	box := dst.Bounds()
 
-	s.projectHaze3(view, haze)
+	if !s.hazeReady {
+		s.projectHaze3(view, haze)
+	}
+
+	s.hazeReady = false
 	s.collectLandRings3(view, haze, box)
 
 	// The water is the lower layer and the land the one over it, filled in
@@ -293,6 +297,29 @@ func (s *Scene) fillGround3(dst *canvas.Canvas, view scene3, haze haze3) {
 	}
 
 	dst.FillLayersZoned(layers[:], s.hazeRings, box)
+}
+
+// groundRows3 projects the haze for this frame's ground ahead of the sky and
+// marks the rows of the window its water will paint edge to edge, or marks
+// none when no ground will be drawn. It is only asked when there is a camera. The marks are the fill's own sweep run
+// without painting (see canvas.CoveredRows), so a row is only left uncleared
+// when the ground will write every pixel of it.
+//
+// The ground is drawn when drawSurface3 draws it: a plottable view and the
+// shore on.
+func (s *Scene) groundRows3(window *canvas.Canvas, view scene3) []bool {
+	s.hazeReady = false
+	s.groundRows = s.groundRows[:0]
+
+	if !view.plottable || !s.shoreDrawn() || s.shoreSet == nil {
+		return s.groundRows
+	}
+
+	s.projectHaze3(view, view.haze())
+	s.hazeReady = true
+	s.groundRows = window.CoveredRows(s.hazeRings[hazeBands:], window.Bounds(), s.groundRows)
+
+	return s.groundRows
 }
 
 // projectHaze3 projects the haze's circles into hazeRings: the water is the

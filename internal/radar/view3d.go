@@ -283,13 +283,21 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 		return
 	}
 
-	// The sky goes down before the camera is measured, because in the bare
-	// view it is the frame's only clear and a frame with no camera to draw
-	// still has to be cleared.
-	s.paintSky(window, lay.scope)
+	// The sky goes down before anything is drawn and whether or not there is
+	// a camera to draw with, because in the bare view it is the frame's only
+	// clear and a frame with no camera still has to be cleared. Measuring the
+	// camera first draws nothing; it is what tells the sky which rows the
+	// ground is about to cover anyway.
+	view, drawable := s.measure3D(lay, frame, elapsed)
+
+	var covered []bool
+	if drawable {
+		covered = s.groundRows3(window, view)
+	}
+
+	s.paintSky(window, lay.scope, covered)
 	s.drawStars(window, lay.scope, lay.unit())
 
-	view, drawable := s.measure3D(lay, frame, elapsed)
 	if !drawable {
 		return
 	}

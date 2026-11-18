@@ -151,7 +151,7 @@ func starsCanvas(tb testing.TB, scene *Scene) (*canvas.Canvas, image.Rectangle, 
 	}
 
 	box := canv.Bounds()
-	scene.paintSky(canv, box)
+	scene.paintSky(canv, box, nil)
 
 	return canv, box, append([]uint8(nil), canv.Image().Pix...)
 }

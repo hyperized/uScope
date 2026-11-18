@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/hyperized/uScope/pkg/canvas"
@@ -2252,5 +2253,140 @@ func TestFillLayersZonedAllocs(t *testing.T) {
 
 	if allocs := testing.AllocsPerRun(100, fill); allocs != 0 {
 		t.Errorf("FillLayersZoned allocated %v times per run, want 0", allocs)
+	}
+}
+
+// TestClearRowsExcept pins that a skipped row keeps whatever it held, and
+// every other row comes out as ClearRows would paint it, including the rows
+// of rest when the first of them is one of the skipped.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestClearRowsExcept(t *testing.T) {
+	t.Parallel()
+
+	rows := []color.RGBA{canvas.Red, canvas.Green, canvas.Yellow}
+
+	for _, testCase := range []struct {
+		name string
+		skip []bool
+	}{
+		{name: "nothing skipped", skip: nil},
+		{name: "a gradient row skipped", skip: []bool{false, true}},
+		{name: "the first row of rest skipped", skip: []bool{false, false, false, true, true, false}},
+		{name: "every row skipped", skip: []bool{true, true, true, true, true, true, true, true}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, want := mustCanvas(t, 8), mustCanvas(t, 8)
+			got.Clear(canvas.White)
+			want.ClearRows(rows, canvas.Blue)
+			got.ClearRowsExcept(rows, canvas.Blue, testCase.skip)
+
+			for y := range 8 {
+				skipped := y < len(testCase.skip) && testCase.skip[y]
+
+				for x := range 8 {
+					wantPixel := want.Image().RGBAAt(x, y)
+					if skipped {
+						wantPixel = canvas.White
+					}
+
+					assertPixel(t, got, x, y, wantPixel)
+				}
+			}
+		})
+	}
+}
+
+// TestCoveredRows pins CoveredRows against the fill itself, both ways: a
+// row it marks is painted edge to edge across the clip by FillPolygon, and a
+// row it leaves unmarked has at least one pixel of the clip the fill missed.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout this package.
+func TestCoveredRows(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		rings [][]image.Point
+		clip  image.Rectangle
+	}{
+		{name: "a slanted quad wider than the clip", rings: [][]image.Point{{{-5, 2}, {45, 6}, {50, 38}, {-10, 30}}},
+			clip: image.Rect(0, 0, 40, 40)},
+		{name: "a hole through the middle", rings: [][]image.Point{
+			squareRing(-1, -1, 41, 41), squareRing(10, 15, 20, 25),
+		}, clip: image.Rect(0, 0, 40, 40)},
+		{name: "a triangle inside a narrow clip", rings: [][]image.Point{{{20, 0}, {40, 40}, {0, 40}}},
+			clip: image.Rect(15, 5, 25, 35)},
+		{name: "two rings side by side", rings: [][]image.Point{
+			squareRing(-2, 0, 20, 30), squareRing(20, 10, 42, 40),
+		}, clip: image.Rect(0, 0, 40, 40)},
+		{name: "no edges", rings: [][]image.Point{squareRing(0, 5, 40, 5)}, clip: image.Rect(0, 0, 40, 40)},
+		{
+			name:  "clip off the canvas",
+			rings: [][]image.Point{squareRing(0, 0, 40, 40)}, clip: image.Rect(50, 50, 60, 60),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			canv := mustCanvas(t, 40)
+			canv.Clear(canvas.Black)
+			canv.FillPolygon(testCase.rings, testCase.clip, canvas.White)
+
+			covered := canv.CoveredRows(testCase.rings, testCase.clip, make([]bool, 3))
+			if len(covered) != 40 {
+				t.Fatalf("CoveredRows returned %d rows, want 40", len(covered))
+			}
+
+			area := testCase.clip.Intersect(canv.Bounds())
+
+			for y := range 40 {
+				full := !area.Empty() && y >= area.Min.Y && y < area.Max.Y
+
+				for x := area.Min.X; full && x < area.Max.X; x++ {
+					full = canv.Image().RGBAAt(x, y) == canvas.White
+				}
+
+				if covered[y] != full {
+					t.Errorf("row %d: CoveredRows says %v, the fill covered it edge to edge: %v", y, covered[y], full)
+				}
+			}
+		})
+	}
+}
+
+// TestCoveredRowsSubCanvas pins that the marks count from the window's own
+// first row, as ClearRowsExcept reads them.
+func TestCoveredRowsSubCanvas(t *testing.T) {
+	t.Parallel()
+
+	parent := mustSize(t, 8, 8)
+
+	window, ok := parent.Sub(image.Rect(2, 3, 6, 7))
+	if !ok {
+		t.Fatal("Sub reported an empty window")
+	}
+
+	got := window.CoveredRows([][]image.Point{squareRing(0, 5, 8, 8)}, window.Bounds(), nil)
+	if want := []bool{false, false, true, true}; !slices.Equal(got, want) {
+		t.Errorf("CoveredRows = %v, want %v", got, want)
+	}
+}
+
+// TestCoveredRowsAllocs pins that marking rows allocates nothing once the
+// scratch and the marks have grown.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestCoveredRowsAllocs(t *testing.T) {
+	canv := mustCanvas(t, 40)
+	rings := [][]image.Point{{{-5, 2}, {45, 6}, {50, 38}, {-10, 30}}}
+	marks := canv.CoveredRows(rings, canv.Bounds(), nil)
+
+	mark := func() { marks = canv.CoveredRows(rings, canv.Bounds(), marks) }
+
+	if allocs := testing.AllocsPerRun(100, mark); allocs != 0 {
+		t.Errorf("CoveredRows allocated %v times per run, want 0", allocs)
 	}
 }
