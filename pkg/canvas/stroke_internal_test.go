@@ -89,7 +89,8 @@ func TestCoverBand(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 
-			canv.coverBand(major, top, height, testCase.steep, White)
+			lanes := canv.lanes(testCase.steep)
+			canv.coverBand(&lanes, major, top, height, White)
 
 			sum := 0.0
 
@@ -172,6 +173,37 @@ func TestAnnulusRow(t *testing.T) {
 						t.Errorf("pixel (%d, %d): set = %v, want %v", col, row, got, want)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestCoverBandClipsToTheCanvas hands coverBand a band that starts above the
+// canvas and ends below it, which is what a thick line crossing the edge
+// asks for: the rows on the canvas are painted and nothing outside is
+// touched.
+func TestCoverBandClipsToTheCanvas(t *testing.T) {
+	t.Parallel()
+
+	for _, steep := range []bool{false, true} {
+		t.Run(map[bool]string{false: "along rows", true: "steep"}[steep], func(t *testing.T) {
+			t.Parallel()
+
+			canv, err := New(4, 4)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			lanes := canv.lanes(steep)
+			canv.coverBand(&lanes, 1, -1.5, 7, White)
+
+			for minor := range 4 {
+				col, row := 1, minor
+				if steep {
+					col, row = minor, 1
+				}
+
+				assertPixelAt(t, canv, col, row, White)
 			}
 		})
 	}

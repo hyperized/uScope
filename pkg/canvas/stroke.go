@@ -50,11 +50,54 @@ func (c *Canvas) StrokeLineAA(x0, y0, x1, y1 float64, width int, col color.RGBA)
 	band := float64(width)
 	lift := (band - 1) / 2
 	interY := run.startMinor + run.gradient*(run.firstCol-run.startMajor)
+	lanes := c.lanes(run.steep)
 
 	for pixelX := run.firstCol; pixelX <= run.lastCol; pixelX++ {
-		c.coverBand(int(pixelX), interY-lift, band, run.steep, col)
+		// A column off the canvas still steps interY: it is a running sum, and
+		// jumping it ahead by a product would round differently and move the
+		// line by a bit in its last place.
+		if major := int(pixelX); major >= lanes.majorFrom && major < lanes.majorTo {
+			c.coverBand(&lanes, major, interY-lift, band, col)
+		} else if major >= lanes.majorTo {
+			return
+		}
+
 		interY += run.gradient
 	}
+}
+
+// lanes is the canvas seen from a line walking along its major axis: the
+// range of columns and rows on the canvas in that frame, and how far apart
+// in Pix two neighbours are along each axis.
+type lanes struct {
+	majorFrom, majorTo int
+	minorFrom, minorTo int
+	majorStep          int
+	minorStep          int
+}
+
+// lanes turns the canvas into a line's frame, swapped for a steep one.
+//
+//nolint:revive // flag-parameter: steep says which axis major is on, the same swap orientRun makes.
+func (c *Canvas) lanes(steep bool) lanes {
+	rect := c.img.Rect
+	if steep {
+		return lanes{
+			majorFrom: rect.Min.Y, majorTo: rect.Max.Y, minorFrom: rect.Min.X, minorTo: rect.Max.X,
+			majorStep: c.img.Stride, minorStep: bytesPerPixel,
+		}
+	}
+
+	return lanes{
+		majorFrom: rect.Min.X, majorTo: rect.Max.X, minorFrom: rect.Min.Y, minorTo: rect.Max.Y,
+		majorStep: bytesPerPixel, minorStep: c.img.Stride,
+	}
+}
+
+// offset is where (major, minor) starts in Pix.
+func (c *Canvas) offset(lanes *lanes, major, minor int) int {
+	return (major-lanes.majorFrom)*lanes.majorStep + (minor-lanes.minorFrom)*lanes.minorStep +
+		c.img.PixOffset(c.img.Rect.Min.X, c.img.Rect.Min.Y)
 }
 
 // lineRun is one line turned so it walks along its longer axis from left to
@@ -109,20 +152,29 @@ func orientRun(x0, y0, x1, y1 float64) lineRun {
 //
 // The first and last pixels get a fraction and the ones between get all of
 // it, which for a band one pixel tall is exactly the pair Wu's algorithm
-// writes.
-//
-//nolint:revive // flag-parameter: steep says which axis major is on, the same swap LineAA makes inline.
-func (c *Canvas) coverBand(major int, top, height float64, steep bool, col color.RGBA) {
+// writes. The column has already been checked against the canvas; the rows
+// are clipped here, once, rather than by Blend at every pixel.
+func (c *Canvas) coverBand(lanes *lanes, major int, top, height float64, col color.RGBA) {
 	bottom := top + height
+	row := math.Floor(top)
 
-	for row := math.Floor(top); row < bottom; row++ {
-		cover := min(row+1, bottom) - max(row, top)
+	// Rows are whole numbers well inside float64's exact range, so starting
+	// at the canvas's first row gives each one the cover it would have had
+	// counting up from the band's top.
+	if first := float64(lanes.minorFrom); row < first {
+		row = first
+	}
 
-		if steep {
-			c.Blend(int(row), major, col, cover)
-		} else {
-			c.Blend(major, int(row), col, cover)
+	pix := c.img.Pix
+	off := c.offset(lanes, major, int(row))
+
+	for ; row < bottom; row++ {
+		if int(row) >= lanes.minorTo {
+			return
 		}
+
+		blendPixel(pix[off:off+bytesPerPixel:off+bytesPerPixel], col, min(row+1, bottom)-max(row, top))
+		off += lanes.minorStep
 	}
 }
 

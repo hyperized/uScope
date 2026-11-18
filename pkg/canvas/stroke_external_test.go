@@ -831,3 +831,56 @@ func BenchmarkStrokeLineAA(b *testing.B) {
 		})
 	}
 }
+
+// scatterSegments is a spread of short lines between whole pixels, at every
+// angle and from 4 to 64 pixels long, over an area twice the canvas's so a
+// good share of them land off it or half on it, the way a perspective
+// scene's polylines do.
+func scatterSegments(width, height int) [][4]float64 {
+	const count = 4096
+
+	segments := make([][4]float64, count)
+	state := uint64(1)
+
+	next := func() float64 {
+		state = state*6364136223846793005 + 1442695040888963407
+
+		return float64(state>>11) / (1 << 53)
+	}
+
+	for index := range segments {
+		x0 := math.Round(float64(width) * (1.5*next() - 0.25))
+		y0 := math.Round(float64(height) * (1.5*next() - 0.25))
+		length := math.Pow(2, 2+4*next())
+		sin, cos := math.Sincos(2 * math.Pi * next())
+		segments[index] = [4]float64{x0, y0, math.Round(x0 + length*cos), math.Round(y0 + length*sin)}
+	}
+
+	return segments
+}
+
+func BenchmarkStrokeLineAAScatter(b *testing.B) {
+	const width, height = 2560, 1440
+
+	canv, err := canvas.New(width, height)
+	if err != nil {
+		b.Fatalf("New: %v", err)
+	}
+
+	canv.Clear(color.RGBA{R: 0xE4, G: 0xE8, B: 0xE6, A: 0xFF})
+
+	segments := scatterSegments(width, height)
+	ink := color.RGBA{R: 0x6A, G: 0x72, B: 0x7C, A: 0xFF}
+
+	for _, weight := range []int{1, 2} {
+		b.Run(fmt.Sprintf("width %d", weight), func(b *testing.B) {
+			b.ReportAllocs()
+
+			for b.Loop() {
+				for _, seg := range segments {
+					canv.StrokeLineAA(seg[0], seg[1], seg[2], seg[3], weight, ink)
+				}
+			}
+		})
+	}
+}

@@ -36,12 +36,24 @@ func (c *Canvas) Blend(x, y int, col color.RGBA, alpha float64) {
 		return
 	}
 
-	if alpha > 1 {
-		alpha = 1
+	off := c.img.PixOffset(x, y)
+	blendPixel(c.img.Pix[off:off+bytesPerPixel:off+bytesPerPixel], col, min(alpha, 1))
+}
+
+// blendPixel is Blend on one pixel's four bytes, for the callers that have
+// already found the pixel and screened its alpha down to at most one. An
+// alpha of one is written straight, which is the byte blendChannel would
+// round to anyway; nothing above zero is skipped.
+func blendPixel(pix []byte, col color.RGBA, alpha float64) {
+	if !(alpha > 0) {
+		return
 	}
 
-	off := c.img.PixOffset(x, y)
-	pix := c.img.Pix[off : off+bytesPerPixel : off+bytesPerPixel]
+	if alpha >= 1 {
+		pix[0], pix[1], pix[2], pix[3] = col.R, col.G, col.B, opaque
+
+		return
+	}
 
 	pix[0] = blendChannel(pix[0], col.R, alpha)
 	pix[1] = blendChannel(pix[1], col.G, alpha)
@@ -86,26 +98,40 @@ func (c *Canvas) LineAA(x0, y0, x1, y1 float64, col color.RGBA) {
 	// more ground to cover, and LineAA(a, b, c, d) and LineAA(c, d, a, b)
 	// produce the same image.
 	run := orientRun(x0, y0, x1, y1)
-	steep, gradient := run.steep, run.gradient
+	gradient := run.gradient
 	interY := run.startMinor + gradient*(run.firstCol-run.startMajor)
+	lanes := c.lanes(run.steep)
 
 	for pixelX := run.firstCol; pixelX <= run.lastCol; pixelX++ {
-		rowFloor := math.Floor(interY)
-		frac := interY - rowFloor
+		major := int(pixelX)
+		if major >= lanes.majorTo {
+			return
+		}
 
-		// steep means the loop is walking what is conceptually the y-axis,
-		// so the coordinates it produces have to be swapped back before
-		// they reach Blend.
-		if steep {
-			c.Blend(int(rowFloor), int(pixelX), col, 1-frac)
-			c.Blend(int(rowFloor)+1, int(pixelX), col, frac)
-		} else {
-			c.Blend(int(pixelX), int(rowFloor), col, 1-frac)
-			c.Blend(int(pixelX), int(rowFloor)+1, col, frac)
+		// A column off the canvas still steps interY, for the reason
+		// StrokeLineAA gives.
+		if major >= lanes.majorFrom {
+			rowFloor := math.Floor(interY)
+			frac := interY - rowFloor
+			minor := int(rowFloor)
+
+			c.blendLane(&lanes, major, minor, col, 1-frac)
+			c.blendLane(&lanes, major, minor+1, col, frac)
 		}
 
 		interY += gradient
 	}
+}
+
+// blendLane is Blend addressed in a line's frame, for a column already
+// known to be on the canvas.
+func (c *Canvas) blendLane(lanes *lanes, major, minor int, col color.RGBA, alpha float64) {
+	if minor < lanes.minorFrom || minor >= lanes.minorTo {
+		return
+	}
+
+	off := c.offset(lanes, major, minor)
+	blendPixel(c.img.Pix[off:off+bytesPerPixel:off+bytesPerPixel], col, alpha)
 }
 
 // DashedCircle draws a circle outline broken into dashes, sampling points by
