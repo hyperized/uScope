@@ -174,8 +174,16 @@ func (c *Canvas) FillRect(rect image.Rectangle, col color.RGBA) {
 		return
 	}
 
-	for y := area.Min.Y; y < area.Max.Y; y++ {
-		c.hline(area.Min.X, area.Max.X-1, y, col)
+	// The first row is painted and the rest copied from it, one memmove a
+	// row rather than the handful hline's doubling takes.
+	c.hline(area.Min.X, area.Max.X-1, area.Min.Y, col)
+
+	start := c.img.PixOffset(area.Min.X, area.Min.Y)
+	first := c.img.Pix[start : start+area.Dx()*bytesPerPixel]
+
+	for y := area.Min.Y + 1; y < area.Max.Y; y++ {
+		off := c.img.PixOffset(area.Min.X, y)
+		copy(c.img.Pix[off:off+len(first)], first)
 	}
 }
 
@@ -321,11 +329,32 @@ func (c *Canvas) hline(x0, x1, y int, col color.RGBA) {
 
 	start := c.img.PixOffset(from, y)
 	end := c.img.PixOffset(to, y) + bytesPerPixel
-	row := c.img.Pix[start:end:end]
+	paint(c.img.Pix[start:end:end], col)
+}
 
-	row[0], row[1], row[2], row[3] = col.R, col.G, col.B, col.A
+// paintSeed is how many bytes paint writes a word at a time before it starts
+// doubling with copy: below about this a memmove call costs more than the
+// stores it saves.
+const paintSeed = 64
 
-	for filled := bytesPerPixel; filled < len(row); filled *= 2 {
+// paint fills row, a whole number of pixels, with col.
+func paint(row []byte, col color.RGBA) {
+	const secondPixel = 32
+
+	pixel := binary.LittleEndian.Uint32([]byte{col.R, col.G, col.B, col.A})
+	word := uint64(pixel) | uint64(pixel)<<secondPixel
+	seed := min(len(row), paintSeed)
+
+	off := 0
+	for ; off+2*bytesPerPixel <= seed; off += 2 * bytesPerPixel {
+		binary.LittleEndian.PutUint64(row[off:off+2*bytesPerPixel], word)
+	}
+
+	if off < seed {
+		binary.LittleEndian.PutUint32(row[off:off+bytesPerPixel], pixel)
+	}
+
+	for filled := seed; filled < len(row); filled *= 2 {
 		copy(row[filled:], row[:filled])
 	}
 }

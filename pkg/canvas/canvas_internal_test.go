@@ -754,3 +754,23 @@ func TestBlendSpanPairsMatchOnePixelAtATime(t *testing.T) {
 		}
 	}
 }
+
+// TestPaintEveryLength fills rows of every length either side of paintSeed
+// and checks each pixel, so the word stores, the odd pixel after them and
+// the doubling all meet the same answer.
+func TestPaintEveryLength(t *testing.T) {
+	t.Parallel()
+
+	ink := color.RGBA{R: 1, G: 2, B: 3, A: 4}
+
+	for pixels := 1; pixels <= 3*paintSeed/bytesPerPixel+1; pixels++ {
+		row := make([]byte, pixels*bytesPerPixel)
+		paint(row, ink)
+
+		for at := 0; at < len(row); at += bytesPerPixel {
+			if got := (color.RGBA{R: row[at], G: row[at+1], B: row[at+2], A: row[at+3]}); got != ink {
+				t.Fatalf("%d pixels: pixel %d = %v, want %v", pixels, at/bytesPerPixel, got, ink)
+			}
+		}
+	}
+}
