@@ -711,3 +711,46 @@ func assertBlended(t *testing.T, canv *Canvas, want image.Rectangle) {
 		}
 	}
 }
+
+// TestBlendSpanPairsMatchOnePixelAtATime holds the two-pixel words in
+// blendSpan to the one-pixel formula: every pixel of spans of odd and even
+// length over varied backgrounds, at a spread of alphas.
+func TestBlendSpanPairsMatchOnePixelAtATime(t *testing.T) {
+	t.Parallel()
+
+	const width = 37
+
+	ink := color.RGBA{R: 0xC8, G: 0x3A, B: 0x91, A: 0xFF}
+
+	for _, alpha := range []float64{0.004, 0.1, 0.33, 0.5, 0.77, 0.999} {
+		for _, span := range []int{1, 2, 3, 36, 37} {
+			canv, err := New(width, 1)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			for index := range canv.img.Pix {
+				canv.img.Pix[index] = uint8(index*97 + 13) //nolint:gosec // a pattern, wrapping on purpose.
+			}
+
+			want := slices.Clone(canv.img.Pix)
+			next := uint32(math.Round(alpha * 256))
+
+			for pixel := range span {
+				for channel, ink := range []uint8{ink.R, ink.G, ink.B} {
+					at := pixel*bytesPerPixel + channel
+					//nolint:gosec // the sum is under 2^16 before the shift.
+					want[at] = uint8((uint32(want[at])*(256-next) + uint32(ink)*next + 0x80) >> 8)
+				}
+
+				want[pixel*bytesPerPixel+3] = opaque
+			}
+
+			canv.blendSpan(0, span-1, 0, ink, alpha)
+
+			if !slices.Equal(canv.img.Pix, want) {
+				t.Errorf("alpha %v, span %d: got %v, want %v", alpha, span, canv.img.Pix, want)
+			}
+		}
+	}
+}

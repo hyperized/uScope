@@ -364,6 +364,13 @@ func (c *Canvas) blendSpan(x0, x1, y int, col color.RGBA, alpha float64) {
 		half    = 0x80
 		lowByte = 0xFF
 		opaqueA = 0xFF000000
+
+		wideRedBlue = 0x00FF00FF00FF00FF
+		wideHalves  = 0x0080008000800080
+		wideGreen   = 0x000000FF000000FF
+		wideHalf    = 0x0000008000000080
+		wideOpaque  = 0xFF000000FF000000
+		secondPixel = 32
 	)
 
 	next := uint32(math.Round(min(alpha, 1) * weightOne))
@@ -377,8 +384,24 @@ func (c *Canvas) blendSpan(x0, x1, y int, col color.RGBA, alpha float64) {
 
 	// Red and blue are blended together in one multiply, green in another:
 	// half the arithmetic of a channel at a time, and the same rounding.
-	for off := 0; off < len(row); off += bytesPerPixel {
-		pix := row[off : off+bytesPerPixel : off+bytesPerPixel]
+	// Two pixels at a time go through one 64-bit word with the same lanes
+	// twice over; the odd pixel at the end, if any, goes alone.
+	pairs := len(row) &^ (2*bytesPerPixel - 1)
+	wideRB := uint64(srcRB) | uint64(srcRB)<<secondPixel
+	wideG := uint64(srcG) | uint64(srcG)<<secondPixel
+
+	for off := 0; off < pairs; off += 2 * bytesPerPixel {
+		pix := row[off : off+2*bytesPerPixel : off+2*bytesPerPixel]
+		old := binary.LittleEndian.Uint64(pix)
+
+		rb := ((old&wideRedBlue)*uint64(prev) + wideRB + wideHalves) >> weightBits & wideRedBlue
+		g := ((old>>weightBits&wideGreen)*uint64(prev) + wideG + wideHalf) >> weightBits & wideGreen
+
+		binary.LittleEndian.PutUint64(pix, rb|g<<weightBits|wideOpaque)
+	}
+
+	if pairs < len(row) {
+		pix := row[pairs : pairs+bytesPerPixel : pairs+bytesPerPixel]
 		old := binary.LittleEndian.Uint32(pix)
 
 		rb := ((old&redBlue)*prev + srcRB + halves) >> weightBits & redBlue
