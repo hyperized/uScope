@@ -55,13 +55,14 @@ func (c *Canvas) StrokeLineAA(x0, y0, x1, y1 float64, width int, col color.RGBA)
 	lift := (band - 1) / 2
 	interY := run.startMinor + run.gradient*(run.firstCol-run.startMajor)
 	lanes := c.lanes(run.steep)
+	ink := levelsOf(col)
 
 	for pixelX := run.firstCol; pixelX <= run.lastCol; pixelX++ {
 		// A column off the canvas still steps interY: it is a running sum, and
 		// jumping it ahead by a product would round differently and move the
 		// line by a bit in its last place.
 		if major := int(pixelX); major >= lanes.majorFrom && major < lanes.majorTo {
-			c.coverBand(&lanes, major, interY-lift, band, col)
+			c.coverBand(&lanes, major, interY-lift, band, &ink)
 		} else if major >= lanes.majorTo {
 			return
 		}
@@ -175,7 +176,7 @@ func orientRun(x0, y0, x1, y1 float64) lineRun {
 // it, which for a band one pixel tall is exactly the pair Wu's algorithm
 // writes. The column has already been checked against the canvas; the rows
 // are clipped here, once, rather than by Blend at every pixel.
-func (c *Canvas) coverBand(lanes *lanes, major int, top, height float64, col color.RGBA) {
+func (c *Canvas) coverBand(lanes *lanes, major int, top, height float64, ink *inkLevels) {
 	bottom := top + height
 	row := math.Floor(top)
 
@@ -189,12 +190,25 @@ func (c *Canvas) coverBand(lanes *lanes, major int, top, height float64, col col
 	pix := c.img.Pix
 	off := c.offset(lanes, major, int(row))
 
+	// blendPixel by hand: it is too large for the compiler to inline, and
+	// the call was a sixth of a thick line's time.
 	for ; row < bottom; row++ {
 		if int(row) >= lanes.minorTo {
 			return
 		}
 
-		blendPixel(pix[off:off+bytesPerPixel:off+bytesPerPixel], col, min(row+1, bottom)-max(row, top))
+		cover := min(row+1, bottom) - max(row, top)
+		dst := pix[off : off+bytesPerPixel : off+bytesPerPixel]
+
+		if cover >= 1 {
+			dst[0], dst[1], dst[2], dst[3] = ink.col.R, ink.col.G, ink.col.B, opaque
+		} else if cover > 0 {
+			dst[0] = blendToward(dst[0], ink.red, cover)
+			dst[1] = blendToward(dst[1], ink.green, cover)
+			dst[2] = blendToward(dst[2], ink.blue, cover)
+			dst[3] = opaque
+		}
+
 		off += lanes.minorStep
 	}
 }

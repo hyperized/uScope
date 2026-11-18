@@ -90,7 +90,8 @@ func TestCoverBand(t *testing.T) {
 			}
 
 			lanes := canv.lanes(testCase.steep)
-			canv.coverBand(&lanes, major, top, height, White)
+			white := levelsOf(White)
+			canv.coverBand(&lanes, major, top, height, &white)
 
 			sum := 0.0
 
@@ -195,7 +196,8 @@ func TestCoverBandClipsToTheCanvas(t *testing.T) {
 			}
 
 			lanes := canv.lanes(steep)
-			canv.coverBand(&lanes, 1, -1.5, 7, White)
+			white := levelsOf(White)
+			canv.coverBand(&lanes, 1, -1.5, 7, &white)
 
 			for minor := range 4 {
 				col, row := 1, minor
@@ -280,6 +282,29 @@ func TestLinesOffTheCanvasDrawNothing(t *testing.T) {
 	for _, value := range canv.img.Pix {
 		if value != 0 {
 			t.Fatal("a line off the canvas painted on it")
+		}
+	}
+}
+
+// TestBlendTowardMatchesBlendChannel holds the line's blend to Blend's byte
+// for byte: every pair of channels at a spread of alphas, the halves where
+// rounding is decided among them.
+func TestBlendTowardMatchesBlendChannel(t *testing.T) {
+	t.Parallel()
+
+	alphas := []float64{1e-9, 0.001, 0.1, 0.25, 1.0 / 3, 0.5, 0.6180339887, 2.0 / 3, 0.75, 0.9, 0.999, 1}
+	for step := 1; step < 64; step++ {
+		alphas = append(alphas, float64(step)/64, float64(step)/63+1e-12)
+	}
+
+	for prev := range 256 {
+		for next := range 256 {
+			for _, alpha := range alphas {
+				want := blendChannel(uint8(prev), uint8(next), alpha)
+				if got := blendToward(uint8(prev), float64(next), alpha); got != want {
+					t.Fatalf("blendToward(%d, %d, %v) = %d, want %d", prev, next, alpha, got, want)
+				}
+			}
 		}
 	}
 }

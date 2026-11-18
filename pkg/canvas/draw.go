@@ -37,18 +37,10 @@ func (c *Canvas) Blend(x, y int, col color.RGBA, alpha float64) {
 	}
 
 	off := c.img.PixOffset(x, y)
-	blendPixel(c.img.Pix[off:off+bytesPerPixel:off+bytesPerPixel], col, min(alpha, 1))
-}
+	pix := c.img.Pix[off : off+bytesPerPixel : off+bytesPerPixel]
 
-// blendPixel is Blend on one pixel's four bytes, for the callers that have
-// already found the pixel and screened its alpha down to at most one. An
-// alpha of one is written straight, which is the byte blendChannel would
-// round to anyway; nothing above zero is skipped.
-func blendPixel(pix []byte, col color.RGBA, alpha float64) {
-	if !(alpha > 0) {
-		return
-	}
-
+	// blendChannel at one rounds to col's own bytes, so they are written
+	// straight.
 	if alpha >= 1 {
 		pix[0], pix[1], pix[2], pix[3] = col.R, col.G, col.B, opaque
 
@@ -66,6 +58,25 @@ func blendPixel(pix []byte, col color.RGBA, alpha float64) {
 // lands on a deterministic byte rather than always rounding down.
 func blendChannel(prev, next uint8, alpha float64) uint8 {
 	return uint8(math.Round(float64(prev) + (float64(next)-float64(prev))*alpha))
+}
+
+// inkLevels is a colour with its channels already converted for
+// blendToward, so a line converts them once rather than at every pixel.
+type inkLevels struct {
+	col              color.RGBA
+	red, green, blue float64
+}
+
+// levelsOf is col's inkLevels.
+func levelsOf(col color.RGBA) inkLevels {
+	return inkLevels{col: col, red: float64(col.R), green: float64(col.G), blue: float64(col.B)}
+}
+
+// blendToward is blendChannel with the target already a float64. It is the
+// same expression on the same values, so it rounds to the same byte;
+// TestBlendTowardMatchesBlendChannel holds it to that.
+func blendToward(prev uint8, next, alpha float64) uint8 {
+	return uint8(math.Round(float64(prev) + (next-float64(prev))*alpha))
 }
 
 // invalidCoordinate reports whether v cannot be plotted: NaN or either
@@ -105,6 +116,7 @@ func (c *Canvas) LineAA(x0, y0, x1, y1 float64, col color.RGBA) {
 	gradient := run.gradient
 	interY := run.startMinor + gradient*(run.firstCol-run.startMajor)
 	lanes := c.lanes(run.steep)
+	ink := levelsOf(col)
 
 	for pixelX := run.firstCol; pixelX <= run.lastCol; pixelX++ {
 		major := int(pixelX)
@@ -119,8 +131,8 @@ func (c *Canvas) LineAA(x0, y0, x1, y1 float64, col color.RGBA) {
 			frac := interY - rowFloor
 			minor := int(rowFloor)
 
-			c.blendLane(&lanes, major, minor, col, 1-frac)
-			c.blendLane(&lanes, major, minor+1, col, frac)
+			c.blendLane(&lanes, major, minor, &ink, 1-frac)
+			c.blendLane(&lanes, major, minor+1, &ink, frac)
 		}
 
 		interY += gradient
@@ -128,14 +140,25 @@ func (c *Canvas) LineAA(x0, y0, x1, y1 float64, col color.RGBA) {
 }
 
 // blendLane is Blend addressed in a line's frame, for a column already
-// known to be on the canvas.
-func (c *Canvas) blendLane(lanes *lanes, major, minor int, col color.RGBA, alpha float64) {
-	if minor < lanes.minorFrom || minor >= lanes.minorTo {
+// known to be on the canvas and an alpha already known to be at most one.
+func (c *Canvas) blendLane(lanes *lanes, major, minor int, ink *inkLevels, alpha float64) {
+	if minor < lanes.minorFrom || minor >= lanes.minorTo || !(alpha > 0) {
 		return
 	}
 
 	off := c.offset(lanes, major, minor)
-	blendPixel(c.img.Pix[off:off+bytesPerPixel:off+bytesPerPixel], col, alpha)
+	dst := c.img.Pix[off : off+bytesPerPixel : off+bytesPerPixel]
+
+	if alpha >= 1 {
+		dst[0], dst[1], dst[2], dst[3] = ink.col.R, ink.col.G, ink.col.B, opaque
+
+		return
+	}
+
+	dst[0] = blendToward(dst[0], ink.red, alpha)
+	dst[1] = blendToward(dst[1], ink.green, alpha)
+	dst[2] = blendToward(dst[2], ink.blue, alpha)
+	dst[3] = opaque
 }
 
 // DashedCircle draws a circle outline broken into dashes, sampling points by
