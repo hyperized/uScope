@@ -291,15 +291,16 @@ func sizedFor(tb testing.TB, panel *canvas.Canvas, uhd bool) *canvas.Canvas {
 }
 
 // sceneFor is benchScene, or benchSceneWith a frame carrying the bench
-// ghosts when ghosts is true and a corridor exposure when exposure asks for
-// one. Both the allocation test and the benchmark pick their scene through
-// it, so each fixture is built in one place.
+// ghosts when ghosts is true, a corridor exposure when exposure asks for
+// one, and the first emergencies aircraft of the fleet squawking an
+// emergency. Both the allocation test and the benchmark pick their scene
+// through it, so each fixture is built in one place.
 //
 //nolint:revive // flag-parameter: ghosts picks a fixture to build, not a mode to branch deeper on.
-func sceneFor(tb testing.TB, ghosts bool, exposure exposureKind) (*radar.Scene, *canvas.Canvas) {
+func sceneFor(tb testing.TB, ghosts bool, exposure exposureKind, emergencies int) (*radar.Scene, *canvas.Canvas) {
 	tb.Helper()
 
-	if !ghosts && exposure == exposureNone {
+	if !ghosts && exposure == exposureNone && emergencies == 0 {
 		return benchScene(tb)
 	}
 
@@ -308,6 +309,8 @@ func sceneFor(tb testing.TB, ghosts bool, exposure exposureKind) (*radar.Scene, 
 	if ghosts {
 		frame.Ghosts = ghostFleet(benchGhosts, benchGhostHistory)
 	}
+
+	squawkEmergencies(frame.Planes, emergencies)
 
 	exposeFrame(tb, &frame, exposure)
 
@@ -321,6 +324,20 @@ func sceneFor(tb testing.TB, ghosts bool, exposure exposureKind) (*radar.Scene, 
 	return radar.New(testFaces(tb), src, scope.New(scope.WithCurrent(60))), canv
 }
 
+// emergencySquawks are the three codes squawkEmergencies hands out in turn.
+//
+//nolint:gochecknoglobals // a fixture table is data, and an array cannot be const.
+var emergencySquawks = [...]string{"7500", "7600", "7700"}
+
+// squawkEmergencies sets the first count planes squawking the three
+// emergency codes in turn, with the flag uAirwaves derives from them.
+func squawkEmergencies(planes []airplane.Snapshot, count int) {
+	for index := range min(count, len(planes)) {
+		planes[index].Squawk = emergencySquawks[index%len(emergencySquawks)]
+		planes[index].Emergency = true
+	}
+}
+
 // drawAllocCase is one row of TestDrawAllocations.
 type drawAllocCase struct {
 	name     string
@@ -332,6 +349,9 @@ type drawAllocCase struct {
 	wide     bool
 	uhd      bool
 	reveal   bool
+
+	// emergencies is how many of the fleet squawk an emergency.
+	emergencies int
 
 	// coast picks one of coast.go's fixtures instead, drawn at the render
 	// clock at; see coastAllocScene.
@@ -434,7 +454,9 @@ func drawAllocCases() []drawAllocCase {
 // boardAllocCases is the rows of TestDrawAllocations for corridor colouring,
 // its filters and the bare 3D view's board. Each carries the demo's corridor
 // field, so every strip's DIR and every grouped row goes through Classify
-// rather than stopping at an unplaced field.
+// rather than stopping at an unplaced field. The two EMERGENCY rows have
+// three of the fleet squawking, one on each code, so the section, its
+// heading and every meaning in the box are drawn on every measured frame.
 func boardAllocCases() []drawAllocCase {
 	return []drawAllocCase{
 		{
@@ -477,6 +499,20 @@ func boardAllocCases() []drawAllocCase {
 			set:      radar.Settings{Colour: radar.ColourCorridor},
 			filters:  pressFilterOut,
 			exposure: exposureDemo,
+		},
+		{
+			name:        "the scope in corridor mode with an EMERGENCY section",
+			set:         radar.Settings{Colour: radar.ColourCorridor},
+			exposure:    exposureDemo,
+			emergencies: len(emergencySquawks),
+		},
+		{
+			name:        "the bare 3D board with an EMERGENCY section, holding to OUT, in 4K",
+			set:         radar.Settings{Colour: radar.ColourCorridor, View: radar.ViewMinimal3D, Board: true},
+			filters:     pressFilterOut,
+			exposure:    exposureDemo,
+			uhd:         true,
+			emergencies: len(emergencySquawks),
 		},
 		{
 			name:     "the scope with the exposure under the ceiling",
@@ -621,7 +657,7 @@ func corridorAllocCases() []drawAllocCase {
 func TestDrawAllocations(t *testing.T) {
 	for _, testCase := range drawAllocCases() {
 		t.Run(testCase.name, func(t *testing.T) {
-			scene, canv := sceneFor(t, testCase.ghosts, testCase.exposure)
+			scene, canv := sceneFor(t, testCase.ghosts, testCase.exposure, testCase.emergencies)
 			if testCase.coast != coastAllocNone {
 				scene, canv = coastAllocScene(t, testCase.coast, testCase.set)
 			} else {
@@ -654,14 +690,15 @@ const allocRuns = 8
 
 // drawBenchCase is one row of BenchmarkDraw.
 type drawBenchCase struct {
-	name     string
-	set      radar.Settings
-	pal      theme.Palette
-	presses  int
-	ghosts   bool
-	exposure exposureKind
-	wide     bool
-	uhd      bool
+	name        string
+	set         radar.Settings
+	pal         theme.Palette
+	presses     int
+	ghosts      bool
+	exposure    exposureKind
+	wide        bool
+	uhd         bool
+	emergencies int
 }
 
 // exposureBenchCases is the corridor exposure's rows of BenchmarkDraw.
@@ -756,6 +793,8 @@ func exposureBenchCases() []drawBenchCase {
 //
 // The board cases are the bare 3D view with its strip board, in altitude
 // colouring with DIR and in corridor colouring grouped into sections.
+// corridor-emergency is the scope's grouped column with three of the fleet
+// squawking, so the EMERGENCY section is drawn on every frame.
 func BenchmarkDraw(b *testing.B) {
 	for _, testCase := range append([]drawBenchCase{
 		{name: "altitude/night", set: radar.Settings{Colour: radar.ColourAltitude}, pal: theme.Night},
@@ -829,9 +868,16 @@ func BenchmarkDraw(b *testing.B) {
 			pal:      theme.Night,
 			exposure: exposureDemo,
 		},
+		{
+			name:        "corridor-emergency/night",
+			set:         radar.Settings{Colour: radar.ColourCorridor},
+			pal:         theme.Night,
+			exposure:    exposureDemo,
+			emergencies: len(emergencySquawks),
+		},
 	}, exposureBenchCases()...) {
 		b.Run(testCase.name, func(b *testing.B) {
-			scene, canv := sceneFor(b, testCase.ghosts, testCase.exposure)
+			scene, canv := sceneFor(b, testCase.ghosts, testCase.exposure, testCase.emergencies)
 			canv = sizedFor(b, canv, testCase.uhd)
 
 			scene.Apply(testCase.set)

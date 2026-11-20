@@ -51,48 +51,48 @@ func groupedScene(colour ColourMode, filter filterState) (*Scene, source.Frame) 
 func TestShareLines(t *testing.T) {
 	t.Parallel()
 
-	all := [classCount]bool{true, true, true}
+	all := [groupCount]bool{false, true, true, true}
 
 	for _, testCase := range []struct {
 		name  string
 		lines int
-		need  [classCount]int
-		drawn [classCount]bool
-		want  [classCount]int
+		need  [groupCount]int
+		drawn [groupCount]bool
+		want  [groupCount]int
 	}{
-		{name: "all fit", lines: 20, need: [classCount]int{1, 3, 8}, drawn: all, want: [classCount]int{1, 3, 8}},
+		{name: "all fit", lines: 20, need: [groupCount]int{0, 1, 3, 8}, drawn: all, want: [groupCount]int{0, 1, 3, 8}},
 		{
 			name: "one overflowing takes the spare", lines: 12,
-			need: [classCount]int{1, 3, 20}, drawn: all, want: [classCount]int{1, 3, 5},
+			need: [groupCount]int{0, 1, 3, 20}, drawn: all, want: [groupCount]int{0, 1, 3, 5},
 		},
 		{
 			name: "two overflowing split the spare", lines: 12,
-			need: [classCount]int{1, 20, 20}, drawn: all, want: [classCount]int{1, 4, 4},
+			need: [groupCount]int{0, 1, 20, 20}, drawn: all, want: [groupCount]int{0, 1, 4, 4},
 		},
-		{name: "zero lines", lines: 0, need: [classCount]int{1, 1, 1}, drawn: all},
-		{name: "fewer lines than headings", lines: 2, need: [classCount]int{1, 1, 1}, drawn: all},
-		{name: "only the headings", lines: 3, need: [classCount]int{1, 1, 1}, drawn: all},
+		{name: "zero lines", lines: 0, need: [groupCount]int{0, 1, 1, 1}, drawn: all},
+		{name: "fewer lines than headings", lines: 2, need: [groupCount]int{0, 1, 1, 1}, drawn: all},
+		{name: "only the headings", lines: 3, need: [groupCount]int{0, 1, 1, 1}, drawn: all},
 		{
 			name: "exact thirds", lines: 12,
-			need: [classCount]int{9, 9, 9}, drawn: all, want: [classCount]int{3, 3, 3},
+			need: [groupCount]int{0, 9, 9, 9}, drawn: all, want: [groupCount]int{0, 3, 3, 3},
 		},
 		{
 			name: "a remainder of one goes to IN", lines: 13,
-			need: [classCount]int{9, 9, 9}, drawn: all, want: [classCount]int{4, 3, 3},
+			need: [groupCount]int{0, 9, 9, 9}, drawn: all, want: [groupCount]int{0, 4, 3, 3},
 		},
 		{
 			name: "a remainder of two goes to IN and OUT", lines: 14,
-			need: [classCount]int{9, 9, 9}, drawn: all, want: [classCount]int{4, 4, 3},
+			need: [groupCount]int{0, 9, 9, 9}, drawn: all, want: [groupCount]int{0, 4, 4, 3},
 		},
 		{
 			name: "an empty section gives its third away", lines: 9,
-			need: [classCount]int{0, 9, 9}, drawn: all, want: [classCount]int{0, 3, 3},
+			need: [groupCount]int{0, 0, 9, 9}, drawn: all, want: [groupCount]int{0, 0, 3, 3},
 		},
 		{
 			name: "one section drawn has the lot", lines: 10,
-			need:  [classCount]int{0, 30, 0},
-			drawn: [classCount]bool{false, true, false},
-			want:  [classCount]int{0, 9, 0},
+			need:  [groupCount]int{0, 0, 30, 0},
+			drawn: [groupCount]bool{false, false, true, false},
+			want:  [groupCount]int{0, 0, 9, 0},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -141,13 +141,17 @@ func TestGroupOf(t *testing.T) {
 	t.Parallel()
 
 	for group, class := range classOrder {
-		if got := groupOf(class); int(got) != group {
-			t.Errorf("groupOf(%d) = %d, want %d, its place in classOrder", class, got, group)
+		if got := groupOf(class); int(got) != group+1 {
+			t.Errorf("groupOf(%d) = %d, want %d, its place in classOrder after EMERGENCY", class, got, group+1)
+		}
+
+		if got := classOfGroup(group + 1); got != class {
+			t.Errorf("classOfGroup(%d) = %d, want %d", group+1, got, class)
 		}
 	}
 
-	if got := groupOf(unknownClass); got != classCount-1 {
-		t.Errorf("groupOf(unknown) = %d, want %d, OTHER", got, classCount-1)
+	if got := groupOf(unknownClass); got != groupCount-1 {
+		t.Errorf("groupOf(unknown) = %d, want %d, OTHER", got, groupCount-1)
 	}
 }
 
@@ -171,7 +175,7 @@ func TestGroupedIndexOrder(t *testing.T) {
 		}
 	}
 
-	if got, wantStart := scene.groups.start, [classCount + 1]int{0, 2, 3, 5}; got != wantStart {
+	if got, wantStart := scene.groups.start, [groupCount + 1]int{0, 0, 2, 3, 5}; got != wantStart {
 		t.Errorf("groups.start = %v, want %v", got, wantStart)
 	}
 
@@ -247,15 +251,15 @@ func TestGroupedFilterHoldsOneSection(t *testing.T) {
 		t.Fatalf("icaos = %v, want the one departure", scene.icaos)
 	}
 
-	if got, want := scene.groups.start, [classCount + 1]int{0, 0, 1, 1}; got != want {
+	if got, want := scene.groups.start, [groupCount + 1]int{0, 0, 0, 1, 1}; got != want {
 		t.Errorf("groups.start = %v, want %v", got, want)
 	}
 
-	if got, want := scene.groupsDrawn(), [classCount]bool{false, true, false}; got != want {
+	if got, want := scene.groupsDrawn(), [groupCount]bool{false, false, true, false}; got != want {
 		t.Errorf("groupsDrawn = %v, want %v", got, want)
 	}
 
-	if got, want := (&Scene{}).groupsDrawn(), [classCount]bool{true, true, true}; got != want {
+	if got, want := (&Scene{}).groupsDrawn(), [groupCount]bool{false, true, true, true}; got != want {
 		t.Errorf("groupsDrawn with no filter = %v, want %v", got, want)
 	}
 }

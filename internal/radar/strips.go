@@ -91,6 +91,19 @@ const (
 	emergencyPadX  = 3
 	emergencyPadY  = 2
 
+	// The words the warning box carries on a strip under the EMERGENCY
+	// heading, one per emergency squawk: 7500 unlawful interference, 7600
+	// radio failure, 7700 general emergency.
+	// None is wider than emergencyText, which the codes slot is sized for, so
+	// the meaning costs the strip nothing; TestSquawkMeaningsFitTheBox
+	// measures them. General emergency reads EMERGENCY because that is what
+	// it is, and GENERAL alone in a red box says nothing.
+	squawkHijack     = "7500"
+	squawkNoRadio    = "7600"
+	meaningHijack    = "HIJACK"
+	meaningNoRadio   = "NO RADIO"
+	meaningEmergency = emergencyText
+
 	// fullChannel is a colour channel at full strength, which is the only value
 	// emergencyInk is built out of.
 	fullChannel = 0xFF
@@ -566,6 +579,11 @@ type stripPen struct {
 	// says the selection is standing on this strip.
 	rank   int
 	picked bool
+
+	// meaning says the strip is in the EMERGENCY section, where the warning
+	// box says what the squawk means rather than EMERGENCY a second time
+	// under a heading that already does.
+	meaning bool
 }
 
 // halfStripHeight is one row of figures with its padding, and boardHeadHeight
@@ -931,14 +949,35 @@ func (s *Scene) rankInk(picked bool) color.RGBA {
 // and the field is sized for the wider of the two, and of the pair the hex is
 // the one worth giving up: it is the identity nobody reads while an aircraft is
 // declaring one.
+//
+// Under the EMERGENCY heading the box says what the squawk means instead; see
+// squawkMeaning.
 func (s *Scene) drawHalfCodes(pen stripPen, left int, plane airplane.Snapshot) {
 	if plane.Emergency {
-		s.drawEmergency(pen.lay, left, pen.small, plane)
+		word := emergencyText
+		if pen.meaning {
+			word = squawkMeaning(plane.Squawk)
+		}
+
+		s.drawWarningBox(pen.lay, left, pen.small, word)
 
 		return
 	}
 
 	pen.lay.text(s.faces.Small, left, pen.small, clip(plane.ICAO, maxICAO), s.pal.Muted)
+}
+
+// squawkMeaning is the warning box's word for an emergency squawk. Anything
+// that is not 7500 or 7600 is 7700, since nothing else sets the flag.
+func squawkMeaning(squawk string) string {
+	switch squawk {
+	case squawkHijack:
+		return meaningHijack
+	case squawkNoRadio:
+		return meaningNoRadio
+	default:
+		return meaningEmergency
+	}
 }
 
 // drawEmergency puts the warning box on the line at left, and does nothing at
