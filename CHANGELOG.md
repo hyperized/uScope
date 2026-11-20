@@ -8,6 +8,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Coloured by corridor, the list and the bare 3D view's board open with an
+  `EMERGENCY` section while any aircraft squawks 7500, 7600 or 7700. Those
+  aircraft move there from `IN`, `OUT` and `OTHER`, so the counts still add
+  up, and the red box on each strip says `HIJACK`, `NO RADIO` or
+  `EMERGENCY`. When the column is short the other sections give up their
+  lines first. With nobody squawking, the list is drawn exactly as before.
 - `--lights auto` leaves the aircraft lights off in daylight and brings them
   in as the sun goes down: none with the sun ten degrees up or more, a fade
   from there to the horizon, and full strength from sunset to sunrise, at the
@@ -18,6 +24,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- No filter hides an aircraft squawking an emergency any more, in any view.
+  A `<25K` ceiling put on to clear the overflights used to clear an airliner
+  at cruise that had just lost its radio as well.
 - The tilted views draw faster, and the picture is the same byte for byte.
   Most of the time went into anti-aliased lines, the tube faces and the
   ground, which now fills its water and land in one pass and no longer has

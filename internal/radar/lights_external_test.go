@@ -280,7 +280,7 @@ func TestLightsAllocations(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			scene, canv := sceneFor(t, false, exposureNone)
+			scene, canv := sceneFor(t, false, exposureNone, 0)
 
 			if testCase.dusk {
 				frame := benchFrame()

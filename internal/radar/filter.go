@@ -224,10 +224,32 @@ func bandOf(altitude float64) int {
 // given. Ghosts past their coast do
 // not go through it at all: hiding a track on a reading that old would be a
 // decision nobody could check against the picture.
+//
+// An aircraft squawking an emergency passes every filter; see passesPlane.
 func (s *Scene) visible(plane airplane.Snapshot) bool {
-	altitude := heardAltitude(plane.Altitude, plane.PositionHistory)
+	return s.passesPlane(plane, s.filterClass(plane))
+}
 
-	return s.passes(plane.ICAO, altitude, plane.Callsign, s.filterClass(plane))
+// passesPlane is passes for an aircraft on the frame, with its class already
+// worked out.
+//
+// An aircraft squawking 7500, 7600 or 7700 is let through whatever the filter
+// is holding to. Someone who put a ceiling on to clear the overflights still
+// wants to see the airliner at cruise that has just lost its radio. It goes
+// through the seen table all the same, so an aircraft the filter was hiding
+// fades in when it starts squawking, as any aircraft the filter lets back
+// does.
+//
+// A lost trail coasting on is judged by passes alone: the ghost keeps the
+// altitude, callsign and class it was last heard with, not its squawk.
+func (s *Scene) passesPlane(plane airplane.Snapshot, class source.TrackClass) bool {
+	if plane.Emergency {
+		s.seen.show(s.seen.touch(plane.ICAO))
+
+		return true
+	}
+
+	return s.passes(plane.ICAO, heardAltitude(plane.Altitude, plane.PositionHistory), plane.Callsign, class)
 }
 
 // filterClass is the aircraft's track class when the filter is holding to

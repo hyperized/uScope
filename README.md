@@ -176,16 +176,21 @@ amber, and everything else grey. The legend reads `IN`, `OUT` and `OTHER`, and
 the list splits into those three sections, each under a heading with its
 count and each nearest first. A section with fewer aircraft than its third of
 the lines hands the rest on; one that runs out of room ends on `+N MORE`. With
-no airfield placed every aircraft is grey and sits under `OTHER`. In all
-three colourings the level column and the panel's altitude keep the altitude
-colours.
+no airfield placed every aircraft is grey and sits under `OTHER`. An
+aircraft squawking 7500, 7600 or 7700 is listed in an `EMERGENCY` section
+above the other three instead, with `HIJACK`, `NO RADIO` or `EMERGENCY` in
+the red box on its strip. The section is only there while someone is in it,
+and it keeps its lines when the column is short: the other sections give
+theirs up first. In all three colourings the level column and the panel's
+altitude keep the altitude colours.
 
 `f` narrows the picture to one entry of whichever legend is showing, then
 back to all. By altitude and by corridor the cycle has one more stop, `<25K`,
 which hides the overflights. An aircraft near a band's edge has 500 ft of
 slack either way, so a flight holding FL250 under `<25K` does not flicker.
 `--filter` starts the run on one of the stops; see the flags table for which
-stop belongs to which colouring.
+stop belongs to which colouring. No stop hides an aircraft squawking an
+emergency.
 
 ### The 3D view
 
@@ -236,7 +241,8 @@ a strip per aircraft nearest first, and a legend at the bottom. At 1280x720 a
 strip carries the callsign, level, ground speed, distance and `DIR`: `IN`,
 `OUT` or `---` by the same guess the corridor colouring makes. A bigger canvas
 brings back more of the column's fields. Coloured by corridor, the board
-splits into IN, OUT and OTHER the way the full views' list does.
+splits into IN, OUT and OTHER the way the full views' list does, with
+EMERGENCY above them while an aircraft is squawking one.
 
 ![The bare 3D view with the strip board, coloured by corridor](docs/board.png)
 

@@ -2,6 +2,7 @@ package radar
 
 import (
 	"image"
+	"image/color"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
@@ -16,12 +17,25 @@ import (
 // those three; a list that then interleaved them made the eye do the sorting
 // a second time.
 //
+// Over the three sits a fourth, EMERGENCY, which holds every aircraft
+// squawking 7500, 7600 or 7700 and is not drawn at all while it is empty.
+// An aircraft in it is not listed again under its class, so the counts on the
+// four headings add up to the board's.
+//
 // The same index serves the full views' column and the bare 3D view's board,
 // and the selection steps through it in the order it is drawn.
 const (
+	// groupEmergency is the EMERGENCY section, first in the index because it
+	// is drawn first, and the class sections follow it in classOrder.
+	groupEmergency = 0
+
+	// groupCount is how many sections there are: the emergencies and one per
+	// class.
+	groupCount = classCount + 1
+
 	// groupNone marks an aircraft of the frame that has no row: the filter is
 	// keeping it off the field.
-	groupNone = classCount
+	groupNone = groupCount
 
 	// groupRuleGap is the air between a heading's words and the hairline either
 	// side of them.
@@ -48,8 +62,8 @@ type groupIndex struct {
 	on bool
 
 	// start[g] is the row the section g opens at in Scene.icaos, and
-	// start[classCount] the end of the last one.
-	start [classCount + 1]int
+	// start[groupCount] the end of the last one.
+	start [groupCount + 1]int
 
 	// nearest is the row of the nearest aircraft on the field, wherever its
 	// section put it. It is what an unpinned selection stands on.
@@ -61,19 +75,21 @@ type groupIndex struct {
 	of   []uint8
 }
 
-// groupOf is the section a class is listed in.
+// groupOf is the section a class is listed in: its place in classOrder, after
+// EMERGENCY. A class the order does not name is listed with the rest under
+// OTHER.
 func groupOf(class source.TrackClass) uint8 {
-	switch class {
-	case source.TrackInbound:
-		return 0
-	case source.TrackOutbound:
-		return 1
-	case source.TrackTransit:
-		fallthrough
-	default:
-		return classCount - 1
+	for index, listed := range classOrder {
+		if listed == class {
+			return uint8(groupEmergency + 1 + index)
+		}
 	}
+
+	return groupCount - 1
 }
+
+// classOfGroup is the class a class section lists. Only asked of one.
+func classOfGroup(group int) source.TrackClass { return classOrder[group-1] }
 
 // indexRows rebuilds the ICAO index syncSelection keeps, grouped or not.
 func (s *Scene) indexRows(frame source.Frame) {
@@ -116,7 +132,7 @@ func (s *Scene) groupRows(frame source.Frame) {
 		groups.of = append(groups.of, group)
 	}
 
-	for group := range uint8(classCount) {
+	for group := range uint8(groupCount) {
 		groups.start[group] = len(s.icaos)
 
 		for index, in := range groups.of {
@@ -133,27 +149,32 @@ func (s *Scene) groupRows(frame source.Frame) {
 		}
 	}
 
-	groups.start[classCount] = len(s.icaos)
+	groups.start[groupCount] = len(s.icaos)
 }
 
 // groupFor is the section one aircraft is listed in, or groupNone when the
 // filter is keeping it off the field. It is visible with the class worked out
 // once and handed to both questions.
+//
+// An emergency is listed under EMERGENCY whatever its class.
 func (s *Scene) groupFor(plane airplane.Snapshot) uint8 {
 	class := s.exposure.corridors.Classify(plane)
 
-	if !s.passes(plane.ICAO, heardAltitude(plane.Altitude, plane.PositionHistory), plane.Callsign, class) {
+	switch {
+	case !s.passesPlane(plane, class):
 		return groupNone
+	case plane.Emergency:
+		return groupEmergency
+	default:
+		return groupOf(class)
 	}
-
-	return groupOf(class)
 }
 
 // groupAt is the section a row is in. Only asked of a row that exists.
 func (g *groupIndex) groupAt(row int) int {
 	group := 0
 
-	for group < classCount-1 && row >= g.start[group+1] {
+	for group < groupCount-1 && row >= g.start[group+1] {
 		group++
 	}
 
@@ -171,16 +192,25 @@ func (s *Scene) rowRank(row int) int {
 	return row - s.groups.start[s.groups.groupAt(row)] + 1
 }
 
-// groupsDrawn is which sections get a heading. All three, so the column does
-// not jump when a class empties, except while the f key is holding to one
-// class: then the other two have nothing in them by construction, and their
-// headings would be two lines of zero saying what the filter already says.
-func (s *Scene) groupsDrawn() [classCount]bool {
-	if s.filter.kind != filterClass {
-		return [classCount]bool{true, true, true}
-	}
+// groupsDrawn is which sections get a heading. All three classes, so the
+// column does not jump when a class empties, except while the f key is
+// holding to one class: then the other two have nothing in them by
+// construction, and their headings would be two lines of zero saying what the
+// filter already says.
+//
+// EMERGENCY is the other way round: drawn only while it holds somebody. A
+// heading reading EMERGENCY 0 on every quiet frame would teach the eye to
+// skip the one word on the board that must never be skipped.
+func (s *Scene) groupsDrawn() [groupCount]bool {
+	drawn := [groupCount]bool{groupEmergency: s.groups.start[groupEmergency+1] > s.groups.start[groupEmergency]}
 
-	var drawn [classCount]bool
+	if s.filter.kind != filterClass {
+		for group := groupEmergency + 1; group < groupCount; group++ {
+			drawn[group] = true
+		}
+
+		return drawn
+	}
 
 	drawn[groupOf(s.filter.class)] = true
 
@@ -190,20 +220,32 @@ func (s *Scene) groupsDrawn() [classCount]bool {
 // shareLines shares the lines a board has between its sections, headings
 // first.
 //
-// Every drawn section has its heading, and the rest is dealt out one line at
-// a time, IN then OUT then OTHER, round and round, skipping a section once it
-// has a line for every aircraft it holds. Dealt that way each section gets a
-// third, the remainder goes to the earlier ones, and a section that needs
-// less than its third leaves the spare to be dealt to the others in the same
-// order. A section the deal leaves short draws one line fewer and a +N MORE
-// on the last line; that is drawGroup's to decide, not this.
+// EMERGENCY goes before everything: its heading, then a line for every
+// aircraft in it or as many as there are. Only what it leaves is shared
+// between the classes, so when the column is short the class sections give
+// up their rows, headings included, and an emergency is never the strip that
+// falls off the bottom.
+//
+// The classes then have their headings taken off, and the rest is dealt out
+// one line at a time, IN then OUT then OTHER, round and round, skipping a
+// section once it has a line for every aircraft it holds. Dealt that way each
+// section gets a third, the remainder goes to the earlier ones, and a section
+// that needs less than its third leaves the spare to be dealt to the others
+// in the same order. A section the deal leaves short draws one line fewer and
+// a +N MORE on the last line; that is drawGroup's to decide, not this.
 //
 // It is a function of three small arrays and returns a fourth, so the whole
 // rule can be read off a table in the test.
-func shareLines(lines int, need [classCount]int, drawn [classCount]bool) [classCount]int {
-	var share [classCount]int
+func shareLines(lines int, need [groupCount]int, drawn [groupCount]bool) [groupCount]int {
+	var share [groupCount]int
 
-	for group := range classCount {
+	if drawn[groupEmergency] {
+		lines--
+		share[groupEmergency] = min(need[groupEmergency], max(lines, 0))
+		lines -= share[groupEmergency]
+	}
+
+	for group := groupEmergency + 1; group < groupCount; group++ {
 		if drawn[group] {
 			lines--
 		}
@@ -212,7 +254,7 @@ func shareLines(lines int, need [classCount]int, drawn [classCount]bool) [classC
 	for lines > 0 {
 		dealt := false
 
-		for group := range classCount {
+		for group := groupEmergency + 1; group < groupCount; group++ {
 			if lines > 0 && drawn[group] && share[group] < need[group] {
 				share[group]++
 				lines--
@@ -264,16 +306,16 @@ func (s *Scene) drawGroups(col *layout, plan stripPlan, frame source.Frame, sel 
 	pitch := s.halfStripHeight(col)
 	drawn := s.groupsDrawn()
 
-	var need [classCount]int
+	var need [groupCount]int
 
-	for group := range classCount {
+	for group := range groupCount {
 		need[group] = s.groups.start[group+1] - s.groups.start[group]
 	}
 
 	share := shareLines((col.bottom-col.top)/pitch, need, drawn)
 	top := col.top
 
-	for group := range classCount {
+	for group := range groupCount {
 		if !drawn[group] || top+pitch > col.bottom {
 			continue
 		}
@@ -299,7 +341,8 @@ func (s *Scene) drawGroup(
 
 	for row := window.first; row < window.first+window.count; row++ {
 		plane := frame.Planes[s.groups.rows[start+row]]
-		s.drawHalfStrip(col, plan, frame, plane, top, stripPen{rank: row + 1, picked: start+row == sel})
+		pen := stripPen{rank: row + 1, picked: start+row == sel, meaning: group == groupEmergency}
+		s.drawHalfStrip(col, plan, frame, plane, top, pen)
 		top += pitch
 	}
 
@@ -313,7 +356,7 @@ func (s *Scene) drawGroup(
 	return top
 }
 
-// drawGroupHead writes a section's heading: a short hairline, the class's
+// drawGroupHead writes a section's heading: a short hairline, the section's
 // word in its own colour, the count, and the hairline on to the right edge.
 //
 // It takes a strip's height and is set in the face the field names are, so
@@ -328,12 +371,29 @@ func (s *Scene) drawGroupHead(col *layout, plan stripPlan, group, count, top int
 	middle := top + pitch/2
 	gap := col.px(groupRuleGap)
 	left := plan.left[fieldIdent]
-	class := classOrder[group]
+	word, ink := s.groupWord(group)
 
 	col.dst.FillRect(image.Rect(col.left, middle, left-gap, middle+rule), s.pal.Rule)
 
-	pen := col.tracked(face, left, line, classLabel(class), s.classColour(class)) + col.glyphWidth(face)
+	pen := col.tracked(face, left, line, word, ink) + col.glyphWidth(face)
 	pen = col.drawBytesTracked(face, pen, line, s.count(count), s.pal.Muted)
 
 	col.dst.FillRect(image.Rect(pen+gap, middle, col.right, middle+rule), s.pal.Rule)
+}
+
+// groupWord is a section heading's word and the colour it is set in.
+//
+// EMERGENCY is set in the palette's warning colour, the red the warning box is
+// filled with, as a word on the field rather than knocked out of a box. Every
+// strip under it already carries the box, and a second filled block on the
+// heading would make the section a wall of red that is harder to read than the
+// strips it is announcing.
+func (s *Scene) groupWord(group int) (string, color.RGBA) {
+	if group == groupEmergency {
+		return emergencyText, s.pal.Warn
+	}
+
+	class := classOfGroup(group)
+
+	return classLabel(class), s.classColour(class)
 }
