@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hyperized/uScope/internal/affinity"
 	"github.com/hyperized/uScope/internal/app"
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
@@ -199,6 +200,9 @@ type config struct {
 	orbit           radar.Toggle
 	azimuth         float64
 
+	// cpus is the --cpus set, empty to leave the threads where they are.
+	cpus affinity.Set
+
 	// battery is the power-supply file to read instead of looking one up. It
 	// is empty for the normal case, which is autodiscovery, and for --battery
 	// off, which noBattery says apart.
@@ -280,6 +284,7 @@ type rawFlags struct {
 	history     string
 	scopeRange  string
 	battery     string
+	cpus        string
 	beast       string
 	replay      string
 	gpsd        string
@@ -316,7 +321,17 @@ func parseFlags(args []string) (config, error) {
 		return config{}, fmt.Errorf("%s: parsing flags: %w", appName, err)
 	}
 
-	return raw.validated()
+	cfg, err := raw.validated()
+	if err != nil {
+		return config{}, err
+	}
+
+	cfg.cpus, err = parseCPUs(raw.cpus)
+	if err != nil {
+		return config{}, err
+	}
+
+	return cfg, nil
 }
 
 // bind declares every flag against set and returns where the values land.
@@ -380,6 +395,7 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.view, "view", defaultView,
 		"which view the radar starts on: scope, 3d, minimal or minimal3d. v cycles them while it runs")
 	bindCamera(set, raw)
+	bindCPUs(set, &raw.cpus)
 	set.StringVar(&raw.battery, "battery", "",
 		"power-supply uevent file to read the battery from, or off for no indicator; empty finds one, Linux only")
 	set.BoolVar(&raw.demo, "demo", false,

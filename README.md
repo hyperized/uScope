@@ -96,6 +96,10 @@ If gpsd is running on the device, uScope finds it on `localhost:2947` and the
 header goes green when there is a fix. Without it, the receiver's position is
 worked out from the aircraft, which takes a minute or two of traffic.
 
+On a big.LITTLE board the scheduler may put the render loop on a small core
+that is too slow for it. `--cpus 4-7` pins the process to the listed CPUs so
+it stays on the big ones. It is Linux only.
+
 ### Over ssh
 
 From a Kitty-protocol terminal on your desk, into the uConsole:
@@ -448,6 +452,7 @@ between the arrows and the brackets.
 | `--fb` | `/dev/fb0` | framebuffer device |
 | `--rotate` | `auto` | read fbcon's rotation, or force `0` to `3` |
 | `--battery` | | a `power_supply` uevent file to read the battery from, or `off` for no indicator; empty finds one, Linux only |
+| `--cpus` | | pin the process to these CPUs at start, as a list such as `4-7` or `0,2,4-7`; Linux only. A list the kernel will not keep in full stops the run instead of carrying on unpinned. Empty leaves it to the scheduler |
 | `--fps` | `30` | frames per second, 1 to 120 |
 | `--frames` | `0` | stop after this many frames, up to 1000; `0` runs until you quit |
 | `--png` | | render one frame to this file and exit |
