@@ -130,7 +130,7 @@ func flagsExit(err error, stderr io.Writer) int {
 // A second signal falls through to the default handler and kills it outright,
 // which is the escape hatch if a restore ever wedges.
 func run(args []string, stdout, stderr io.Writer) int {
-	cfg, err := parseFlags(args)
+	cfg, err := setUp(args, stderr)
 	if err != nil {
 		return flagsExit(err, stderr)
 	}
