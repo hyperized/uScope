@@ -54,6 +54,7 @@ type exposure struct {
 	generation      uint64
 	routes          []source.Route
 	routeGeneration uint64
+	airways         []source.Airway
 	corridors       source.Corridors
 	now             time.Time
 }
@@ -105,6 +106,7 @@ func (s *Scene) exposureKey() exposureKey {
 		routes:     s.exposure.routeGeneration,
 		tick:       s.exposure.now.Truncate(exposureTick).Unix(),
 		bands:      s.corridorBands(),
+		airways:    s.airways,
 	}
 }
 
@@ -119,6 +121,7 @@ type exposureKey struct {
 	routes     uint64
 	tick       int64
 	bands      bandMask
+	airways    bool
 }
 
 // classColour is the colour a class of track is drawn in before it fades.
@@ -176,6 +179,7 @@ func (s *Scene) drawExposure(dst *canvas.Canvas, proj projector, weight int) {
 	}
 
 	bands := s.corridorBands()
+	s.drawAirways(dst, proj, bands, weight)
 	s.drawTubes(dst, proj, bands, weight)
 
 	for index := range s.exposure.trails {
@@ -187,6 +191,10 @@ func (s *Scene) drawExposure(dst *canvas.Canvas, proj projector, weight int) {
 		}
 
 		before, after := trail.Loose()
+		if trail.Airway && s.airways {
+			before, after = trail.Points[:trail.AirwayFrom+1], trail.Points[trail.AirwayTo:]
+		}
+
 		drawExposurePath(dst, proj, before, ink, bands)
 		drawExposurePath(dst, proj, after, ink, bands)
 	}
@@ -234,5 +242,7 @@ func (s *Scene) drawExposure3(dst *canvas.Canvas, view scene3) {
 		return
 	}
 
-	s.drawTubes3(dst, view, s.corridorBands())
+	bands := s.corridorBands()
+	s.drawAirways3(dst, view, bands)
+	s.drawTubes3(dst, view, bands)
 }

@@ -149,6 +149,7 @@ func (d *Demo) seedExposure(now time.Time) {
 		points: make([]airplane.PositionEntry, 0, demoHistoryTracks*demoHistoryMaxFixes),
 	}
 	slot := demoHistorySpan / demoHistoryTracks
+	trails := make([]Trail, 0, demoHistoryTracks)
 
 	for index := range demoHistoryTracks {
 		points := history.track()
@@ -158,7 +159,7 @@ func (d *Demo) seedExposure(now time.Time) {
 		lostAt := now.Add(-demoHistorySpan + time.Duration(index)*slot +
 			time.Duration(history.rng.Float64()*float64(slot)))
 
-		d.ghosts.push(Trail{
+		trails = append(trails, Trail{
 			ICAO:     fmt.Sprintf("%06X", demoHistoryICAO+index),
 			Callsign: fmt.Sprintf("%s%d", demoCallsigns[index%len(demoCallsigns)], history.rng.IntN(demoFlightNumbers)),
 			Altitude: points[len(points)-1].Altitude,
@@ -166,6 +167,14 @@ func (d *Demo) seedExposure(now time.Time) {
 			LostAt:   lostAt,
 			Class:    d.ghosts.corridors.classify(points),
 		})
+	}
+
+	if d.airways {
+		trails = d.mergeByLoss(trails, d.overflights(now, field))
+	}
+
+	for index := range trails {
+		d.ghosts.push(trails[index])
 	}
 }
 

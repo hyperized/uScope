@@ -45,6 +45,7 @@ const (
 	nameShore   = "Shore"
 	nameWater   = "Water"
 	nameLand    = "Land"
+	nameAirway  = "Airway"
 	nameAltLow  = "AltLow"
 	nameAltMid  = "AltMid"
 	nameAltHigh = "AltHigh"
@@ -205,6 +206,7 @@ func paletteFields() []fieldAccessor {
 		{name: nameShore, get: func(p theme.Palette) color.RGBA { return p.Shore }},
 		{name: nameWater, get: func(p theme.Palette) color.RGBA { return p.Water }},
 		{name: nameLand, get: func(p theme.Palette) color.RGBA { return p.Land }},
+		{name: nameAirway, get: func(p theme.Palette) color.RGBA { return p.Airway }},
 		{name: nameAltLow, get: func(p theme.Palette) color.RGBA { return p.AltLow }},
 		{name: nameAltMid, get: func(p theme.Palette) color.RGBA { return p.AltMid }},
 		{name: nameAltHigh, get: func(p theme.Palette) color.RGBA { return p.AltHigh }},
@@ -1097,6 +1099,29 @@ func TestVectorDayIsGlassDay(t *testing.T) {
 
 	if theme.VectorDay != want {
 		t.Errorf("VectorDay = %v, want Day under LookVector %v", theme.VectorDay, want)
+	}
+}
+
+// TestAirwayStandsApart checks the airway ink is none of the inks it is drawn
+// beside on the ground: the arrivals' Data, the departures' Caution and the
+// transit hairlines' Muted, and not the field it is drawn on.
+func TestAirwayStandsApart(t *testing.T) {
+	t.Parallel()
+
+	for _, palette := range allPalettes() {
+		t.Run(palette.name, func(t *testing.T) {
+			t.Parallel()
+
+			pal := palette.pal
+			for _, other := range []namedColour{
+				{name: nameData, col: pal.Data}, {name: nameCaution, col: pal.Caution},
+				{name: nameMuted, col: pal.Muted}, {name: nameField, col: pal.Field},
+			} {
+				if pal.Airway == other.col {
+					t.Errorf("Airway = %s = %v", other.name, other.col)
+				}
+			}
+		})
 	}
 }
 

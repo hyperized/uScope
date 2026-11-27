@@ -348,6 +348,13 @@ type Settings struct {
 	// Scene gets the plain projection until it asks for the other one, and the
 	// command line asks on its behalf.
 	Recentre time.Duration
+
+	// Airways is whether the high airways are drawn: the overflights at
+	// FL250 and above that the source bundled by the line they flew, as
+	// dashed lines under the corridors. A plain bool for the reason
+	// MinimalBar is one: off is the default. They are part of the exposure,
+	// so they need Corridors on as well.
+	Airways bool
 }
 
 // Apply sets the whole block on a scene that is already built, which is how
@@ -378,6 +385,7 @@ func (s *Scene) Apply(set Settings) {
 	s.applyOrbit(set.Orbit.On(), set.Azimuth)
 	s.stars = set.Stars.On()
 	s.corridors = set.Corridors.On()
+	s.airways = set.Airways
 }
 
 // admit is the filter value if this mode's f cycle holds it, and ALL if not.

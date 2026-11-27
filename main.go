@@ -216,6 +216,7 @@ func radarSettings(cfg config) radar.Settings {
 		Lights:          cfg.lights,
 		Stars:           cfg.stars,
 		Corridors:       cfg.corridors,
+		Airways:         cfg.airways,
 		RangeNm:         cfg.rangeNm,
 		Recentre:        cfg.recentre,
 		View:            cfg.view,
@@ -489,6 +490,12 @@ func demo(cfg config) (source.Source, error) {
 
 	if cfg.demoSector {
 		opts = append(opts, source.WithDemoSector())
+	}
+
+	// The invented airway traffic rides on the setting rather than on a flag
+	// of its own, so --demo without --airways draws the history it always has.
+	if cfg.airways {
+		opts = append(opts, source.WithDemoAirways())
 	}
 
 	src, err := source.NewDemo(opts...)

@@ -118,6 +118,13 @@ type Palette struct {
 	Water color.RGBA
 	Land  color.RGBA
 
+	// Airway is the ink of the high airways, the overflights at cruise
+	// bundled by the line they flew. It has to stay apart from the arrivals'
+	// Data, the departures' Caution and the transit hairlines' Muted, and hold
+	// on the ground, the water and the sky alike, so it is a cool violet on
+	// the glass and vector looks.
+	Airway color.RGBA
+
 	// The altitude bands. Aircraft are coloured by how high they are, which
 	// is the one piece of information a top-down scope cannot show by
 	// position.
@@ -311,6 +318,16 @@ const (
 	monoDayShore   = 0xBDB9B0
 )
 
+// The airway inks, one per palette.
+const (
+	nightAirway         = 0xA99BFF
+	dayAirway           = 0x5B47C8
+	phosphorNightAirway = 0xC8B4FF
+	phosphorDayAirway   = 0x5B47A8
+	monoNightAirway     = 0xA4A4C4
+	monoDayAirway       = 0x4C4C6C
+)
+
 // Taking one channel out of a packed colour.
 const (
 	byteMask   = 0xFF
@@ -357,6 +374,7 @@ var Night = Palette{
 	Shore:   rgb(nightShore),
 	Water:   tint(nightField, nightData),
 	Land:    tint(nightField, nightOK),
+	Airway:  rgb(nightAirway),
 
 	// AltLow repeats OK and AltMid repeats Ink; see the note on the bands.
 	AltLow:  rgb(nightOK),
@@ -387,6 +405,7 @@ var Day = Palette{
 	Shore:   rgb(dayShore),
 	Water:   tint(dayField, dayData),
 	Land:    tint(dayField, dayOK),
+	Airway:  rgb(dayAirway),
 
 	AltLow:  rgb(dayOK),
 	AltMid:  rgb(dayInk),
@@ -421,6 +440,7 @@ var VectorNight = Palette{
 	Shore:   rgb(vectorNightShore),
 	Water:   rgb(vectorNightWater),
 	Land:    rgb(vectorNightLand),
+	Airway:  rgb(nightAirway),
 
 	AltLow:  rgb(nightOK),
 	AltMid:  rgb(nightInk),
@@ -462,6 +482,7 @@ var PhosphorNight = Palette{
 	Shore:   rgb(phosphorNightShore),
 	Water:   tint(phosphorNightField, phosphorNightData),
 	Land:    tint(phosphorNightField, phosphorNightOK),
+	Airway:  rgb(phosphorNightAirway),
 
 	AltLow:  rgb(phosphorNightAltLow),
 	AltMid:  rgb(phosphorNightAltMid),
@@ -501,6 +522,7 @@ var PhosphorDay = Palette{
 	Shore:   rgb(phosphorDayShore),
 	Water:   tint(phosphorDayField, phosphorDayData),
 	Land:    tint(phosphorDayField, phosphorDayAccent),
+	Airway:  rgb(phosphorDayAirway),
 
 	AltLow:  rgb(phosphorDayAltLow),
 	AltMid:  rgb(phosphorDayAltMid),
@@ -535,6 +557,7 @@ var MonoNight = Palette{
 	Shore:   rgb(monoNightShore),
 	Water:   tint(monoNightField, monoNightInk),
 	Land:    tint(monoNightField, monoNightOK),
+	Airway:  rgb(monoNightAirway),
 
 	AltLow:  rgb(monoNightAltLow),
 	AltMid:  rgb(monoNightAltMid),
@@ -566,6 +589,7 @@ var MonoDay = Palette{
 	Shore:   rgb(monoDayShore),
 	Water:   tint(monoDayField, monoDayInk),
 	Land:    tint(monoDayField, monoDayOK),
+	Airway:  rgb(monoDayAirway),
 
 	AltLow:  rgb(monoDayAltLow),
 	AltMid:  rgb(monoDayAltMid),

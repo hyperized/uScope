@@ -200,6 +200,11 @@ type Frame struct {
 	Routes          []Route
 	RouteGeneration uint64
 
+	// Airways are the lost overflights at cruise bundled by the line they
+	// flew. They are recomputed with the Routes, so RouteGeneration covers
+	// them too.
+	Airways []Airway
+
 	Receiver Receiver
 	Source   adsb.SourceInfo
 	Stats    adsb.Stats

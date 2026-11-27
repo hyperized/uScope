@@ -413,6 +413,7 @@ func (l *Live) Frame() Frame {
 		GhostGeneration: lost.generation,
 		Routes:          lost.routes,
 		RouteGeneration: lost.routeGeneration,
+		Airways:         lost.airways,
 		Receiver:        receiver,
 		Source:          l.in.Source(),
 		Stats:           l.in.Stats(),

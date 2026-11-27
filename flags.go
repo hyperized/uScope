@@ -128,6 +128,7 @@ var (
 	errShore      = errors.New(appName + ": --shore must be on or off")
 	errStars      = errors.New(appName + ": --stars must be on or off")
 	errCorridors  = errors.New(appName + ": --corridors must be on or off")
+	errAirways    = errors.New(appName + ": --airways must be on or off")
 	errCorrField  = errors.New(appName + ": --corridor-field must be an airfield's four-letter ICAO code, or empty")
 	errHalfLife   = errors.New(appName + ": --corridor-half-life must be an interval from 10m to 24h")
 	errMinShore   = errors.New(appName + ": --minimal-shore must be on or off")
@@ -191,6 +192,7 @@ type config struct {
 	lights          radar.LightsMode
 	stars           radar.Toggle
 	corridors       radar.Toggle
+	airways         bool
 	rangeNm         float64
 	recentre        time.Duration
 	view            radar.View
@@ -279,6 +281,7 @@ type rawFlags struct {
 	lights      string
 	stars       string
 	corridors   string
+	airways     string
 	corrField   string
 	halfLife    string
 	history     string
@@ -430,6 +433,9 @@ func bindCorridors(set *flag.FlagSet, raw *rawFlags) {
 	set.StringVar(&raw.corridors, "corridors", defaultOn,
 		"draw the routes lost aircraft flew as tubes, fading with age and coloured by arrival or departure: "+
 			"on or off. u flips it while it runs")
+	set.StringVar(&raw.airways, "airways", defaultOff,
+		"draw the airways found in the lost overflights at FL250 and above as dashed lines, under the corridors: "+
+			"on or off. Needs --corridors on; --demo adds high traffic for them to its history")
 	set.StringVar(&raw.corrField, "corridor-field", "",
 		"the airfield lost tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm")
 	set.StringVar(&raw.halfLife, "corridor-half-life", defaultCorridorHalfLife,
@@ -563,6 +569,7 @@ func (raw rawFlags) display() (display, error) {
 			Lights:          overlays.Lights,
 			Stars:           overlays.Stars,
 			Corridors:       overlays.Corridors,
+			Airways:         overlays.Airways,
 
 			View:       view,
 			Exaggerate: camera.Exaggerate,
@@ -727,6 +734,7 @@ func (raw rawFlags) validated() (config, error) {
 		lights:          show.radar.Lights,
 		stars:           show.radar.Stars,
 		corridors:       show.radar.Corridors,
+		airways:         show.radar.Airways,
 		rangeNm:         show.radar.RangeNm,
 		recentre:        show.radar.Recentre,
 		view:            show.radar.View,
@@ -992,9 +1000,9 @@ func parseShore(text string) (radar.Toggle, error) {
 	return toggle, nil
 }
 
-// overlays parses the nine on/off switches, the scope's pair, the bare
-// views' pair, bar and board, the aircraft lights, the stars and the
-// corridors, into the Settings fields they fill. They are one helper so display stays a flat list of
+// overlays parses the ten on/off switches, the scope's pair, the bare
+// views' pair, bar and board, the aircraft lights, the stars, the corridors
+// and the airways, into the Settings fields they fill. They are one helper so display stays a flat list of
 // parses rather than growing past funlen.
 func (raw rawFlags) overlays() (radar.Settings, error) {
 	airports, err := parseAirports(raw.airports)
@@ -1029,6 +1037,13 @@ func (raw rawFlags) overlays() (radar.Settings, error) {
 
 	minimal.Airports, minimal.Shore, minimal.Lights, minimal.Stars = airports, shoreToggle, lights, stars
 	minimal.Corridors = corridors
+
+	airways, err := parseMinimal(raw.airways, errAirways)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
+	minimal.Airways = airways
 
 	return minimal, nil
 }
