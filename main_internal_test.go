@@ -86,6 +86,7 @@ const (
 	flagLights     = "--lights"
 	flagStars      = "--stars"
 	flagCorridors  = "--corridors"
+	flagAirways    = "--airways"
 	flagCorrField  = "--corridor-field"
 	flagHalfLife   = "--corridor-half-life"
 
@@ -3403,6 +3404,74 @@ func TestRadarSettingsCarriesTheCorridors(t *testing.T) {
 
 	if got := radarSettings(cfg).Corridors; got != radar.ToggleOff {
 		t.Errorf("radarSettings().Corridors = %q, want %q", got, radar.ToggleOff)
+	}
+}
+
+// TestSourceForAirways checks --airways reaches the demo as well as the
+// scene: with it on, the lost history holds more tracks than without, the
+// high overflights the airways are found in.
+func TestSourceForAirways(t *testing.T) {
+	t.Parallel()
+
+	ghosts := func(cfg config) int {
+		src, err := sourceFor(cfg, linuxGOOS, io.Discard)
+		if err != nil {
+			t.Fatalf("sourceFor: %v", err)
+		}
+
+		defer func() { _ = src.Close() }()
+
+		return len(src.Frame().Ghosts)
+	}
+
+	plain, airways := ghosts(config{source: sourceDemo}), ghosts(config{source: sourceDemo, airways: true})
+	if airways <= plain {
+		t.Errorf("demo history with --airways on holds %d tracks, want more than the plain %d", airways, plain)
+	}
+}
+
+// TestRadarSettingsCarriesTheAirways checks that --airways reaches the
+// scene's settings block, and that it starts off.
+func TestRadarSettingsCarriesTheAirways(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: caseDefault},
+		{name: "on", args: []string{flagAirways, defaultOn}, want: true},
+		{name: offValue, args: []string{flagAirways, offValue}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := parseFlags(testCase.args)
+			if err != nil {
+				t.Fatalf("parseFlags: %v", err)
+			}
+
+			if got := radarSettings(cfg).Airways; got != testCase.want {
+				t.Errorf("radarSettings().Airways = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestParseFlagsAirwaysRefused checks --airways takes the on/off allow list
+// and nothing else: the prototype's look names are gone.
+func TestParseFlagsAirwaysRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"ON", "line", "enabled", ""} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := parseFlags([]string{flagAirways, value}); !errors.Is(err, errAirways) {
+				t.Errorf("parseFlags(--airways %q) error = %v, want errAirways", value, err)
+			}
+		})
 	}
 }
 

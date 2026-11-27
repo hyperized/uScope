@@ -258,6 +258,10 @@ type Demo struct {
 	// corridor exposure, read once by NewDemo and handed to the ghost ring.
 	corridorField    string
 	corridorHalfLife time.Duration
+
+	// airways adds the invented high overflights of demoairways.go to the
+	// history.
+	airways bool
 }
 
 // DemoOption configures a Demo at construction.
@@ -296,6 +300,13 @@ func WithSeed(seed uint64) DemoOption {
 // option: the scattered fleet is already the default.
 func WithDemoSector() DemoOption {
 	return func(d *Demo) { d.sector = true }
+}
+
+// WithDemoAirways adds invented overflights at cruise to the lost history,
+// bundled along a handful of airways, so the airway layer has something to
+// draw.
+func WithDemoAirways() DemoOption {
+	return func(d *Demo) { d.airways = true }
 }
 
 // WithDemoCorridorField pins the corridor exposure's airfield, the way
@@ -384,6 +395,7 @@ func (d *Demo) Frame() Frame {
 		GhostGeneration: lost.generation,
 		Routes:          lost.routes,
 		RouteGeneration: lost.routeGeneration,
+		Airways:         lost.airways,
 		Receiver:        receiver,
 		Source:          adsb.SourceInfo{Label: demoLabel, Connected: true, BytesIn: d.ticks},
 		Stats:           d.stats(),

@@ -426,7 +426,10 @@ type Scene struct {
 	// are so the background layer can draw from it without being handed the
 	// frame.
 	corridors bool
-	exposure  exposure
+
+	// airways is whether the exposure carries the high airways.
+	airways  bool
+	exposure exposure
 
 	// The tubes' scratch, kept so a frame that draws them allocates nothing
 	// once the largest picture so far has been drawn. tubeLeft, tubeRight and
@@ -733,6 +736,7 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 		generation:      frame.GhostGeneration,
 		routes:          frame.Routes,
 		routeGeneration: frame.RouteGeneration,
+		airways:         frame.Airways,
 		corridors:       frame.Corridors,
 		now:             frame.Now,
 	}

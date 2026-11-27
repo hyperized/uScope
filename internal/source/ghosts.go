@@ -88,6 +88,12 @@ type Trail struct {
 	Tubed    bool
 	TubeFrom int
 	TubeTo   int
+
+	// Airway is true when Points[AirwayFrom:AirwayTo+1] is the leg that put
+	// this overflight in one of the frame's Airways.
+	Airway     bool
+	AirwayFrom int
+	AirwayTo   int
 }
 
 // Loose returns the parts of the trail no tube draws, which are left to be
@@ -183,6 +189,9 @@ type ghosts struct {
 	// routes bundles the lost trails into the corridors the radar draws as
 	// tubes. See routes.go.
 	routes routeBook
+
+	// airways bundles the lost overflights at cruise. See airways.go.
+	airways airwayBook
 
 	// checked is whether the last observe ran expire, which is the cadence
 	// the history file is written on. See history.go.
@@ -515,6 +524,7 @@ type ghostFrame struct {
 	generation      uint64
 	routes          []Route
 	routeGeneration uint64
+	airways         []Airway
 	corridors       Corridors
 	checked         bool
 }
@@ -526,12 +536,14 @@ type ghostFrame struct {
 func (g *ghosts) frame(planes airplanes.List, receiver Receiver, now time.Time) ghostFrame {
 	trails := g.observe(planes, receiver, now)
 	routes := g.routes.refresh(trails, g.version, now, &g.corridors)
+	airways := g.airways.refresh(trails, g.routes.generation, now, &g.corridors)
 
 	return ghostFrame{
 		trails:          trails,
 		generation:      g.version,
 		routes:          routes,
 		routeGeneration: g.routes.generation,
+		airways:         airways,
 		corridors:       g.corridors.public(),
 		checked:         g.checked,
 	}

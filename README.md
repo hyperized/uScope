@@ -300,6 +300,20 @@ lost. An airfield needs `--corridor-field` or a receiver position: a GPS fix,
 `--demo` starts with seventy invented tracks from the last two hours, so there
 is something to look at. `u` hides the corridors in every view.
 
+`--airways on` adds the high airways, off by default. They are found in the
+traffic, not read from a chart: every lost track that passed through at
+25,000 ft or above is cut into straight legs at its turns, and legs of 20 nm
+or more that fly the same way within a few degrees and a few miles of each
+other are bundled. Three tracks make an airway, drawn as a dashed line in a
+colour the tubes do not use, along the bundle's average path and under the
+tubes, fading out towards the ends where the receiver stopped hearing the
+traffic. The two directions of one airway are usually flown at different
+levels, so they are kept apart. The 3D views draw
+them at their average altitude. Like the tubes they need some history before
+anything shows, they fade on the same half-life, and `u` hides them with the
+corridors. With `--demo` the setting also adds a few dozen invented
+overflights on five airways to the history, so there is something to find.
+
 The lost tracks live in memory, so a restart starts the corridors from
 nothing unless `--history PATH` names a file to keep them in. uScope reads it
 back before the first frame, writes it once a minute while the tracks change,
@@ -440,6 +454,7 @@ between the arrows and the brackets.
 | `--lights` | `on` | the aircraft lights: `on`, `off`, or `auto` to leave them off in daylight |
 | `--stars` | `on` | stars in the 3D views' night sky |
 | `--corridors` | `on` | the corridor tubes |
+| `--airways` | `off` | the high airways found in the overflights at 25,000 ft and above, as dashed lines under the tubes; needs `--corridors` |
 | `--corridor-field` | | the airfield tracks are sorted by, as an ICAO code; empty takes the nearest within 150 nm |
 | `--corridor-half-life` | `2h` | how long a lost track takes to count for half as much, and how long a tube lasts once nothing flies its route, `10m` to `24h` |
 | `--history` | `off` | keep the lost tracks in this file across a restart; live sources only |
