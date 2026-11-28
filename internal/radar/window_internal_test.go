@@ -577,7 +577,8 @@ func TestCaptionRing(t *testing.T) {
 	}
 
 	radius := int(shot.view.cam.modelSpan * captionRingShare)
-	around := image.Rect(x-radius-2, y-radius-2, x+radius+3, y+radius+3)
+	reach := radius + captionRingWeight*max(shot.view.weight, 1)
+	around := image.Rect(x-reach-2, y-reach-2, x+reach+3, y+reach+3)
 
 	if got := inkIn(canv, around, theme.Night.Accent); got < radius {
 		t.Errorf("%d accent pixels around the arrival, want a ring of radius %d", got, radius)

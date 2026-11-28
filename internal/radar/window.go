@@ -51,9 +51,14 @@ const (
 	windowCountGap = 12
 
 	// captionRingShare is the radius of the ring around the captioned
-	// aircraft as a share of the model's drawn span: half the span would
-	// touch the wingtips, and three quarters leaves them some air.
-	captionRingShare = 0.75
+	// aircraft as a share of the model's drawn span, and captionRingWeight
+	// how many of the picture's line weights it is drawn at. Three quarters
+	// of the span at one weight, the private director's ring, was lost on
+	// the live picture: near the field the ring sat among a dozen route
+	// lines of the same weight and the owner did not see it at all. A wider
+	// and heavier ring is the one mark there that is not a line.
+	captionRingShare  = 1.25
+	captionRingWeight = 3
 
 	// windowTracking spaces the small capitals out by one glyph pixel.
 	windowTracking = 1
@@ -90,10 +95,12 @@ const (
 )
 
 // The overlay's words. The caption keeps aviation's units, as the rest of the
-// scope does: altitude in feet and distance in nautical miles.
+// scope does: altitude in feet and distance in nautical miles. Its headings
+// use the same words as the approach strip's INBOUND TRAFFIC, so the two read
+// as one vocabulary.
 const (
-	captionInText    = "COMING IN NOW"
-	captionOutText   = "CLIMBING OUT"
+	captionInText    = "INBOUND"
+	captionOutText   = "OUTBOUND"
 	landedLabel      = "LANDED THIS HOUR"
 	tookOffLabel     = "TOOK OFF"
 	captionSeparator = " · "
@@ -210,7 +217,8 @@ func (s *Scene) drawCaptionRing(elapsed time.Duration) {
 	}
 
 	radius := int(shot.view.cam.modelSpan * captionRingShare)
-	shot.dst.BlendStrokeCircle(x, y, radius, max(shot.view.weight, 1), s.pal.Accent, held.alpha(elapsed))
+	weight := max(shot.view.weight, 1) * captionRingWeight
+	shot.dst.BlendStrokeCircle(x, y, radius, weight, s.pal.Accent, held.alpha(elapsed))
 }
 
 // drawWindowClock sets the local time at the top right, and under it the
