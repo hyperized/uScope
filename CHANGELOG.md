@@ -17,7 +17,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   seconds and fades in and out. Off by default, and with it off every
   picture is the same byte for byte.
 - `--minimal-approach on` draws a see-through side view in the top-left
-  corner of the bare 3D view: each arrival within 30 km of the corridor
+  corner of the bare 3D view: each arrival within 15 NM of the corridor
   airfield is a dot at its distance and height, over a dashed three-degree
   descent. Every dot carries its callsign, stacked in rows with a leader line
   when aircraft bunch up; the aircraft the caption is on has the larger dot

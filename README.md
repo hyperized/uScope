@@ -261,15 +261,15 @@ the last hour. There is no key for it.
 
 `--minimal-approach on` adds a see-through side view in the top-left corner
 of `minimal3d`, with or without the window overlay. Every arrival within
-30 km of the corridor airfield is a dot at its distance from the field and
+15 NM of the corridor airfield is a dot at its distance from the field and
 its height, so the queue can be seen sliding down towards the field. A dashed
 line marks a three-degree descent for comparison. Every dot carries its
 callsign as transmitted, moved a row up or down with a thin line back to the
 dot when its neighbours are close; the aircraft the caption is on has the
 larger dot and the brighter label. Only a crowd too thick to label leaves its
 furthest dots bare, counted in a small "+N" at the left. Aircraft above
-1,600 m sit on the top edge, drawn fainter. Heights are
-the pressure altitude the transponder reports. There is no key for it either.
+5,000 ft sit on the top edge, drawn fainter. Heights are the pressure
+altitude the transponder reports. There is no key for it either.
 
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture, with only the keys

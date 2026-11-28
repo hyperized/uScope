@@ -16,24 +16,21 @@ import (
 const approachArrivals = 12
 
 // approachTestFrame is the window overlay's test frame with a queue of
-// arrivals east of the field, every 2.4 km from 2 km out on a three-degree
+// arrivals east of the field, every 1.2 NM from 1 NM out on a three-degree
 // path.
 func approachTestFrame() source.Frame {
 	const (
-		nmPerKm       = 1 / 1.852
-		feetPerMetre  = 1 / 0.3048
-		metresPerKm   = 52.0
+		ftPerNm       = 318.0
 		descentFpm    = -800
 		east, west    = 90, 270
-		firstKm, step = 2.0, 2.4
+		firstNm, step = 1.0, 1.2
 	)
 
 	frame := windowTestFrame()
 
 	for index := range approachArrivals {
-		km := firstKm + step*float64(index)
-		plane := scenePlane(fmt.Sprintf("4841%02X", index), fmt.Sprintf("TRA%d", 10+index), east, km*nmPerKm,
-			km*metresPerKm*feetPerMetre, west)
+		nm := firstNm + step*float64(index)
+		plane := scenePlane(fmt.Sprintf("4841%02X", index), fmt.Sprintf("TRA%d", 10+index), east, nm, nm*ftPerNm, west)
 		plane.VertRate = descentFpm
 		frame.Planes = append(frame.Planes, plane)
 	}

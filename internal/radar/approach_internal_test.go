@@ -21,13 +21,16 @@ const (
 	approachBenchWidth  = 2560
 	approachBenchHeight = 1440
 	approachBenchPlanes = 12
+
+	// glideFtPerNm puts the test queues on a three-degree path.
+	glideFtPerNm = 318
 )
 
-// approachPlane is an arrival km east of boardCorridors' field at metres,
+// approachPlane is an arrival nm east of boardCorridors' field at feet,
 // descending towards it.
-func approachPlane(icao, callsign string, km, metres float64) airplane.Snapshot {
-	plane := windowPlane(icao, callsign, km/kmPerNm, windowDescentFpm)
-	plane.Altitude = metres / metresPerFoot
+func approachPlane(icao, callsign string, nm, feet float64) airplane.Snapshot {
+	plane := windowPlane(icao, callsign, nm, windowDescentFpm)
+	plane.Altitude = feet
 
 	return plane
 }
@@ -58,15 +61,15 @@ func approachLay(tb testing.TB, width, height int) layout {
 	return layout{dst: canv, scope: canv.Bounds()}
 }
 
-// approachQueue is n arrivals in line on a three-degree path, every 2.4 km
-// from 2 km out.
+// approachQueue is n arrivals in line on a three-degree path, every 1.2 NM
+// from 1 NM out.
 func approachQueue(count int) []airplane.Snapshot {
 	planes := make([]airplane.Snapshot, 0, count)
 
 	for index := range count {
-		km := 2 + 2.4*float64(index)
+		nm := 1 + 1.2*float64(index)
 		planes = append(planes, approachPlane(fmt.Sprintf("4840%02X", index), fmt.Sprintf("KLM%d", 100+index),
-			km, km*52))
+			nm, nm*glideFtPerNm))
 	}
 
 	return planes
@@ -153,24 +156,24 @@ func TestApproachDotsKeepTheNearest(t *testing.T) {
 	var table approachDots
 
 	for index := range approachMaxDots {
-		table.add(approachDot{km: float64(approachMaxDots - index)})
+		table.add(approachDot{nm: float64(approachMaxDots - index)})
 	}
 
-	table.add(approachDot{km: approachMaxDots + 1})
+	table.add(approachDot{nm: approachMaxDots + 1})
 
-	if table.count != approachMaxDots || table.dots[approachMaxDots-1].km != approachMaxDots {
-		t.Fatalf("a dot further out than all of a full table was kept: last %v", table.dots[approachMaxDots-1].km)
+	if table.count != approachMaxDots || table.dots[approachMaxDots-1].nm != approachMaxDots {
+		t.Fatalf("a dot further out than all of a full table was kept: last %v", table.dots[approachMaxDots-1].nm)
 	}
 
-	table.add(approachDot{km: 0.5})
+	table.add(approachDot{nm: 0.5})
 
-	if table.dots[0].km != 0.5 || table.dots[approachMaxDots-1].km != approachMaxDots-1 {
+	if table.dots[0].nm != 0.5 || table.dots[approachMaxDots-1].nm != approachMaxDots-1 {
 		t.Errorf("a nearer dot did not push the furthest out: first %v, last %v",
-			table.dots[0].km, table.dots[approachMaxDots-1].km)
+			table.dots[0].nm, table.dots[approachMaxDots-1].nm)
 	}
 
 	for index := 1; index < table.count; index++ {
-		if table.dots[index-1].km > table.dots[index].km {
+		if table.dots[index-1].nm > table.dots[index].nm {
 			t.Fatalf("dots out of order at %d", index)
 		}
 	}
@@ -217,23 +220,23 @@ func TestOverlayHeight(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		altitudeFt float64
-		wantMetres float64
+		wantFeet   float64
 		wantKnown  bool
 	}{
 		{name: "not reported", altitudeFt: 0},
-		{name: "on the approach", altitudeFt: 2000, wantMetres: 2000 * metresPerFoot, wantKnown: true},
-		{name: "below sea level", altitudeFt: -25, wantMetres: -25 * metresPerFoot, wantKnown: true},
+		{name: "on the approach", altitudeFt: 2000, wantFeet: 2000, wantKnown: true},
+		{name: "below sea level", altitudeFt: -25, wantFeet: -25, wantKnown: true},
 	} {
 		plane := approachPlane(lightICAO, "", 5, 0)
 		plane.Altitude = testCase.altitudeFt
 
-		metres, known := scene.overlayHeight(plane, field)
-		if metres != testCase.wantMetres || known != testCase.wantKnown {
-			t.Errorf("%s: %v %v, want %v %v", testCase.name, metres, known, testCase.wantMetres, testCase.wantKnown)
+		feet, known := scene.overlayFeet(plane, field)
+		if feet != testCase.wantFeet || known != testCase.wantKnown {
+			t.Errorf("%s: %v %v, want %v %v", testCase.name, feet, known, testCase.wantFeet, testCase.wantKnown)
 		}
 
 		if testCase.wantKnown != (scene.captionMetres(plane, field) != 0) {
-			t.Errorf("%s: captionMetres disagrees with overlayHeight", testCase.name)
+			t.Errorf("%s: captionMetres disagrees with overlayFeet", testCase.name)
 		}
 	}
 }
@@ -250,12 +253,12 @@ func TestApproachDotFor(t *testing.T) {
 	}
 
 	departure := windowPlane("484AC4", "EZY12", windowDepartureNm, windowClimbFpm)
-	unknown := approachPlane("484AC5", "KLM9", 10, 0)
-	high := approachPlane("484AC6", "KLM10", 20, 2500)
-	low := approachPlane("484AC7", "KLM11", 3, 0)
+	unknown := approachPlane("484AC5", "KLM9", 5, 0)
+	high := approachPlane("484AC6", "KLM10", 10, 8000)
+	low := approachPlane("484AC7", "KLM11", 2, 0)
 	low.Altitude = -40
-	unnamed := approachPlane("484AC8", "  ", 12, 600)
-	far := approachPlane("484AC9", "KLM12", 32, 1500)
+	unnamed := approachPlane("484AC8", "  ", 6, 2000)
+	far := approachPlane("484AC9", "KLM12", 17, 5000)
 
 	for _, testCase := range []struct {
 		name      string
@@ -275,7 +278,7 @@ func TestApproachDotFor(t *testing.T) {
 		{name: "below the field", plane: low, wantOK: true, wantY: strip.plot.Max.Y, wantAlpha: 1, wantCall: "KLM11"},
 		{
 			name: "no callsign", plane: unnamed, wantOK: true,
-			wantY: approachY(strip.plot, 600), wantAlpha: 1, wantCall: "484AC8",
+			wantY: approachY(strip.plot, 2000), wantAlpha: 1, wantCall: "484AC8",
 		},
 	} {
 		dot, placed := scene.approachDotFor(&testCase.plane, boardCorridors(), &strip)
@@ -295,8 +298,8 @@ func TestApproachDotFor(t *testing.T) {
 func TestApproachFocus(t *testing.T) {
 	t.Parallel()
 
-	near := approachPlane("484AD1", "KLM1", 6, 300)
-	farther := approachPlane("484AD2", "KLM2", 14, 700)
+	near := approachPlane("484AD1", "KLM1", 3, 1000)
+	farther := approachPlane("484AD2", "KLM2", 8, 2500)
 	departure := windowPlane("484AD3", "EZY3", windowDepartureNm, windowClimbFpm)
 
 	for _, testCase := range []struct {
@@ -367,7 +370,7 @@ func TestApproachLabelsNeverCollide(t *testing.T) {
 }
 
 // TestEveryArrivalIsLabelled is the owner's rule: eight arrivals spread over
-// the 30 km, or four within 3 km of each other, all carry their callsigns.
+// the 15 NM, or four within 1.5 NM of each other, all carry their callsigns.
 func TestEveryArrivalIsLabelled(t *testing.T) {
 	t.Parallel()
 
@@ -377,8 +380,8 @@ func TestEveryArrivalIsLabelled(t *testing.T) {
 		for name, planes := range map[string][]airplane.Snapshot{
 			"eight spread": approachSpread(),
 			"four bunched": approachBunched(),
-			"bunched low":  approachBunchedAt(2),
-			"bunched high": approachBunchedAt(26),
+			"bunched low":  approachBunchedAt(1),
+			"bunched high": approachBunchedAt(13),
 		} {
 			t.Run(fmt.Sprintf("%s at %dp", name, size.Y), func(t *testing.T) {
 				t.Parallel()
@@ -391,30 +394,31 @@ func TestEveryArrivalIsLabelled(t *testing.T) {
 	}
 }
 
-// approachSpread is eight arrivals evenly over the strip's 30 km, on a
+// approachSpread is eight arrivals evenly over the strip's 15 NM, on a
 // three-degree path.
 func approachSpread() []airplane.Snapshot {
 	planes := make([]airplane.Snapshot, 0, 8)
 	calls := []string{"KLM1452", "CND093P", "TRA6721", "EZY77KL", "KLM88", "BAW432", "DLH4EA", "RJA151"}
 
 	for index, call := range calls {
-		km := 2 + 3.5*float64(index)
-		planes = append(planes, approachPlane(fmt.Sprintf("4842%02X", index), call, km, km*52))
+		nm := 1 + 1.9*float64(index)
+		planes = append(planes, approachPlane(fmt.Sprintf("4842%02X", index), call, nm, nm*glideFtPerNm))
 	}
 
 	return planes
 }
 
-// approachBunched is four arrivals within 3 km of each other, 10 km out.
-func approachBunched() []airplane.Snapshot { return approachBunchedAt(10) }
+// approachBunched is four arrivals within 1.5 NM of each other, 5 NM out.
+func approachBunched() []airplane.Snapshot { return approachBunchedAt(5) }
 
-// approachBunchedAt is four arrivals a kilometre apart from fromKm out.
-func approachBunchedAt(fromKm float64) []airplane.Snapshot {
+// approachBunchedAt is four arrivals half a nautical mile apart from fromNm
+// out.
+func approachBunchedAt(fromNm float64) []airplane.Snapshot {
 	planes := make([]airplane.Snapshot, 0, 4)
 
 	for index, call := range []string{"KLM1452", "CND093P", "TRA6721", "EZY77KL"} {
-		km := fromKm + float64(index)
-		planes = append(planes, approachPlane(fmt.Sprintf("4843%02X", index), call, km, km*52))
+		nm := fromNm + 0.5*float64(index)
+		planes = append(planes, approachPlane(fmt.Sprintf("4843%02X", index), call, nm, nm*glideFtPerNm))
 	}
 
 	return planes
@@ -469,8 +473,8 @@ func TestApproachMoreCount(t *testing.T) {
 
 	crowd := make([]airplane.Snapshot, 0, approachMaxDots)
 	for index := range approachMaxDots {
-		km := 10 + 0.1*float64(index)
-		crowd = append(crowd, approachPlane(fmt.Sprintf("4844%02X", index), "KLM1452", km, km*52))
+		nm := 5 + 0.05*float64(index)
+		crowd = append(crowd, approachPlane(fmt.Sprintf("4844%02X", index), "KLM1452", nm, nm*glideFtPerNm))
 	}
 
 	for _, testCase := range []struct {
@@ -487,7 +491,9 @@ func TestApproachMoreCount(t *testing.T) {
 		scene.drawApproach(&lay, frame)
 
 		strip, _ := scene.newApproachLayout(&lay)
-		more := scene.approachMoreBox(&lay, &strip)
+		win := windowLayout{scale: strip.scale, shadow: strip.shadow}
+		pen := scene.windowPen(&lay, &win, scene.faces.Small, 0)
+		more := approachMoreBox(&pen, &strip)
 
 		drawn := !uniform(lay.dst, more)
 		if drawn != testCase.wantMore || (scene.approachLabels.unlabelled > 0) != drawn {

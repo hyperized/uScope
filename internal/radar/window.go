@@ -321,10 +321,12 @@ func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 // captionClass is an aircraft's track class and whether it is close enough
 // to the field, and shown on the picture, for the caption to name it.
 func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, bool) {
-	class, distanceKm, shown := s.fromField(plane, field)
+	class, distanceNm, shown := s.fromField(plane, field)
 	if !shown {
 		return source.TrackTransit, false
 	}
+
+	distanceKm := distanceNm * kmPerNm
 
 	switch class {
 	case source.TrackInbound:
@@ -339,7 +341,7 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 }
 
 // fromField is an aircraft's track class and its distance from the corridor
-// airfield in kilometres, and false when it has no position or the filter is
+// airfield in nautical miles, and false when it has no position or the filter is
 // hiding it. The caption and the approach strip both sort the traffic through
 // it, so an aircraft the caption calls an arrival is one the strip plots.
 func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, float64, bool) {
@@ -347,11 +349,11 @@ func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (sour
 		return source.TrackTransit, 0, false
 	}
 
-	return field.Classify(plane), field.Field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm, true
+	return field.Classify(plane), field.Field.DistanceToNm(plane.Latitude, plane.Longitude), true
 }
 
-// overlayHeight is how high an aircraft is for everything set over the bare
-// 3D picture, in metres, and false when its height is not known. The caption
+// overlayFeet is how high an aircraft is for everything set over the bare
+// 3D picture, in feet, and false when its height is not known. The caption
 // and the approach strip read a height through here and nowhere else, so
 // changing what "height" means for them is a change to this one body.
 //
@@ -362,23 +364,23 @@ func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (sour
 // the signature for a height above the field.
 //
 //nolint:revive,unparam // field is the seam for a height above the airfield, see above.
-func (s *Scene) overlayHeight(plane airplane.Snapshot, field source.Airfield) (float64, bool) {
+func (s *Scene) overlayFeet(plane airplane.Snapshot, field source.Airfield) (float64, bool) {
 	if plane.Altitude == 0 {
 		return 0, false
 	}
 
-	return plane.Altitude * metresPerFoot, true
+	return plane.Altitude, true
 }
 
 // captionMetres is the height the caption gives, zero when there is none to
 // give, which leaves the height out of the caption's line.
 func (s *Scene) captionMetres(plane airplane.Snapshot, field source.Airfield) float64 {
-	metres, known := s.overlayHeight(plane, field)
+	feet, known := s.overlayFeet(plane, field)
 	if !known {
 		return 0
 	}
 
-	return metres
+	return feet * metresPerFoot
 }
 
 // findByICAO is the aircraft with this address on the frame, or nil when it

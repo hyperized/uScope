@@ -32,19 +32,20 @@ const (
 	// callsigns in rows above it.
 	approachAspectTenths = 22
 
-	// approachReachKm is the distance at the plot's left edge and
-	// approachCeilingM the height at its top. A three-degree descent from
-	// 30 km passes 1,572 m, so the reference line starts just under the top.
-	approachReachKm  = 30.0
-	approachCeilingM = 1600.0
-	approachGlideDeg = 3.0
+	// approachReachNm is the distance at the plot's left edge and
+	// approachCeilingFt the height at its top. A three-degree descent is
+	// about 318 ft a nautical mile, so from 15 NM it starts at 4,780 ft, just
+	// under the top.
+	approachReachNm   = 15.0
+	approachCeilingFt = 5000.0
+	approachGlideDeg  = 3.0
 
-	// approachLowM and approachHighM are the heights the two quiet labels on
-	// the left stand at; approachTickKm is the step of the labels along the
-	// bottom.
-	approachLowM   = 750.0
-	approachHighM  = 1500.0
-	approachTickKm = 10.0
+	// approachLowFt and approachHighFt are the heights the two quiet labels
+	// on the left stand at; approachTickNm is the step of the labels along
+	// the bottom.
+	approachLowFt  = 2500.0
+	approachHighFt = 5000.0
+	approachTickNm = 5.0
 
 	// approachPad is the air inside the panel's edge and approachGap the air
 	// between its rows, in glyph pixels so both grow with the type.
@@ -66,25 +67,29 @@ const (
 	approachLabelGap = 2
 
 	// approachGroundShare is the ground mark's length as a share of the plot
-	// width: a sixteenth, a little under two kilometres.
+	// width: a sixteenth, a little under one nautical mile.
 	approachGroundShare = 16
 
-	// approachMaxDots bounds the dots kept on one frame. Thirty kilometres of
-	// final approach holds about seven aircraft at the closest spacing a
-	// tower runs, so the bound only matters for a feed gone wrong; the
+	// approachMaxDots bounds the dots kept on one frame. Fifteen nautical
+	// miles of final approach holds about six aircraft at the closest spacing
+	// a tower runs, so the bound only matters for a feed gone wrong; the
 	// nearest are the ones kept.
 	approachMaxDots = 32
 
-	// approachFixedObstacles is room for the heading, the six axis labels and
-	// the "+N" corner in the label table, ahead of the dots and their
-	// callsigns.
-	approachFixedObstacles = 8
+	// approachFixedObstacles is room for the ground line, the heading, the
+	// six axis labels and the "+N" corner in the label table, ahead of the
+	// dots and their callsigns.
+	approachFixedObstacles = 10
 
 	// approachRows is how many rows above the dot, and as many below, a
 	// callsign may move out to before it gives up; approachRowGap is the air
 	// between two rows, in glyph pixels.
-	approachRows   = 4
+	approachRows   = 5
 	approachRowGap = 1
+
+	// approachLeaderStep is how many pixels apart a leader is tested for
+	// running through another callsign.
+	approachLeaderStep = 2
 
 	// approachThinDivisor turns the glyph scale into the width of the
 	// strip's hairlines: one pixel up to 1440p, two at 2160p.
@@ -111,8 +116,8 @@ const (
 const (
 	approachHeading = "COMING IN, SEEN FROM THE SIDE"
 	approachField   = "field"
-	approachLowText = "750 m"
-	approachTopText = "1,500 m"
+	approachLowText = "2,500 ft"
+	approachTopText = "5,000 ft"
 
 	// approachMorePrefix leads the count of dots without a callsign, and
 	// approachMoreWidest is the widest count room is set aside for.
@@ -172,11 +177,11 @@ func (s *Scene) newApproachLayout(lay *layout) (approachLayout, bool) {
 }
 
 // percent and tenths are the denominators of the layout's shares, and
-// metresPerKm turns the reach into the reference line's starting height.
+// feetPerNm turns the reach into the reference line's starting height.
 const (
-	percent     = 100
-	tenths      = 10
-	metresPerKm = 1000
+	percent   = 100
+	tenths    = 10
+	feetPerNm = 6076.12
 )
 
 // drawApproach draws the strip over the picture, or nothing while it is off.
@@ -219,9 +224,13 @@ func (s *Scene) drawApproachPanel(lay *layout, strip *approachLayout) {
 	s.approachText(&heading, approachHeading, s.pal.Muted)
 
 	thin := max(1, strip.scale/approachThinDivisor)
+	ground := image.Rect(plot.Min.X, plot.Max.Y-strip.shadow, plot.Max.X, plot.Max.Y+strip.shadow)
 	lay.dst.BlendRect(image.Rect(plot.Min.X, plot.Max.Y, plot.Max.X, plot.Max.Y+thin), s.pal.Muted, approachBaseAlpha)
-	lay.dst.BlendRect(image.Rect(plot.Max.X-plot.Dx()/approachGroundShare, plot.Max.Y-strip.shadow,
-		plot.Max.X, plot.Max.Y+strip.shadow), s.pal.Ink, 1)
+	lay.dst.BlendRect(image.Rect(plot.Max.X-plot.Dx()/approachGroundShare, ground.Min.Y, plot.Max.X, ground.Max.Y),
+		s.pal.Ink, 1)
+
+	// A callsign set across the ground line reads as struck through.
+	s.approachLabels.add(ground)
 
 	drawApproachGlide(lay, strip, arrival, thin)
 	s.drawApproachAxes(lay, strip, &win)
@@ -234,10 +243,10 @@ func (s *Scene) drawApproachAxes(lay *layout, strip *approachLayout, win *window
 	pen := s.windowPen(lay, win, s.faces.Small, 0)
 	pen.y = plot.Max.Y + strip.gap
 
-	// The labels at 30, 20 and 10 km, far to near; the field's own closes
+	// The labels at 15, 10 and 5 NM, far to near; the field's own closes
 	// the row.
-	for index, word := range [...]string{"30 km", "20 km", "10 km"} {
-		x := approachX(plot, approachReachKm-float64(index)*approachTickKm)
+	for index, word := range [...]string{"15 NM", "10 NM", "5 NM"} {
+		x := approachX(plot, approachReachNm-float64(index)*approachTickNm)
 
 		pen.x = x - pen.measure(word)/2
 		if index == 0 {
@@ -251,11 +260,11 @@ func (s *Scene) drawApproachAxes(lay *layout, strip *approachLayout, win *window
 	s.approachText(&pen, approachField, s.pal.Muted)
 
 	for _, mark := range [...]struct {
-		metres float64
-		word   string
-	}{{approachLowM, approachLowText}, {approachHighM, approachTopText}} {
+		feet float64
+		word string
+	}{{approachLowFt, approachLowText}, {approachHighFt, approachTopText}} {
 		pen.x = plot.Min.X - strip.gap - pen.measure(mark.word)
-		pen.y = approachY(plot, mark.metres) - strip.line/2
+		pen.y = approachY(plot, mark.feet) - strip.line/2
 		s.approachText(&pen, mark.word, s.pal.Muted)
 	}
 }
@@ -264,8 +273,8 @@ func (s *Scene) drawApproachAxes(lay *layout, strip *approachLayout, win *window
 // the field would follow, from the plot's left edge down to the field.
 func drawApproachGlide(lay *layout, strip *approachLayout, ink color.RGBA, width int) {
 	plot := strip.plot
-	startM := approachReachKm * metresPerKm * math.Tan(approachGlideDeg*math.Pi/halfCircle)
-	fromX, fromY := float64(plot.Min.X), float64(plot.Max.Y)-startM/approachCeilingM*float64(plot.Dy())
+	startFt := approachReachNm * feetPerNm * math.Tan(approachGlideDeg*math.Pi/halfCircle)
+	fromX, fromY := float64(plot.Min.X), float64(plot.Max.Y)-startFt/approachCeilingFt*float64(plot.Dy())
 	runX, runY := float64(plot.Max.X)-fromX, float64(plot.Max.Y)-fromY
 
 	length := math.Hypot(runX, runY)
@@ -290,14 +299,14 @@ func (s *Scene) approachText(pen *windowPen, value string, ink color.RGBA) {
 
 // approachX is the column a distance from the field falls on: the reach at
 // the plot's left edge, the field at its right.
-func approachX(plot image.Rectangle, km float64) int {
-	return plot.Max.X - int(math.Round(km/approachReachKm*float64(plot.Dx())))
+func approachX(plot image.Rectangle, nm float64) int {
+	return plot.Max.X - int(math.Round(nm/approachReachNm*float64(plot.Dx())))
 }
 
 // approachY is the row a height falls on: the ground at the plot's bottom,
 // the ceiling at its top.
-func approachY(plot image.Rectangle, metres float64) int {
-	return plot.Max.Y - int(math.Round(metres/approachCeilingM*float64(plot.Dy())))
+func approachY(plot image.Rectangle, feet float64) int {
+	return plot.Max.Y - int(math.Round(feet/approachCeilingFt*float64(plot.Dy())))
 }
 
 // approachDot is one arrival on the strip: where it is drawn, how far out it
@@ -305,10 +314,14 @@ func approachY(plot image.Rectangle, metres float64) int {
 // the frame's snapshot, so keeping it copies nothing.
 type approachDot struct {
 	x, y     int
-	km       float64
+	nm       float64
 	callsign string
 	alpha    float64
 	focus    bool
+
+	// label is where its callsign goes this frame, when labelled.
+	label    approachSpot
+	labelled bool
 }
 
 // approachDots is the frame's dots, nearest the field first.
@@ -323,7 +336,7 @@ type approachDots struct {
 func (d *approachDots) add(dot approachDot) {
 	slot := d.count
 	if slot == len(d.dots) {
-		if dot.km >= d.dots[slot-1].km {
+		if dot.nm >= d.dots[slot-1].nm {
 			return
 		}
 
@@ -332,7 +345,7 @@ func (d *approachDots) add(dot approachDot) {
 		d.count++
 	}
 
-	for slot > 0 && d.dots[slot-1].km > dot.km {
+	for slot > 0 && d.dots[slot-1].nm > dot.nm {
 		d.dots[slot] = d.dots[slot-1]
 		slot--
 	}
@@ -389,19 +402,19 @@ func (s *Scene) approachFocus(frame source.Frame) string {
 func (s *Scene) approachDotFor(plane *airplane.Snapshot, field source.Corridors, strip *approachLayout) (
 	approachDot, bool,
 ) {
-	class, distanceKm, shown := s.fromField(*plane, field)
-	if !shown || class != source.TrackInbound || distanceKm > approachReachKm {
+	class, distanceNm, shown := s.fromField(*plane, field)
+	if !shown || class != source.TrackInbound || distanceNm > approachReachNm {
 		return approachDot{}, false
 	}
 
-	metres, known := s.overlayHeight(*plane, field.Field)
+	feet, known := s.overlayFeet(*plane, field.Field)
 	if !known {
 		return approachDot{}, false
 	}
 
 	alpha := 1.0
-	if metres > approachCeilingM {
-		metres, alpha = approachCeilingM, approachAboveAlpha
+	if feet > approachCeilingFt {
+		feet, alpha = approachCeilingFt, approachAboveAlpha
 	}
 
 	callsign := strings.TrimSpace(plane.Callsign)
@@ -410,9 +423,9 @@ func (s *Scene) approachDotFor(plane *airplane.Snapshot, field source.Corridors,
 	}
 
 	return approachDot{
-		x:        approachX(strip.plot, distanceKm),
-		y:        approachY(strip.plot, max(metres, 0)),
-		km:       distanceKm,
+		x:        approachX(strip.plot, distanceNm),
+		y:        approachY(strip.plot, max(feet, 0)),
+		nm:       distanceNm,
 		callsign: callsign,
 		alpha:    alpha,
 	}, true
@@ -420,38 +433,47 @@ func (s *Scene) approachDotFor(plane *airplane.Snapshot, field source.Corridors,
 
 // drawApproachDots draws the dots and their callsigns. The dots go into the
 // label table first, so no callsign covers another aircraft's dot; then the
-// focus takes its label and the rest take theirs nearest the field first.
-// Every dot gets a callsign while there is room for one in any of its rows;
-// the furthest out that find none are counted in a "+N" at the left end of
-// the plot instead.
+// callsigns are placed, the focus first and the rest nearest the field
+// first, and drawn once all have a place.
+//
+// Every dot gets a callsign while there is room for one in any of its rows.
+// The first try leaves the corner the "+N" would take open to callsigns; if
+// that leaves any dot bare, the places are worked out again with the corner
+// kept clear, and the furthest that still find none are counted there.
 func (s *Scene) drawApproachDots(lay *layout, strip *approachLayout) {
 	arrival := s.classColour(source.TrackInbound)
 	dots := s.approachDots.dots[:s.approachDots.count]
+	labels := &s.approachLabels
 
-	// The corner the "+N" goes in is kept clear before any callsign is set,
-	// because how many go without is only known once they all have tried.
-	more := s.approachMoreBox(lay, strip)
-	s.approachLabels.add(more)
-	s.approachLabels.dotsFrom = s.approachLabels.count
+	moreSlot := labels.count
+	labels.add(image.Rectangle{})
+	labels.dotsFrom = labels.count
 
 	for index := range dots {
 		radius := approachRadius(strip, &dots[index])
 		lay.dst.BlendCircle(dots[index].x, dots[index].y, radius, arrival, dots[index].alpha)
-		s.approachLabels.add(image.Rect(dots[index].x-radius, dots[index].y-radius,
-			dots[index].x+radius+1, dots[index].y+radius+1))
+
+		// The disc goes in with a margin, so a callsign is not set so close
+		// to another aircraft's dot that it reads as that one's.
+		margin := radius + strip.scale*approachLabelGap
+		labels.add(image.Rect(dots[index].x-margin, dots[index].y-margin,
+			dots[index].x+margin+1, dots[index].y+margin+1))
 	}
 
 	win := windowLayout{scale: strip.scale, shadow: strip.shadow}
 	pen := s.windowPen(lay, &win, s.faces.Small, 0)
-	labels := &s.approachLabels
-	labels.unlabelled = 0
+	more := approachMoreBox(&pen, strip)
+	placed := labels.count
 
-	for pass := range 2 {
-		for index := range dots {
-			if dots[index].focus == (pass == 0) && !s.labelApproachDot(lay, &pen, strip, &dots[index], index) {
-				labels.unlabelled++
-			}
-		}
+	if s.placeApproachLabels(&pen, strip, dots) > 0 {
+		labels.count = placed
+		labels.boxes[moreSlot] = more
+
+		s.placeApproachLabels(&pen, strip, dots)
+	}
+
+	for index := range dots {
+		s.drawApproachLabel(lay, &pen, strip, &dots[index])
 	}
 
 	if labels.unlabelled > 0 {
@@ -475,20 +497,45 @@ type approachSpot struct {
 	row int
 }
 
-// labelApproachDot sets one dot's callsign in the first free spot
-// findApproachSpot finds, with a leader back to the dot when it had to move
-// a row or more away, and reports false when there is no free spot.
+// placeApproachLabels finds every dot its callsign's place, the focus first
+// and then the rest nearest the field first, entering each in the label
+// table as it goes. It returns how many found none, and keeps that count on
+// the table.
+func (s *Scene) placeApproachLabels(pen *windowPen, strip *approachLayout, dots []approachDot) int {
+	labels := &s.approachLabels
+	labels.unlabelled = 0
+
+	for pass := range 2 {
+		for index := range dots {
+			dot := &dots[index]
+			if dot.focus != (pass == 0) {
+				continue
+			}
+
+			width, height := pen.measure(dot.callsign), pen.height()
+			dot.label, dot.labelled = s.findApproachSpot(strip, dot, width, height, labels.dotsFrom+index)
+
+			if !dot.labelled {
+				labels.unlabelled++
+
+				continue
+			}
+
+			labels.add(image.Rectangle{Min: dot.label.at, Max: dot.label.at.Add(image.Pt(width, height))})
+		}
+	}
+
+	return labels.unlabelled
+}
+
+// drawApproachLabel sets one placed callsign, with a leader back to the dot
+// when it had to move a row or more away. A dot with no place gets nothing.
 //
 // The focus is set in the palette's ink and every other callsign in its
 // muted ink, so the one the caption is about stands out from the queue.
-func (s *Scene) labelApproachDot(
-	lay *layout, pen *windowPen, strip *approachLayout, dot *approachDot, index int,
-) bool {
-	width, height := pen.measure(dot.callsign), pen.height()
-
-	spot, found := s.findApproachSpot(strip, dot, width, height, s.approachLabels.dotsFrom+index)
-	if !found {
-		return false
+func (s *Scene) drawApproachLabel(lay *layout, pen *windowPen, strip *approachLayout, dot *approachDot) {
+	if !dot.labelled {
+		return
 	}
 
 	ink := s.pal.Muted
@@ -496,27 +543,43 @@ func (s *Scene) labelApproachDot(
 		ink = s.pal.Ink
 	}
 
-	box := image.Rect(spot.at.X, spot.at.Y, spot.at.X+width, spot.at.Y+height)
-	if spot.row > 0 {
+	corner := dot.label.at
+	if dot.label.row > 0 {
+		box := image.Rect(corner.X, corner.Y, corner.X+pen.measure(dot.callsign), corner.Y+pen.height())
 		s.drawApproachLeader(lay, strip, dot, box)
 	}
 
-	s.approachLabels.add(box)
-
-	pen.x, pen.y = spot.at.X, spot.at.Y
+	pen.x, pen.y = corner.X, corner.Y
 	pen.draw(dot.callsign, ink, dot.alpha)
-
-	return true
 }
 
 // findApproachSpot is the first spot for a callsign width by height that
 // stays in the panel and clears every entry in the label table but own, the
-// dot's own disc. It tries row 0 above the dot, then row 0 below it, then
-// each further row above and below in turn, out to approachRows. On each row
-// it tries the right of the dot before the left, because the queue runs down
-// to the right and that side of a dot above the line is most often free.
+// dot's own disc. It looks twice: first for a spot whose leader also runs
+// clear of the callsigns already set, then, when a bunched queue leaves none,
+// for any free spot, since a crossed leader reads better than a missing name.
 func (s *Scene) findApproachSpot(
 	strip *approachLayout, dot *approachDot, width, height, own int,
+) (approachSpot, bool) {
+	for _, strict := range [...]bool{true, false} {
+		if spot, found := s.scanApproachRows(strip, dot, width, height, own, strict); found {
+			return spot, true
+		}
+	}
+
+	return approachSpot{}, false
+}
+
+// scanApproachRows is one look for findApproachSpot. It tries row 0 above
+// the dot, then row 0 below it, then each further row above and below in
+// turn, out to approachRows. On each row it tries the right of the dot
+// before the left, because the queue runs down to the right and that side of
+// a dot above the line is most often free. With strict set a spot whose
+// leader would cross a callsign does not count.
+//
+//nolint:revive // strict is the one difference between findApproachSpot's two looks.
+func (s *Scene) scanApproachRows(
+	strip *approachLayout, dot *approachDot, width, height, own int, strict bool,
 ) (approachSpot, bool) {
 	gap := approachRadius(strip, dot) + strip.scale*approachLabelGap
 	pitch := height + strip.scale*approachRowGap
@@ -532,7 +595,11 @@ func (s *Scene) findApproachSpot(
 
 		for _, left := range sides {
 			box := image.Rect(left, top, left+width, top+height)
-			if box.In(strip.panel) && !s.approachLabels.hits(box, own) {
+			if !box.In(strip.panel) || s.approachLabels.hits(box, own) {
+				continue
+			}
+
+			if !strict || s.leaderClear(dot, box, row) {
 				return approachSpot{at: box.Min, row: row}, true
 			}
 		}
@@ -544,24 +611,54 @@ func (s *Scene) findApproachSpot(
 // drawApproachLeader draws a hairline from the dot to the corner of its
 // callsign's box that faces it.
 func (s *Scene) drawApproachLeader(lay *layout, strip *approachLayout, dot *approachDot, box image.Rectangle) {
-	endX, endY := box.Min.X, box.Max.Y
+	end := leaderEnd(dot, box)
+	lay.dst.BlendLineAA(float64(dot.x), float64(dot.y), float64(end.X), float64(end.Y),
+		max(1, strip.scale/approachThinDivisor), s.pal.Muted, approachLeaderAlpha)
+}
+
+// leaderEnd is the corner of box that faces the dot, where its leader ends.
+func leaderEnd(dot *approachDot, box image.Rectangle) image.Point {
+	end := image.Pt(box.Min.X, box.Max.Y)
 	if box.Min.X < dot.x {
-		endX = box.Max.X
+		end.X = box.Max.X
 	}
 
 	if box.Min.Y > dot.y {
-		endY = box.Min.Y
+		end.Y = box.Min.Y
 	}
 
-	lay.dst.BlendLineAA(float64(dot.x), float64(dot.y), float64(endX), float64(endY),
-		max(1, strip.scale/approachThinDivisor), s.pal.Muted, approachLeaderAlpha)
+	return end
+}
+
+// leaderClear reports whether the leader a callsign in box on row would
+// need runs clear of the callsigns already set, so it does not strike one
+// through. Row 0 needs no leader. Dots are not tested: in a bunched queue a
+// leader has to pass its neighbours to reach a free row. The line is tested a
+// few pixels at a time, which is fine enough for type of this size.
+func (s *Scene) leaderClear(dot *approachDot, box image.Rectangle, row int) bool {
+	if row == 0 {
+		return true
+	}
+
+	end := leaderEnd(dot, box)
+	callsigns := s.approachLabels.dotsFrom + s.approachDots.count
+	steps := max(intAbs(end.X-dot.x), intAbs(end.Y-dot.y)) / approachLeaderStep
+
+	for step := 1; step < steps; step++ {
+		x := dot.x + (end.X-dot.x)*step/steps
+		y := dot.y + (end.Y-dot.y)*step/steps
+
+		if s.approachLabels.hitsFrom(image.Rect(x, y, x+1, y+1), callsigns) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // approachMoreBox is where the "+N" goes: in the gutter left of the plot,
 // level with the ground, which nothing else uses.
-func (s *Scene) approachMoreBox(lay *layout, strip *approachLayout) image.Rectangle {
-	win := windowLayout{scale: strip.scale, shadow: strip.shadow}
-	pen := s.windowPen(lay, &win, s.faces.Small, 0)
+func approachMoreBox(pen *windowPen, strip *approachLayout) image.Rectangle {
 	right := strip.plot.Min.X - strip.gap
 	top := strip.plot.Max.Y - strip.line
 
@@ -579,9 +676,9 @@ func (s *Scene) drawApproachMore(pen *windowPen, box image.Rectangle, count int)
 }
 
 // approachLabels is the places taken on the strip this frame, which a
-// callsign may not overlap: the heading, the axis labels and the "+N"
-// corner, then one disc per dot from dotsFrom on, then the callsigns already
-// set. unlabelled is how many dots found no room for a callsign this frame.
+// callsign may not overlap: the ground line, the heading, the axis labels
+// and the "+N" corner, then one disc per dot from dotsFrom on, then the
+// callsigns already set. unlabelled is how many dots found no room for a callsign this frame.
 type approachLabels struct {
 	boxes      [approachFixedObstacles + 2*approachMaxDots]image.Rectangle
 	count      int
@@ -598,6 +695,17 @@ func (l *approachLabels) add(box image.Rectangle) {
 	}
 }
 
+// hitsFrom reports whether box overlaps any entry from index from on.
+func (l *approachLabels) hitsFrom(box image.Rectangle, from int) bool {
+	for index := from; index < l.count; index++ {
+		if l.boxes[index].Overlaps(box) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // hits reports whether box overlaps any entry but the one at skip.
 func (l *approachLabels) hits(box image.Rectangle, skip int) bool {
 	for index := range l.count {
@@ -607,4 +715,13 @@ func (l *approachLabels) hits(box image.Rectangle, skip int) bool {
 	}
 
 	return false
+}
+
+// intAbs is the size of value.
+func intAbs(value int) int {
+	if value < 0 {
+		return -value
+	}
+
+	return value
 }
