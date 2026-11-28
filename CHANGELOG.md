@@ -19,8 +19,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `--minimal-approach on` draws a see-through side view in the top-left
   corner of the bare 3D view: each arrival within 30 km of the corridor
   airfield is a dot at its distance and height, over a dashed three-degree
-  descent. The aircraft the caption is on is drawn larger with its callsign,
-  and the others carry theirs where it fits. Off by default, and with it off
+  descent. Every dot carries its callsign, stacked in rows with a leader line
+  when aircraft bunch up; the aircraft the caption is on has the larger dot
+  and the brighter label. Off by default, and with it off
   every picture is the same byte for byte.
 - Coloured by corridor, the list and the bare 3D view's board open with an
   `EMERGENCY` section while any aircraft squawks 7500, 7600 or 7700. Those

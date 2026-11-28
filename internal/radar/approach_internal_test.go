@@ -352,33 +352,98 @@ func TestCollectApproachWithoutAField(t *testing.T) {
 }
 
 // TestApproachLabelsNeverCollide draws queues of growing length and checks
-// that no two callsigns overlap, that each stays in the panel, and that the
-// focus always has one.
+// that no two callsigns overlap, that each stays in the panel, and that each
+// dot is either labelled or counted in the "+N".
 func TestApproachLabelsNeverCollide(t *testing.T) {
 	t.Parallel()
 
-	for count := 1; count <= approachBenchPlanes; count++ {
+	for count := 1; count <= approachMaxDots; count++ {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			t.Parallel()
 
-			frame := windowFrame(approachQueue(count)...)
-			scene := approachScene(t, frame, false)
-			lay := approachLay(t, approachTestWidth, approachTestHeight)
-			scene.drawApproach(&lay, frame)
-
-			strip, _ := scene.newApproachLayout(&lay)
-			labels := &scene.approachLabels
-			first := labels.dotsFrom + scene.approachDots.count
-
-			if labels.count <= first {
-				t.Fatal("not even the focus got a callsign")
-			}
-
-			for index := first; index < labels.count; index++ {
-				checkCallsign(t, labels.boxes[first:index], labels.boxes[index], strip.panel)
-			}
+			checkApproachLabels(t, approachTestWidth, approachTestHeight, approachQueue(count))
 		})
 	}
+}
+
+// TestEveryArrivalIsLabelled is the owner's rule: eight arrivals spread over
+// the 30 km, or four within 3 km of each other, all carry their callsigns.
+func TestEveryArrivalIsLabelled(t *testing.T) {
+	t.Parallel()
+
+	sizes := []image.Point{{approachTestWidth, approachTestHeight}, {approachBenchWidth, approachBenchHeight}}
+
+	for _, size := range sizes {
+		for name, planes := range map[string][]airplane.Snapshot{
+			"eight spread": approachSpread(),
+			"four bunched": approachBunched(),
+			"bunched low":  approachBunchedAt(2),
+			"bunched high": approachBunchedAt(26),
+		} {
+			t.Run(fmt.Sprintf("%s at %dp", name, size.Y), func(t *testing.T) {
+				t.Parallel()
+
+				if left := checkApproachLabels(t, size.X, size.Y, planes); left != 0 {
+					t.Errorf("%d of %d arrivals without a callsign", left, len(planes))
+				}
+			})
+		}
+	}
+}
+
+// approachSpread is eight arrivals evenly over the strip's 30 km, on a
+// three-degree path.
+func approachSpread() []airplane.Snapshot {
+	planes := make([]airplane.Snapshot, 0, 8)
+	calls := []string{"KLM1452", "CND093P", "TRA6721", "EZY77KL", "KLM88", "BAW432", "DLH4EA", "RJA151"}
+
+	for index, call := range calls {
+		km := 2 + 3.5*float64(index)
+		planes = append(planes, approachPlane(fmt.Sprintf("4842%02X", index), call, km, km*52))
+	}
+
+	return planes
+}
+
+// approachBunched is four arrivals within 3 km of each other, 10 km out.
+func approachBunched() []airplane.Snapshot { return approachBunchedAt(10) }
+
+// approachBunchedAt is four arrivals a kilometre apart from fromKm out.
+func approachBunchedAt(fromKm float64) []airplane.Snapshot {
+	planes := make([]airplane.Snapshot, 0, 4)
+
+	for index, call := range []string{"KLM1452", "CND093P", "TRA6721", "EZY77KL"} {
+		km := fromKm + float64(index)
+		planes = append(planes, approachPlane(fmt.Sprintf("4843%02X", index), call, km, km*52))
+	}
+
+	return planes
+}
+
+// checkApproachLabels draws the strip over these arrivals and checks every
+// callsign stays in the panel and clear of every other, and that each dot is
+// labelled or counted. It returns how many went without.
+func checkApproachLabels(t *testing.T, width, height int, planes []airplane.Snapshot) int {
+	t.Helper()
+
+	frame := windowFrame(planes...)
+	scene := approachScene(t, frame, false)
+	lay := approachLay(t, width, height)
+	scene.drawApproach(&lay, frame)
+
+	strip, _ := scene.newApproachLayout(&lay)
+	labels := &scene.approachLabels
+	first := labels.dotsFrom + scene.approachDots.count
+
+	for index := first; index < labels.count; index++ {
+		checkCallsign(t, labels.boxes[first:index], labels.boxes[index], strip.panel)
+	}
+
+	if labelled := labels.count - first; labelled+labels.unlabelled != scene.approachDots.count {
+		t.Errorf("%d labelled and %d counted, for %d dots", labelled, labels.unlabelled, scene.approachDots.count)
+	}
+
+	return labels.unlabelled
 }
 
 // checkCallsign fails the test when box leaves the panel or overlaps one of
@@ -397,33 +462,130 @@ func checkCallsign(t *testing.T, before []image.Rectangle, box, panel image.Rect
 	}
 }
 
-// TestLabelApproachDotWithNoRoom checks the two ways a dot with every place
-// taken goes: the focus is centred over it inside the panel, and any other
-// dot goes without.
-func TestLabelApproachDotWithNoRoom(t *testing.T) {
+// TestApproachMoreCount checks the "+N": drawn when a crowd leaves dots
+// without a callsign, and absent when every dot has one.
+func TestApproachMoreCount(t *testing.T) {
+	t.Parallel()
+
+	crowd := make([]airplane.Snapshot, 0, approachMaxDots)
+	for index := range approachMaxDots {
+		km := 10 + 0.1*float64(index)
+		crowd = append(crowd, approachPlane(fmt.Sprintf("4844%02X", index), "KLM1452", km, km*52))
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		planes   []airplane.Snapshot
+		wantMore bool
+	}{
+		{name: "a crowd", planes: crowd, wantMore: true},
+		{name: "one arrival", planes: approachQueue(1)},
+	} {
+		frame := windowFrame(testCase.planes...)
+		scene := approachScene(t, frame, false)
+		lay := approachLay(t, approachTestWidth, approachTestHeight)
+		scene.drawApproach(&lay, frame)
+
+		strip, _ := scene.newApproachLayout(&lay)
+		more := scene.approachMoreBox(&lay, &strip)
+
+		drawn := !uniform(lay.dst, more)
+		if drawn != testCase.wantMore || (scene.approachLabels.unlabelled > 0) != drawn {
+			t.Errorf("%s: +N drawn %v with %d unlabelled, want %v", testCase.name, drawn,
+				scene.approachLabels.unlabelled, testCase.wantMore)
+		}
+	}
+}
+
+// uniform reports whether every pixel of box is the same colour.
+func uniform(canv *canvas.Canvas, box image.Rectangle) bool {
+	img := canv.Image()
+	first := img.RGBAAt(box.Min.X, box.Min.Y)
+
+	for pixelY := box.Min.Y; pixelY < box.Max.Y; pixelY++ {
+		for pixelX := box.Min.X; pixelX < box.Max.X; pixelX++ {
+			if img.RGBAAt(pixelX, pixelY) != first {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// TestFindApproachSpotOrder checks the order spots are tried in: above
+// right, above left, below right, below left, then the next row out.
+func TestFindApproachSpotOrder(t *testing.T) {
+	t.Parallel()
+
+	strip := approachLayout{panel: image.Rect(0, 0, 1000, 1000), scale: 1}
+	dot := approachDot{x: 500, y: 500}
+	gap := approachDotRadius + approachLabelGap
+	pitch := 10 + approachRowGap
+
+	aboveRight := image.Rect(500+gap, 490, 500+gap+20, 500)
+	aboveLeft := image.Rect(500-gap-20, 490, 500-gap, 500)
+	belowRight := image.Rect(500+gap, 500, 500+gap+20, 510)
+	belowLeft := image.Rect(500-gap-20, 500, 500-gap, 510)
+
+	for _, testCase := range []struct {
+		name    string
+		blocked []image.Rectangle
+		want    approachSpot
+	}{
+		{name: "free", want: approachSpot{at: aboveRight.Min}},
+		{name: "right taken", blocked: []image.Rectangle{aboveRight}, want: approachSpot{at: aboveLeft.Min}},
+		{
+			name: "above taken", blocked: []image.Rectangle{aboveRight, aboveLeft},
+			want: approachSpot{at: belowRight.Min},
+		},
+		{
+			name: "row taken", blocked: []image.Rectangle{aboveRight, aboveLeft, belowRight, belowLeft},
+			want: approachSpot{at: image.Pt(500+gap, 490-pitch), row: 1},
+		},
+	} {
+		scene := &Scene{}
+		for _, box := range testCase.blocked {
+			scene.approachLabels.add(box)
+		}
+
+		got, found := scene.findApproachSpot(&strip, &dot, 20, 10, -1)
+		if !found || got != testCase.want {
+			t.Errorf("%s: %v %v, want %v", testCase.name, got, found, testCase.want)
+		}
+	}
+
+	full := &Scene{}
+	full.approachLabels.add(strip.panel)
+
+	if _, found := full.findApproachSpot(&strip, &dot, 20, 10, -1); found {
+		t.Error("a spot found in a full panel")
+	}
+}
+
+// TestDrawApproachLeader checks the leader reaches the corner of the box
+// that faces the dot, on all four sides.
+func TestDrawApproachLeader(t *testing.T) {
 	t.Parallel()
 
 	scene := approachScene(t, windowFrame(), false)
-	lay := approachLay(t, approachTestWidth, approachTestHeight)
-	strip, _ := scene.newApproachLayout(&lay)
+	strip := approachLayout{scale: 1}
+	dot := approachDot{x: 100, y: 100}
 
-	win := windowLayout{scale: strip.scale, shadow: strip.shadow}
-	pen := scene.windowPen(&lay, &win, scene.faces.Small, 0)
+	for _, testCase := range []struct {
+		box  image.Rectangle
+		want image.Point
+	}{
+		{box: image.Rect(120, 40, 160, 60), want: image.Pt(110, 80)},
+		{box: image.Rect(40, 40, 80, 60), want: image.Pt(90, 80)},
+		{box: image.Rect(120, 140, 160, 160), want: image.Pt(110, 120)},
+		{box: image.Rect(40, 140, 80, 160), want: image.Pt(90, 120)},
+	} {
+		lay := approachLay(t, 200, 200)
+		scene.drawApproachLeader(&lay, &strip, &dot, testCase.box)
 
-	for _, focus := range []bool{false, true} {
-		scene.approachLabels = approachLabels{}
-		scene.approachLabels.add(strip.panel)
-
-		dot := approachDot{x: strip.plot.Max.X, y: strip.plot.Min.Y, callsign: "KLM1452", alpha: 1, focus: focus}
-		scene.labelApproachDot(&pen, &strip, &dot, -1)
-
-		placed := scene.approachLabels.count == 2
-		if placed != focus {
-			t.Fatalf("focus %v: placed %v", focus, placed)
-		}
-
-		if focus && !scene.approachLabels.boxes[1].In(strip.panel) {
-			t.Errorf("the forced callsign %v leaves the panel", scene.approachLabels.boxes[1])
+		if lay.dst.Image().RGBAAt(testCase.want.X, testCase.want.Y) == (color.RGBA{}) {
+			t.Errorf("box %v: no leader through %v", testCase.box, testCase.want)
 		}
 	}
 }
@@ -451,18 +613,6 @@ func TestDrawApproachDrawsNothingWhenItCannot(t *testing.T) {
 		if string(before) != string(lay.dst.Image().Pix) {
 			t.Errorf("%s: the strip drew", testCase.name)
 		}
-	}
-}
-
-func TestApproachPlacesOrder(t *testing.T) {
-	t.Parallel()
-
-	dot := approachDot{x: 100, y: 50}
-	places := approachPlaces(&dot, 20, 10, 5)
-
-	want := [...]image.Point{{105, 40}, {75, 40}, {105, 50}, {75, 50}, {90, 35}, {90, 55}}
-	if places != want {
-		t.Errorf("places %v, want %v", places, want)
 	}
 }
 
