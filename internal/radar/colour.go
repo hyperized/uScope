@@ -289,6 +289,12 @@ type Settings struct {
 	// bare. The other views never read it.
 	Window bool
 
+	// Approach is whether the bare 3D view carries the approach strip: a
+	// see-through side view at the top left with one dot per arriving
+	// aircraft, by distance from the corridor airfield and height. A plain
+	// bool for the reason MinimalBar is one. The other views never read it.
+	Approach bool
+
 	// Lights is when the aircraft carry their exterior lights: red and green
 	// on the wingtips, white on the tail, the strobes and the beacon. Zero,
 	// and any spelling outside the three, reads as LightsOff, which is what
@@ -384,6 +390,7 @@ func (s *Scene) Apply(set Settings) {
 	s.minimalBar = set.MinimalBar
 	s.board = set.Board
 	s.overlay = set.Window
+	s.approach = set.Approach
 	s.lights = set.Lights.orDefault()
 	s.shown = set.View
 	s.applyRange(set.RangeNm)

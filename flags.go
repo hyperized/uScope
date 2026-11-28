@@ -113,47 +113,48 @@ const (
 // Flag validation errors. Each is a sentinel so a test can assert which rule
 // rejected the input rather than matching on a message.
 var (
-	errEmptyFB    = errors.New(appName + ": --fb must not be empty")
-	errFPSRange   = errors.New(appName + ": --fps out of range")
-	errRotate     = errors.New(appName + ": --rotate must be auto, 0, 1, 2 or 3")
-	errSize       = errors.New(appName + ": --size must be WxH")
-	errFrames     = errors.New(appName + ": --frames out of range")
-	errBackend    = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
-	errScene      = errors.New(appName + ": --scene must be radar or pattern")
-	errTheme      = errors.New(appName + ": --theme must be night, day or auto")
-	errLook       = errors.New(appName + ": --look must be glass, phosphor, mono or vector")
-	errColour     = errors.New(appName + ": --colour must be altitude, airline or corridor")
-	errFilter     = errors.New(appName + ": --filter must be all, low, mid, high, below-high, in, out or other")
-	errAirports   = errors.New(appName + ": --airports must be on or off")
-	errShore      = errors.New(appName + ": --shore must be on or off")
-	errStars      = errors.New(appName + ": --stars must be on or off")
-	errCorridors  = errors.New(appName + ": --corridors must be on or off")
-	errAirways    = errors.New(appName + ": --airways must be on or off")
-	errCorrField  = errors.New(appName + ": --corridor-field must be an airfield's four-letter ICAO code, or empty")
-	errHalfLife   = errors.New(appName + ": --corridor-half-life must be an interval from 10m to 24h")
-	errMinShore   = errors.New(appName + ": --minimal-shore must be on or off")
-	errMinAirport = errors.New(appName + ": --minimal-airports must be on or off")
-	errMinBar     = errors.New(appName + ": --minimal-bar must be on or off")
-	errMinBoard   = errors.New(appName + ": --minimal-board must be on or off")
-	errMinWindow  = errors.New(appName + ": --minimal-window must be on or off")
-	errLights     = errors.New(appName + ": --lights must be on, off or auto")
-	errRange      = errors.New(appName + ": --range must be auto or a range the scope can show")
-	errBattery    = errors.New(appName + ": --battery must not be empty")
-	errLatitude   = errors.New(appName + ": --lat out of range")
-	errLongitude  = errors.New(appName + ": --lon out of range")
-	errLatLonPair = errors.New(appName + ": --lat and --lon must be given together")
-	errBeastAddr  = errors.New(appName + ": --beast must be HOST:PORT")
-	errPNGBoth    = errors.New(appName + ": --png and --backend disagree")
-	errPNGPath    = errors.New(appName + ": --backend png needs --png PATH to write to")
-	errRecentre   = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
-	errView       = errors.New(appName + ": --view must be scope, 3d, minimal or minimal3d")
-	errExaggerate = errors.New(appName + ": --exaggerate out of range")
-	errZoom       = errors.New(appName + ": --zoom out of range")
-	errTilt       = errors.New(appName + ": --tilt out of range")
-	errOrbit      = errors.New(appName + ": --orbit must be on or off")
-	errAzimuth    = errors.New(appName + ": --azimuth out of range")
-	errGPSD       = errors.New(appName + ": --gpsd must be off or HOST:PORT")
-	errHistPath   = errors.New(appName + ": --history must be off or a path, and not -")
+	errEmptyFB     = errors.New(appName + ": --fb must not be empty")
+	errFPSRange    = errors.New(appName + ": --fps out of range")
+	errRotate      = errors.New(appName + ": --rotate must be auto, 0, 1, 2 or 3")
+	errSize        = errors.New(appName + ": --size must be WxH")
+	errFrames      = errors.New(appName + ": --frames out of range")
+	errBackend     = errors.New(appName + ": --backend must be auto, fb, kitty, blocks or png")
+	errScene       = errors.New(appName + ": --scene must be radar or pattern")
+	errTheme       = errors.New(appName + ": --theme must be night, day or auto")
+	errLook        = errors.New(appName + ": --look must be glass, phosphor, mono or vector")
+	errColour      = errors.New(appName + ": --colour must be altitude, airline or corridor")
+	errFilter      = errors.New(appName + ": --filter must be all, low, mid, high, below-high, in, out or other")
+	errAirports    = errors.New(appName + ": --airports must be on or off")
+	errShore       = errors.New(appName + ": --shore must be on or off")
+	errStars       = errors.New(appName + ": --stars must be on or off")
+	errCorridors   = errors.New(appName + ": --corridors must be on or off")
+	errAirways     = errors.New(appName + ": --airways must be on or off")
+	errCorrField   = errors.New(appName + ": --corridor-field must be an airfield's four-letter ICAO code, or empty")
+	errHalfLife    = errors.New(appName + ": --corridor-half-life must be an interval from 10m to 24h")
+	errMinShore    = errors.New(appName + ": --minimal-shore must be on or off")
+	errMinAirport  = errors.New(appName + ": --minimal-airports must be on or off")
+	errMinBar      = errors.New(appName + ": --minimal-bar must be on or off")
+	errMinBoard    = errors.New(appName + ": --minimal-board must be on or off")
+	errMinWindow   = errors.New(appName + ": --minimal-window must be on or off")
+	errMinApproach = errors.New(appName + ": --minimal-approach must be on or off")
+	errLights      = errors.New(appName + ": --lights must be on, off or auto")
+	errRange       = errors.New(appName + ": --range must be auto or a range the scope can show")
+	errBattery     = errors.New(appName + ": --battery must not be empty")
+	errLatitude    = errors.New(appName + ": --lat out of range")
+	errLongitude   = errors.New(appName + ": --lon out of range")
+	errLatLonPair  = errors.New(appName + ": --lat and --lon must be given together")
+	errBeastAddr   = errors.New(appName + ": --beast must be HOST:PORT")
+	errPNGBoth     = errors.New(appName + ": --png and --backend disagree")
+	errPNGPath     = errors.New(appName + ": --backend png needs --png PATH to write to")
+	errRecentre    = errors.New(appName + ": --recenter must be 0 or an interval from 10s to 1h")
+	errView        = errors.New(appName + ": --view must be scope, 3d, minimal or minimal3d")
+	errExaggerate  = errors.New(appName + ": --exaggerate out of range")
+	errZoom        = errors.New(appName + ": --zoom out of range")
+	errTilt        = errors.New(appName + ": --tilt out of range")
+	errOrbit       = errors.New(appName + ": --orbit must be on or off")
+	errAzimuth     = errors.New(appName + ": --azimuth out of range")
+	errGPSD        = errors.New(appName + ": --gpsd must be off or HOST:PORT")
+	errHistPath    = errors.New(appName + ": --history must be off or a path, and not -")
 )
 
 // The off spelling of --history and the one path it refuses: - reads as
@@ -184,14 +185,15 @@ type config struct {
 	airports    radar.Toggle
 	shore       radar.Toggle
 
-	// minimalShore, minimalAirports, minimalBar, minimalBoard and
-	// minimalWindow are the bare views' own switches, already read from on/off
-	// into what the scene keeps.
+	// minimalShore, minimalAirports, minimalBar, minimalBoard, minimalWindow
+	// and minimalApproach are the bare views' own switches, already read from
+	// on/off into what the scene keeps.
 	minimalShore    bool
 	minimalAirports bool
 	minimalBar      bool
 	minimalBoard    bool
 	minimalWindow   bool
+	minimalApproach bool
 	lights          radar.LightsMode
 	stars           radar.Toggle
 	corridors       radar.Toggle
@@ -282,6 +284,7 @@ type rawFlags struct {
 	minBar      string
 	minBoard    string
 	minWindow   string
+	minApproach string
 	lights      string
 	stars       string
 	corridors   string
@@ -389,6 +392,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 			"j flips it while it runs")
 	set.StringVar(&raw.minWindow, "minimal-window", defaultOff,
 		"draw the time, a caption on the nearest arrival or departure and the hour's count over minimal3d: on or off")
+	set.StringVar(&raw.minApproach, "minimal-approach", defaultOff,
+		"draw the arrivals by distance and height in a side view at the top left of minimal3d: on or off")
 	set.StringVar(&raw.lights, "lights", defaultOn,
 		"draw the aircraft's navigation lights, strobes and beacon: on, off, or auto to leave them off "+
 			"in daylight and fade them in as the sun sets. s cycles them while it runs")
@@ -573,6 +578,7 @@ func (raw rawFlags) display() (display, error) {
 			MinimalBar:      overlays.MinimalBar,
 			Board:           overlays.Board,
 			Window:          overlays.Window,
+			Approach:        overlays.Approach,
 			Lights:          overlays.Lights,
 			Stars:           overlays.Stars,
 			Corridors:       overlays.Corridors,
@@ -739,6 +745,7 @@ func (raw rawFlags) validated() (config, error) {
 		minimalBar:      show.radar.MinimalBar,
 		minimalBoard:    show.radar.Board,
 		minimalWindow:   show.radar.Window,
+		minimalApproach: show.radar.Approach,
 		lights:          show.radar.Lights,
 		stars:           show.radar.Stars,
 		corridors:       show.radar.Corridors,
@@ -1056,7 +1063,7 @@ func (raw rawFlags) overlays() (radar.Settings, error) {
 	return minimal, nil
 }
 
-// minimalSwitches reads the bare views' five switches into the Settings
+// minimalSwitches reads the bare views' six switches into the Settings
 // fields they fill.
 func (raw rawFlags) minimalSwitches() (radar.Settings, error) {
 	minShore, err := parseMinimal(raw.minShore, errMinShore)
@@ -1084,9 +1091,14 @@ func (raw rawFlags) minimalSwitches() (radar.Settings, error) {
 		return radar.Settings{}, err
 	}
 
+	minApproach, err := parseMinimal(raw.minApproach, errMinApproach)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
 	return radar.Settings{
 		MinimalShore: minShore, MinimalAirports: minAirports, MinimalBar: minBar, Board: minBoard,
-		Window: minWindow,
+		Window: minWindow, Approach: minApproach,
 	}, nil
 }
 

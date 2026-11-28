@@ -334,7 +334,8 @@ func TestCaptionDescribe(t *testing.T) {
 
 			var held caption
 
-			held.describe(plane, boardCorridors().Field)
+			field := boardCorridors().Field
+			held.describe(plane, field, (&Scene{}).captionMetres(plane, field))
 
 			if held.name != testCase.wantName || held.number != testCase.wantNumber {
 				t.Errorf("describe() = %q %q, want %q %q",

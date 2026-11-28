@@ -218,7 +218,7 @@ func (s *Scene) followCaption(frame source.Frame, elapsed time.Duration) {
 
 	if held.icao == "" && best.found {
 		*held = caption{icao: best.plane.ICAO, class: best.class, shownAt: elapsed}
-		held.describe(best.plane, field.Field)
+		held.describe(best.plane, field.Field, s.captionMetres(best.plane, field.Field))
 
 		// The first frame the scene draws comes up whole, so a still
 		// rendered with --png shows the caption rather than its first frame
@@ -239,7 +239,7 @@ func (s *Scene) keepCaption(frame source.Frame, field source.Corridors, elapsed 
 	plane := findByICAO(frame.Planes, held.icao)
 
 	if plane != nil {
-		held.describe(*plane, field.Field)
+		held.describe(*plane, field.Field, s.captionMetres(*plane, field.Field))
 	}
 
 	if !held.leaving && s.captionDone(plane, field, elapsed, best) {
@@ -321,12 +321,10 @@ func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 // captionClass is an aircraft's track class and whether it is close enough
 // to the field, and shown on the picture, for the caption to name it.
 func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, bool) {
-	if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
+	class, distanceKm, shown := s.fromField(plane, field)
+	if !shown {
 		return source.TrackTransit, false
 	}
-
-	class := field.Classify(plane)
-	distanceKm := field.Field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
 
 	switch class {
 	case source.TrackInbound:
@@ -338,6 +336,49 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 	default:
 		return class, false
 	}
+}
+
+// fromField is an aircraft's track class and its distance from the corridor
+// airfield in kilometres, and false when it has no position or the filter is
+// hiding it. The caption and the approach strip both sort the traffic through
+// it, so an aircraft the caption calls an arrival is one the strip plots.
+func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, float64, bool) {
+	if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
+		return source.TrackTransit, 0, false
+	}
+
+	return field.Classify(plane), field.Field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm, true
+}
+
+// overlayHeight is how high an aircraft is for everything set over the bare
+// 3D picture, in metres, and false when its height is not known. The caption
+// and the approach strip read a height through here and nowhere else, so
+// changing what "height" means for them is a change to this one body.
+//
+// It is the pressure altitude: the figure the transponder reports, measured
+// against the standard atmosphere rather than the field. uAirwaves leaves
+// Altitude at zero until a frame has carried one, and a real reading of
+// exactly zero feet is rare enough to lose. field is unused here; it is in
+// the signature for a height above the field.
+//
+//nolint:revive,unparam // field is the seam for a height above the airfield, see above.
+func (s *Scene) overlayHeight(plane airplane.Snapshot, field source.Airfield) (float64, bool) {
+	if plane.Altitude == 0 {
+		return 0, false
+	}
+
+	return plane.Altitude * metresPerFoot, true
+}
+
+// captionMetres is the height the caption gives, zero when there is none to
+// give, which leaves the height out of the caption's line.
+func (s *Scene) captionMetres(plane airplane.Snapshot, field source.Airfield) float64 {
+	metres, known := s.overlayHeight(plane, field)
+	if !known {
+		return 0
+	}
+
+	return metres
 }
 
 // findByICAO is the aircraft with this address on the frame, or nil when it
@@ -352,11 +393,12 @@ func findByICAO(planes []airplane.Snapshot, icao string) *airplane.Snapshot {
 	return nil
 }
 
-// describe takes the caption's figures off the aircraft. The operator's name
-// comes from pkg/airlines when the callsign's prefix is in it, followed by
-// the rest of the callsign as the flight number; otherwise the callsign
-// stands alone, or the address when there is no callsign at all.
-func (c *caption) describe(plane airplane.Snapshot, field source.Airfield) {
+// describe takes the caption's figures off the aircraft, with metres its
+// height from overlayHeight. The operator's name comes from pkg/airlines when
+// the callsign's prefix is in it, followed by the rest of the callsign as the
+// flight number; otherwise the callsign stands alone, or the address when
+// there is no callsign at all.
+func (c *caption) describe(plane airplane.Snapshot, field source.Airfield, metres float64) {
 	callsign := strings.TrimSpace(plane.Callsign)
 
 	c.name, c.number = callsign, ""
@@ -368,7 +410,7 @@ func (c *caption) describe(plane airplane.Snapshot, field source.Airfield) {
 		c.name, c.number = airline.Name, strings.TrimSpace(callsign[callsignPrefix:])
 	}
 
-	c.metres = plane.Altitude * metresPerFoot
+	c.metres = metres
 	c.km = field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
 }
 

@@ -259,6 +259,15 @@ in kilometres; the caption stays on one aircraft for at least eight seconds
 and fades in and out. The bottom right counts the arrivals and departures of
 the last hour. There is no key for it.
 
+`--minimal-approach on` adds a see-through side view in the top-left corner
+of `minimal3d`, with or without the window overlay. Every arrival within
+30 km of the corridor airfield is a dot at its distance from the field and
+its height, so the queue can be seen sliding down towards the field. A dashed
+line marks a three-degree descent for comparison. The aircraft the caption is
+on gets a larger dot and its callsign; the others get theirs where there is
+room. Aircraft above 1,600 m sit on the top edge, drawn fainter. Heights are
+the pressure altitude the transponder reports. There is no key for it either.
+
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture, with only the keys
 that work there.
@@ -461,6 +470,7 @@ between the arrows and the brackets.
 | `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d` |
 | `--minimal-board` | `off` | the flight strip board down the right quarter of `minimal3d` |
 | `--minimal-window` | `off` | the time, a caption on the nearest arrival or departure and the hour's count over `minimal3d` |
+| `--minimal-approach` | `off` | a side view of the arrivals by distance from the field and height, top left of `minimal3d` |
 | `--lights` | `on` | the aircraft lights: `on`, `off`, or `auto` to leave them off in daylight |
 | `--stars` | `on` | stars in the 3D views' night sky |
 | `--corridors` | `on` | the corridor tubes |
@@ -486,7 +496,7 @@ between the arrows and the brackets.
 | `--scene` | `radar` | `radar`, or `pattern` for the rotation check |
 
 Every flag that takes `on` or `off` has a key that flips it while running,
-except `--minimal-window`; see the keys table.
+except `--minimal-window` and `--minimal-approach`; see the keys table.
 Exit status is 0 on a clean quit and 1 on any failure.
 
 ## Building and testing
