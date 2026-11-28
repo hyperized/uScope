@@ -90,10 +90,12 @@ const (
 )
 
 // The overlay's words. The caption keeps aviation's units, as the rest of the
-// scope does: altitude in feet and distance in nautical miles.
+// scope does: altitude in feet and distance in nautical miles. Its headings
+// use the same words as the approach strip's INBOUND TRAFFIC, so the two read
+// as one vocabulary.
 const (
-	captionInText    = "COMING IN NOW"
-	captionOutText   = "CLIMBING OUT"
+	captionInText    = "INBOUND"
+	captionOutText   = "OUTBOUND"
 	landedLabel      = "LANDED THIS HOUR"
 	tookOffLabel     = "TOOK OFF"
 	captionSeparator = " · "
