@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 )
 
@@ -40,6 +41,18 @@ const (
 	// seen side on is two walls, and where two routes cross it is four, so
 	// the base is kept faint.
 	tubeFill3 = 0.075
+
+	// tubeVectorDayWeight multiplies tubeFill3 on the vector look's day
+	// palette. The base was judged on dark fields, where a faint wall of a
+	// bright ink still stands well off the ground; on the stream's light sea
+	// and land the same alpha left the arrival tubes hard to find over the
+	// water. 2.2 was picked from stills at 1.6, 2.2 and 3.0 on 28 November
+	// 2026: 1.6 was still faint over the sea, and 3.0 turned crossing tubes
+	// into near solid ink. At 2.2 a face seen straight on is about 0.26 near
+	// and far together, so the coast and an airfield label under it still
+	// read. The other light palettes keep 1, since their pictures were
+	// judged as they are and this was asked for the stream only.
+	tubeVectorDayWeight = 2.2
 
 	// tubeLineStrength is the centreline's strength at full route strength.
 	// The line is what reads as the route; the skin says how wide it is.
@@ -390,7 +403,7 @@ type tubeWalk struct {
 // tubeStyleOf is a route's inks and wall opacities.
 func (s *Scene) tubeStyleOf(route *source.Route) tubeStyle {
 	ink, strength := s.classColour(route.Class), route.Strength
-	wall := tubeFill3 * strength
+	wall := tubeFill3 * strength * s.tubeWallWeight()
 
 	return tubeStyle{
 		ink:      ink,
@@ -402,6 +415,17 @@ func (s *Scene) tubeStyleOf(route *source.Route) tubeStyle {
 		farBase:  wall * tubeFarWall,
 		strength: strength,
 	}
+}
+
+// tubeWallWeight is what the walls' base opacity is multiplied by on the
+// palette in use: tubeVectorDayWeight on the vector look's day palette and 1
+// everywhere else.
+func (s *Scene) tubeWallWeight() float64 {
+	if s.light && s.look == theme.LookVector {
+		return tubeVectorDayWeight
+	}
+
+	return 1
 }
 
 // taper is the style scaled down for a station near the end of a run: the

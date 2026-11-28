@@ -206,8 +206,20 @@ const (
 // carries neither tube's hue. Both sit at about luma 50. The coast is lifted
 // with them so it keeps its step over the stronger ground.
 //
-// Vector day keeps Day's colours except for the same three, pushed the
-// other way off a light field.
+// Vector day keeps Day's colours except for the same three and the two
+// tube inks. The first day ground (sea 0xB4CDE3, land 0xD4DDD8) was two
+// greys a few luma apart, and the stream read pale by day while its night
+// was liked. These values are the "Polder" trial the owner picked from
+// rendered stills: a clearer blue sea and a yellow-green land, so the two
+// differ by hue as well as by a little brightness, with the coast taken
+// down to a dark sea green that holds against both. The tubes went faint
+// on that ground in Glass's teal and amber, so the arrivals take a deeper
+// blue that stays off the sea and the departures a redder orange that
+// stays off the land. Glass keeps its own inks; Day is shared, and a
+// change made for the stream should not repaint the handheld. The trial's
+// arrival blue was 0x004F86, which sits too close to the near-black header
+// band for OnBand, so the scope's clocks would have gone white. It is
+// lifted along its own hue just far enough to clear minBandGap.
 const (
 	vectorNightField = 0x0F161C
 	vectorNightBand  = 0x1C262E
@@ -218,9 +230,11 @@ const (
 	vectorNightWater = 0x173557
 	vectorNightLand  = 0x2A3634
 
-	vectorDayShore = 0x5A7A90
-	vectorDayWater = 0xB4CDE3
-	vectorDayLand  = 0xD4DDD8
+	vectorDayShore   = 0x2F5E52
+	vectorDayWater   = 0xA7CBE8
+	vectorDayLand    = 0xD9E2C4
+	vectorDayData    = 0x0062A6
+	vectorDayCaution = 0xD0600A
 )
 
 // The Glass Day palette, packed the same way: the same grammar on a cool light
@@ -453,9 +467,10 @@ var VectorNight = Palette{
 }
 
 // VectorDay is Glass's Day under the Vector name. A light field has no
-// floor to lift, so it is Day's colours with Vector's stronger ground and the
-// coast darkened to hold against it; Look differs too, which keeps the K cap
-// naming the look that is on.
+// floor to lift, so it is Day's colours with Vector's stronger ground, the
+// coast darkened to hold against it, and the arrival and departure inks
+// deepened so the route tubes stand off that ground; Look differs too, which
+// keeps the K cap naming the look that is on.
 //
 //nolint:gochecknoglobals // a palette is data, and color.RGBA cannot be const.
 var VectorDay = vectorDay()
@@ -698,9 +713,10 @@ func (p Palette) Light() bool {
 // filled with that same ink: every reading on the masthead would be black on
 // black, at a measured gap of exactly zero. Its OK and Caution greys are
 // nearly as bad there, at 0.058 and 0.092. Everything the other seven set on
-// their bands clears the floor with room, the tightest being PhosphorDay's
-// Data at 0.118, so nothing that was judged on a picture moves because this
-// exists.
+// their bands clears the floor, so nothing that was judged on a picture moves
+// because this exists. The tightest is VectorDay's Data at 0.101, which was
+// lifted to clear it; the tightest that was not is PhosphorDay's Data at
+// 0.118.
 //
 // It is the argument internal/radar's bandMuted already makes for the band's
 // quiet chrome, one step further out: a colour chosen against the page cannot
@@ -720,12 +736,14 @@ func (p Palette) as(look Look) Palette {
 	return p
 }
 
-// vectorDay is Day with Vector's ground and coast.
+// vectorDay is Day with Vector's ground, coast and tube inks.
 func vectorDay() Palette {
 	day := Day.as(LookVector)
 	day.Shore = rgb(vectorDayShore)
 	day.Water = rgb(vectorDayWater)
 	day.Land = rgb(vectorDayLand)
+	day.Data = rgb(vectorDayData)
+	day.Caution = rgb(vectorDayCaution)
 
 	return day
 }
