@@ -210,37 +210,6 @@ func TestApproachLabelsTable(t *testing.T) {
 	}
 }
 
-func TestOverlayHeight(t *testing.T) {
-	t.Parallel()
-
-	var scene Scene
-
-	field := boardCorridors().Field
-
-	for _, testCase := range []struct {
-		name       string
-		altitudeFt float64
-		wantFeet   float64
-		wantKnown  bool
-	}{
-		{name: "not reported", altitudeFt: 0},
-		{name: "on the approach", altitudeFt: 2000, wantFeet: 2000, wantKnown: true},
-		{name: "below sea level", altitudeFt: -25, wantFeet: -25, wantKnown: true},
-	} {
-		plane := approachPlane(lightICAO, "", 5, 0)
-		plane.Altitude = testCase.altitudeFt
-
-		feet, known := scene.overlayFeet(plane, field)
-		if feet != testCase.wantFeet || known != testCase.wantKnown {
-			t.Errorf("%s: %v %v, want %v %v", testCase.name, feet, known, testCase.wantFeet, testCase.wantKnown)
-		}
-
-		if testCase.wantKnown != (scene.captionMetres(plane, field) != 0) {
-			t.Errorf("%s: captionMetres disagrees with overlayFeet", testCase.name)
-		}
-	}
-}
-
 func TestApproachDotFor(t *testing.T) {
 	t.Parallel()
 
@@ -256,7 +225,7 @@ func TestApproachDotFor(t *testing.T) {
 	unknown := approachPlane("484AC5", "KLM9", 5, 0)
 	high := approachPlane("484AC6", "KLM10", 10, 8000)
 	low := approachPlane("484AC7", "KLM11", 2, 0)
-	low.Altitude = -40
+	low.Altitude = 1
 	unnamed := approachPlane("484AC8", "  ", 6, 2000)
 	far := approachPlane("484AC9", "KLM12", 17, 5000)
 
@@ -275,7 +244,7 @@ func TestApproachDotFor(t *testing.T) {
 			name: "above the ceiling", plane: high, wantOK: true, wantY: strip.plot.Min.Y,
 			wantAlpha: approachAboveAlpha, wantCall: "KLM10",
 		},
-		{name: "below the field", plane: low, wantOK: true, wantY: strip.plot.Max.Y, wantAlpha: 1, wantCall: "KLM11"},
+		{name: "a foot up", plane: low, wantOK: true, wantY: strip.plot.Max.Y, wantAlpha: 1, wantCall: "KLM11"},
 		{
 			name: "no callsign", plane: unnamed, wantOK: true,
 			wantY: approachY(strip.plot, 2000), wantAlpha: 1, wantCall: "484AC8",

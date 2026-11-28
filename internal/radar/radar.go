@@ -339,10 +339,12 @@ type Scene struct {
 	// clock, the caption and the hourly count set over the picture. caption
 	// is the aircraft the caption is on, and captionStarted says a frame has
 	// been drawn with the overlay, so the first one can come up without a
-	// fade. See window.go.
+	// fade. captionView is what the 3D view drew this frame's aircraft
+	// through, for the ring around the captioned one. See window.go.
 	overlay        bool
 	caption        caption
 	captionStarted bool
+	captionView    captionView
 
 	// keyPressAt is the render clock at the last key press in a bare view,
 	// and keyPressed says there has been one. Both are written by Handle and

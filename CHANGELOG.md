@@ -10,9 +10,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `--minimal-window on` draws three pieces of type over the bare 3D view for
   a stream with nothing else on screen: the local time and the corridor
-  airfield at the top right, a caption on the nearest arrival within 25 km
-  (or departure within 15 km) with its height in metres and distance in
-  kilometres at the bottom left, and the last hour's arrivals and departures
+  airfield at the top right, a caption on the nearest arrival within 15 NM
+  (or departure within 8 NM) with its height in feet and distance in
+  nautical miles at the bottom left, and the last hour's arrivals and departures
   at the bottom right. The caption holds an aircraft for at least eight
   seconds and fades in and out. Off by default, and with it off every
   picture is the same byte for byte.

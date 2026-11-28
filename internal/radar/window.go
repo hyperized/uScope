@@ -10,6 +10,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/airlines"
+	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
@@ -18,7 +19,8 @@ import (
 // picture for someone watching from a distance, with no panel behind them. A clock
 // with the corridor airfield under it at the top right, a caption naming the
 // aircraft coming in or climbing out at the bottom left, and the hour's
-// arrivals and departures at the bottom right.
+// arrivals and departures at the bottom right. While the caption shows, the
+// aircraft it names carries a ring, so a viewer can find it among the rest.
 //
 // It is drawn on every frame after the picture and touches nothing the
 // picture is drawn from, which is why none of it is in layerKey: the bare 3D
@@ -44,18 +46,23 @@ const (
 	windowColumnGap = 16
 
 	// windowCountGap is the least room left between the caption and the
-	// count, in glyph pixels. A caption that would come closer takes the
-	// count off the frame rather than run into it.
+	// count, in glyph pixels. A caption that would come closer is shortened
+	// until it does not, so the count never leaves the frame.
 	windowCountGap = 12
+
+	// captionRingShare is the radius of the ring around the captioned
+	// aircraft as a share of the model's drawn span: half the span would
+	// touch the wingtips, and three quarters leaves them some air.
+	captionRingShare = 0.75
 
 	// windowTracking spaces the small capitals out by one glyph pixel.
 	windowTracking = 1
 
-	// arrivalReachKm and departureReachKm are how close to the field an
+	// arrivalReachNm and departureReachNm are how close to the field an
 	// aircraft has to be for the caption to name it. An arrival is worth
 	// watching from further out, since it is coming towards the field.
-	arrivalReachKm   = 25.0
-	departureReachKm = 15.0
+	arrivalReachNm   = 15.0
+	departureReachNm = 8.0
 
 	// captionHold is the shortest time the caption stays on one aircraft, so
 	// it is on screen long enough to read before it moves to another.
@@ -68,35 +75,30 @@ const (
 	// so the figure does not drop to zero on the hour.
 	movementWindow = time.Hour
 
-	// kmPerNm and metresPerFoot turn the scene's nautical units into the
-	// metric ones a general audience reads.
-	kmPerNm       = 1.852
-	metresPerFoot = 0.3048
+	// feetStep rounds the caption's height to 50 ft. Altitude is reported
+	// in 25 ft steps, and a figure that flickers between two of them on
+	// every report is harder to read from across a room than it is worth.
+	feetStep = 50
 
-	// metresStep rounds a height to tens of metres. A pressure altitude is
-	// reported in 25 ft steps, so the last metre would be a figure nobody
-	// measured.
-	metresStep = 10
-
-	// tenthsBelowKm is the distance under which the caption gives tenths of
-	// a kilometre, because a final approach covers the last ten in a few
+	// tenthsBelowNm is the distance under which the caption gives tenths of
+	// a nautical mile, because a final approach covers the last ten in a few
 	// minutes and a whole number would sit still for most of it.
-	tenthsBelowKm = 10
+	tenthsBelowNm = 10
 
 	// callsignPrefix is how many letters of a callsign name the operator.
 	callsignPrefix = 3
 )
 
-// The overlay's words. The caption's units follow the owner's ruling that the
-// audience is the general public: metres up and kilometres out.
+// The overlay's words. The caption keeps aviation's units, as the rest of the
+// scope does: altitude in feet and distance in nautical miles.
 const (
 	captionInText    = "COMING IN NOW"
 	captionOutText   = "CLIMBING OUT"
 	landedLabel      = "LANDED THIS HOUR"
 	tookOffLabel     = "TOOK OFF"
 	captionSeparator = " · "
-	captionUp        = " m up"
-	captionOut       = " km out"
+	captionFeet      = " ft"
+	captionNm        = " NM"
 	captionSpace     = " "
 )
 
@@ -108,12 +110,18 @@ const (
 // described for the rest of the fade. Every string here points into the
 // airline table or into a snapshot's callsign, so holding one copies nothing.
 type caption struct {
-	icao   string
-	class  source.TrackClass
-	name   string
-	number string
-	metres float64
-	km     float64
+	icao     string
+	class    source.TrackClass
+	name     string
+	number   string
+	callsign string
+	nm       float64
+
+	// latitude, longitude and altitudeFt are where the aircraft was last
+	// seen, which is where its ring stays while the caption fades out after
+	// the aircraft has left the frame. altitudeFt is also what captionHeight
+	// turns into the caption's height.
+	latitude, longitude, altitudeFt float64
 
 	// shownAt is the render clock the caption came up at, and leaveAt the
 	// one it started going away at, which only means anything while leaving.
@@ -163,13 +171,46 @@ func (s *Scene) drawWindow(lay *layout, frame source.Frame, elapsed time.Duratio
 	}
 
 	s.followCaption(frame, elapsed)
+	s.drawCaptionRing(elapsed)
 
-	countLeft := s.measureMovements(&win, frame)
-	captionEnd := s.drawCaption(lay, &win, elapsed)
+	room := s.measureMovements(&win, frame) - win.scale*windowCountGap
+	s.drawCaption(lay, &win, elapsed, room)
+	s.drawMovements(lay, &win, frame)
+}
 
-	if captionEnd <= countLeft-win.scale*windowCountGap {
-		s.drawMovements(lay, &win, frame)
+// captionView is what the 3D view drew the frame's aircraft through, kept by
+// draw3D so the overlay, drawn after it, can put a ring on the one the
+// caption is about. ok is false on a frame with no aircraft drawn.
+type captionView struct {
+	view scene3
+	dst  *canvas.Canvas
+	ok   bool
+}
+
+// drawCaptionRing rings the aircraft the caption is on, fading with the
+// caption.
+//
+// The ring is a circle on the screen around the model, not one on the
+// ground, so it stays round at any tilt and sits on the aircraft rather than
+// under it. It is drawn through the 3D view's own clipped window, so an
+// aircraft at the edge of the picture gets part of a ring.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawCaptionRing(elapsed time.Duration) {
+	held := &s.caption
+	shot := &s.captionView
+
+	if held.icao == "" || !shot.ok {
+		return
 	}
+
+	x, y, ok := shot.view.project(held.latitude, held.longitude, held.altitudeFt)
+	if !ok {
+		return
+	}
+
+	radius := int(shot.view.cam.modelSpan * captionRingShare)
+	shot.dst.BlendStrokeCircle(x, y, radius, max(shot.view.weight, 1), s.pal.Accent, held.alpha(elapsed))
 }
 
 // drawWindowClock sets the local time at the top right, and under it the
@@ -194,8 +235,8 @@ func (s *Scene) drawWindowClock(lay *layout, win *windowLayout, frame source.Fra
 
 // followCaption decides which aircraft the caption is on for this frame.
 //
-// The nearest arrival within arrivalReachKm wins, then the nearest departure
-// within departureReachKm. Once on an aircraft the caption keeps it for at
+// The nearest arrival within arrivalReachNm wins, then the nearest departure
+// within departureReachNm. Once on an aircraft the caption keeps it for at
 // least captionHold, then goes when the aircraft stops qualifying or when a
 // departure is held and an arrival has turned up. It always fades out before
 // it changes aircraft, so two names never cross on screen. An aircraft that
@@ -218,7 +259,7 @@ func (s *Scene) followCaption(frame source.Frame, elapsed time.Duration) {
 
 	if held.icao == "" && best.found {
 		*held = caption{icao: best.plane.ICAO, class: best.class, shownAt: elapsed}
-		held.describe(best.plane, field.Field, s.captionMetres(best.plane, field.Field))
+		held.describe(best.plane, field.Field)
 
 		// The first frame the scene draws comes up whole, so a still
 		// rendered with --png shows the caption rather than its first frame
@@ -239,7 +280,7 @@ func (s *Scene) keepCaption(frame source.Frame, field source.Corridors, elapsed 
 	plane := findByICAO(frame.Planes, held.icao)
 
 	if plane != nil {
-		held.describe(*plane, field.Field, s.captionMetres(*plane, field.Field))
+		held.describe(*plane, field.Field)
 	}
 
 	if !held.leaving && s.captionDone(plane, field, elapsed, best) {
@@ -288,7 +329,7 @@ type captionPick struct {
 func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 	arrival := captionPick{class: source.TrackInbound}
 	departure := captionPick{class: source.TrackOutbound}
-	arrivalKm, departureKm := math.Inf(1), math.Inf(1)
+	arrivalNm, departureNm := math.Inf(1), math.Inf(1)
 
 	for _, plane := range frame.Planes {
 		class, near := s.captionClass(plane, frame.Corridors)
@@ -296,13 +337,13 @@ func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 			continue
 		}
 
-		distanceKm := frame.Corridors.Field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
+		distanceNm := frame.Corridors.Field.DistanceToNm(plane.Latitude, plane.Longitude)
 
 		switch {
-		case class == source.TrackInbound && distanceKm < arrivalKm:
-			arrival.plane, arrival.found, arrivalKm = plane, true, distanceKm
-		case class == source.TrackOutbound && distanceKm < departureKm:
-			departure.plane, departure.found, departureKm = plane, true, distanceKm
+		case class == source.TrackInbound && distanceNm < arrivalNm:
+			arrival.plane, arrival.found, arrivalNm = plane, true, distanceNm
+		case class == source.TrackOutbound && distanceNm < departureNm:
+			departure.plane, departure.found, departureNm = plane, true, distanceNm
 		default:
 		}
 	}
@@ -326,13 +367,11 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 		return source.TrackTransit, false
 	}
 
-	distanceKm := distanceNm * kmPerNm
-
 	switch class {
 	case source.TrackInbound:
-		return class, distanceKm <= arrivalReachKm
+		return class, distanceNm <= arrivalReachNm
 	case source.TrackOutbound:
-		return class, distanceKm <= departureReachKm
+		return class, distanceNm <= departureReachNm
 	case source.TrackTransit:
 		fallthrough
 	default:
@@ -341,46 +380,16 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 }
 
 // fromField is an aircraft's track class and its distance from the corridor
-// airfield in nautical miles, and false when it has no position or the filter is
-// hiding it. The caption and the approach strip both sort the traffic through
-// it, so an aircraft the caption calls an arrival is one the strip plots.
+// airfield in nautical miles, and false when it has no position or the
+// filter is hiding it. The caption and the approach strip both sort the
+// traffic through it, so an aircraft the caption calls an arrival is one the
+// strip plots.
 func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, float64, bool) {
 	if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
 		return source.TrackTransit, 0, false
 	}
 
 	return field.Classify(plane), field.Field.DistanceToNm(plane.Latitude, plane.Longitude), true
-}
-
-// overlayFeet is how high an aircraft is for everything set over the bare
-// 3D picture, in feet, and false when its height is not known. The caption
-// and the approach strip read a height through here and nowhere else, so
-// changing what "height" means for them is a change to this one body.
-//
-// It is the pressure altitude: the figure the transponder reports, measured
-// against the standard atmosphere rather than the field. uAirwaves leaves
-// Altitude at zero until a frame has carried one, and a real reading of
-// exactly zero feet is rare enough to lose. field is unused here; it is in
-// the signature for a height above the field.
-//
-//nolint:revive,unparam // field is the seam for a height above the airfield, see above.
-func (s *Scene) overlayFeet(plane airplane.Snapshot, field source.Airfield) (float64, bool) {
-	if plane.Altitude == 0 {
-		return 0, false
-	}
-
-	return plane.Altitude, true
-}
-
-// captionMetres is the height the caption gives, zero when there is none to
-// give, which leaves the height out of the caption's line.
-func (s *Scene) captionMetres(plane airplane.Snapshot, field source.Airfield) float64 {
-	feet, known := s.overlayFeet(plane, field)
-	if !known {
-		return 0
-	}
-
-	return feet * metresPerFoot
 }
 
 // findByICAO is the aircraft with this address on the frame, or nil when it
@@ -395,12 +404,11 @@ func findByICAO(planes []airplane.Snapshot, icao string) *airplane.Snapshot {
 	return nil
 }
 
-// describe takes the caption's figures off the aircraft, with metres its
-// height from overlayHeight. The operator's name comes from pkg/airlines when
-// the callsign's prefix is in it, followed by the rest of the callsign as the
-// flight number; otherwise the callsign stands alone, or the address when
-// there is no callsign at all.
-func (c *caption) describe(plane airplane.Snapshot, field source.Airfield, metres float64) {
+// describe takes the caption's figures off the aircraft. The operator's name
+// comes from pkg/airlines when the callsign's prefix is in it, followed by
+// the rest of the callsign as the flight number; otherwise the callsign
+// stands alone, or the address when there is no callsign at all.
+func (c *caption) describe(plane airplane.Snapshot, field source.Airfield) {
 	callsign := strings.TrimSpace(plane.Callsign)
 
 	c.name, c.number = callsign, ""
@@ -408,12 +416,23 @@ func (c *caption) describe(plane airplane.Snapshot, field source.Airfield, metre
 		c.name = plane.ICAO
 	}
 
+	c.callsign = c.name
+
 	if airline, known := airlines.Lookup(callsign); known && len(callsign) > callsignPrefix {
 		c.name, c.number = airline.Name, strings.TrimSpace(callsign[callsignPrefix:])
 	}
 
-	c.metres = metres
-	c.km = field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
+	c.latitude, c.longitude, c.altitudeFt = plane.Latitude, plane.Longitude, plane.Altitude
+	c.nm = field.DistanceToNm(plane.Latitude, plane.Longitude)
+}
+
+// captionHeight is the height the caption and the approach strip give for
+// an altitude, both in feet, and false when there is none to give. A
+// snapshot says it has no altitude with zero, and a figure at or under it is
+// not worth a caption or a dot. It is the one place either takes a height
+// from.
+func (*Scene) captionHeight(altitudeFt float64) (float64, bool) {
+	return altitudeFt, altitudeFt > 0
 }
 
 // alpha is how far the caption has come up, from zero to one.
@@ -426,18 +445,36 @@ func (c *caption) alpha(elapsed time.Duration) float64 {
 	return min(max(float64(since)/float64(captionFade), 0), 1)
 }
 
-// drawCaption sets the caption at the bottom left and returns the x just past
-// its longer line, or the box's left edge when there is no caption.
-func (s *Scene) drawCaption(lay *layout, win *windowLayout, elapsed time.Duration) int {
+// captionForm is how much the caption's second line says. Each form is
+// shorter than the one before it, and the caption takes the first that ends
+// before room.
+type captionForm int
+
+const (
+	// formFull names the operator and the flight number.
+	formFull captionForm = iota
+
+	// formCallsign gives the callsign in place of the operator's name, which
+	// is what makes a long name fit.
+	formCallsign
+
+	// formNoDistance is the callsign and the height, for when even the
+	// callsign form runs into the count.
+	formNoDistance
+)
+
+// drawCaption sets the caption at the bottom left in the longest form whose
+// second line ends at or before room, or the shortest form when none does.
+func (s *Scene) drawCaption(lay *layout, win *windowLayout, elapsed time.Duration, room int) {
 	held := &s.caption
 	if held.icao == "" {
-		return win.box.Min.X
+		return
 	}
 
 	alpha := held.alpha(elapsed)
 	line := s.windowPen(lay, win, s.faces.BodyBold, 0)
 	line.x, line.y = win.box.Min.X, win.box.Max.Y-line.height()
-	end := s.captionLine(&line, alpha, false)
+	form := s.captionFit(&line, room)
 
 	heading := s.windowPen(lay, win, s.faces.Small, windowTracking)
 	heading.x = win.box.Min.X
@@ -449,35 +486,52 @@ func (s *Scene) drawCaption(lay *layout, win *windowLayout, elapsed time.Duratio
 	}
 
 	heading.draw(word, s.classColour(held.class), alpha)
-	s.captionLine(&line, alpha, true)
-
-	return max(end, heading.x)
+	s.captionLine(&line, alpha, form, true)
 }
 
-// captionLine runs the caption's second line through pen, measuring it when
-// draw is false and setting it when true, and returns the x past its end.
-// The pieces go down one at a time so no string is ever built.
-func (s *Scene) captionLine(pen *windowPen, alpha float64, draw bool) int {
+// captionFit is the longest form of the caption's second line that, set
+// from line's pen position, ends at or before room, and the shortest form
+// when none does. The count beside it is drawn either way.
+func (s *Scene) captionFit(line *windowPen, room int) captionForm {
+	form := formFull
+	for form < formNoDistance && s.captionLine(line, 1, form, false) > room {
+		form++
+	}
+
+	return form
+}
+
+// captionLine runs the caption's second line in form through pen, measuring
+// it when draw is false and setting it when true, and returns the x past its
+// end. The pieces go down one at a time so no string is ever built, which is
+// also what lets the caption try each form against the room per frame.
+func (s *Scene) captionLine(pen *windowPen, alpha float64, form captionForm, draw bool) int {
 	held := &s.caption
 	start := pen.x
 	pen.skip = !draw
 
-	pen.draw(held.name, s.pal.Ink, alpha)
+	if form == formFull {
+		pen.draw(held.name, s.pal.Ink, alpha)
 
-	if held.number != "" {
-		pen.draw(captionSpace, s.pal.Ink, alpha)
-		pen.draw(held.number, s.pal.Ink, alpha)
+		if held.number != "" {
+			pen.draw(captionSpace, s.pal.Ink, alpha)
+			pen.draw(held.number, s.pal.Ink, alpha)
+		}
+	} else {
+		pen.draw(held.callsign, s.pal.Ink, alpha)
 	}
 
-	if held.metres > 0 {
+	if feet, known := s.captionHeight(held.altitudeFt); known {
 		pen.draw(captionSeparator, s.pal.Ink, alpha)
-		pen.drawBytes(s.metresFigure(held.metres), s.pal.Ink, alpha)
-		pen.draw(captionUp, s.pal.Ink, alpha)
+		pen.drawBytes(s.feetFigure(feet), s.pal.Ink, alpha)
+		pen.draw(captionFeet, s.pal.Ink, alpha)
 	}
 
-	pen.draw(captionSeparator, s.pal.Ink, alpha)
-	pen.drawBytes(s.kmFigure(held.km), s.pal.Ink, alpha)
-	pen.draw(captionOut, s.pal.Ink, alpha)
+	if form != formNoDistance {
+		pen.draw(captionSeparator, s.pal.Ink, alpha)
+		pen.drawBytes(s.nmFigure(held.nm), s.pal.Ink, alpha)
+		pen.draw(captionNm, s.pal.Ink, alpha)
+	}
 
 	end := pen.x
 	pen.x = start
@@ -485,19 +539,20 @@ func (s *Scene) captionLine(pen *windowPen, alpha float64, draw bool) int {
 	return end
 }
 
-// metresFigure writes a height to the nearest ten metres.
-func (s *Scene) metresFigure(metres float64) []byte {
-	return s.whole(math.Round(metres/metresStep) * metresStep)
+// feetFigure writes a height to the nearest feetStep, with the thousands
+// separated the way the scope's other altitudes are.
+func (s *Scene) feetFigure(feet float64) []byte {
+	return s.thousands(math.Round(feet/feetStep) * feetStep)
 }
 
-// kmFigure writes a distance in tenths under tenthsBelowKm and in whole
-// kilometres from there out.
-func (s *Scene) kmFigure(km float64) []byte {
-	if km < tenthsBelowKm {
-		return s.fixed(km, 1)
+// nmFigure writes a distance in tenths under tenthsBelowNm and in whole
+// nautical miles from there out.
+func (s *Scene) nmFigure(nm float64) []byte {
+	if nm < tenthsBelowNm {
+		return s.fixed(nm, 1)
 	}
 
-	return s.whole(km)
+	return s.whole(nm)
 }
 
 // measureMovements is the x the hourly count starts at, measured before

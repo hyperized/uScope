@@ -253,11 +253,13 @@ EMERGENCY above them while an aircraft is squawking one.
 `--minimal-window on` sets three pieces of type straight on the bare 3D
 picture, for a stream with everything else switched off. The local time sits
 at the top right with the corridor airfield under it. While an arrival is
-within 25 km of that airfield, or a departure within 15 km when there is no
-arrival, the bottom left names it with its height in metres and its distance
-in kilometres; the caption stays on one aircraft for at least eight seconds
-and fades in and out. The bottom right counts the arrivals and departures of
-the last hour. There is no key for it.
+within 15 NM of that airfield, or a departure within 8 NM when there is no
+arrival, the bottom left names it with its altitude in feet and its distance
+in nautical miles; the caption stays on one aircraft for at least eight seconds
+and fades in and out. A thin ring marks that aircraft in the picture for as
+long as its caption shows, and an operator name too long to fit beside the
+count gives way to the callsign. The bottom right counts the arrivals and
+departures of the last hour. There is no key for it.
 
 `--minimal-approach on` adds a see-through side view in the top-left corner
 of `minimal3d`, with or without the window overlay. Every arrival within

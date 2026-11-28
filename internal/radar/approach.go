@@ -407,7 +407,7 @@ func (s *Scene) approachDotFor(plane *airplane.Snapshot, field source.Corridors,
 		return approachDot{}, false
 	}
 
-	feet, known := s.overlayFeet(*plane, field.Field)
+	feet, known := s.captionHeight(plane.Altitude)
 	if !known {
 		return approachDot{}, false
 	}
