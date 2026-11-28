@@ -255,9 +255,13 @@ picture, for a stream with everything else switched off. The local time sits
 at the top right with the corridor airfield under it. While an arrival is
 within 15 NM of that airfield, or a departure within 8 NM when there is no
 arrival, the bottom left names it with its altitude in feet and its distance
-in nautical miles; the caption stays on one aircraft for at least eight seconds
-and fades in and out. A thin ring marks that aircraft in the picture for as
-long as its caption shows, and an operator name too long to fit beside the
+in nautical miles. The caption goes to the arrival nearest the field, the
+next to land, and stays on it until it has landed or left the 15 NM, unless
+another arrival gets more than 2 NM nearer the field; then it takes the
+nearest again. An aircraft rolling slower than 50 kt within 5 NM of the field
+counts as on the ground and is never named. The caption stays on one
+aircraft for at least eight seconds and fades in and out. A thin ring marks
+that aircraft in the picture for as long as its caption shows, and an operator name too long to fit beside the
 count gives way to the callsign. The bottom right counts the arrivals and
 departures of the last hour. There is no key for it.
 
