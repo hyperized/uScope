@@ -390,9 +390,9 @@ func (s *Scene) drawLights3(dst *canvas.Canvas, cam camera3, plane airplane.Snap
 	steady, flash := int(cam.modelSpan*navLightSpan), int(cam.modelSpan*flashLightSpan)
 	beacon := int(cam.modelSpan * beaconLightSpan)
 
-	s.lamp3(dst, vertWingTipLeft, steady, inks.port, share)
-	s.lamp3(dst, vertWingTipRight, steady, inks.starboard, share)
-	s.lamp3(dst, vertTail, steady, inks.tail, share)
+	s.lamp3(dst, s.posed.lamps.port, steady, inks.port, share)
+	s.lamp3(dst, s.posed.lamps.starboard, steady, inks.starboard, share)
+	s.lamp3(dst, s.posed.lamps.tail, steady, inks.tail, share)
 
 	// The fade only reaches the colour. Which frames a flash lights is the
 	// same at every share, so a light fading in keeps the rhythm it will have
@@ -400,14 +400,14 @@ func (s *Scene) drawLights3(dst *canvas.Canvas, cam camera3, plane airplane.Snap
 	lit := s.flashesFor(plane.ICAO)
 
 	if lit.strobe {
-		s.lamp3(dst, vertWingTipLeft, flash, inks.strobe, share)
-		s.lamp3(dst, vertWingTipRight, flash, inks.strobe, share)
-		s.lamp3(dst, vertTail, flash, inks.strobe, share)
+		s.lamp3(dst, s.posed.lamps.port, flash, inks.strobe, share)
+		s.lamp3(dst, s.posed.lamps.starboard, flash, inks.strobe, share)
+		s.lamp3(dst, s.posed.lamps.tail, flash, inks.strobe, share)
 	}
 
 	if lit.beacon {
-		s.lamp3(dst, vertBeacon, beacon, inks.beacon, share)
-		s.lamp3(dst, vertBeacon, beacon/2, inks.beaconCore, share)
+		s.lamp3(dst, s.posed.lamps.beacon, beacon, inks.beacon, share)
+		s.lamp3(dst, s.posed.lamps.beacon, beacon/2, inks.beaconCore, share)
 	}
 }
 

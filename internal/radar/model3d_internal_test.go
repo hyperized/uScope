@@ -2,10 +2,13 @@ package radar
 
 import (
 	"image"
+	"image/color"
 	"math"
 	"testing"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
+	"github.com/hyperized/uScope/internal/theme"
+	"github.com/hyperized/uScope/pkg/canvas"
 )
 
 // The two depths the scale is checked at, in nautical miles north of the
@@ -507,3 +510,597 @@ func TestProjectModelDropsWhatTheCameraRefuses(t *testing.T) {
 		}
 	}
 }
+
+// benchFleet3 is the fleet BenchmarkModels3 draws: 120 aircraft spread over a
+// 40 nm scope at every heading and a spread of heights, in the world the
+// camera looks at, with the pixel each one lands on.
+type benchFleet3 struct {
+	planes  [benchModels]airplane.Snapshot
+	centres [benchModels]point3
+	at      [benchModels]image.Point
+}
+
+// benchModels is how many aircraft a busy stream frame carries.
+const benchModels = 120
+
+// newBenchFleet3 places the fleet on a grid inside the ring, eleven across,
+// so none of them is refused by the camera and every heading is drawn.
+func newBenchFleet3(tb testing.TB, cam camera3) benchFleet3 {
+	tb.Helper()
+
+	const (
+		across  = 11
+		spacing = 6.0
+		headDeg = 3.0
+		climb   = 1500.0
+	)
+
+	var fleet benchFleet3
+
+	for index := range benchModels {
+		row, col := index/across, index%across
+		altFt := 2000 + float64(index%13)*3000
+
+		fleet.centres[index] = point3{
+			east:  (float64(col) - across/2) * spacing,
+			north: (float64(row) - across/2) * spacing,
+			up:    altFt * DefaultExaggerate / ftPerNm,
+		}
+		fleet.planes[index] = airplane.Snapshot{
+			Heading:  float64(index) * headDeg,
+			VertRate: float64(index%3-1) * climb,
+		}
+
+		x, y, ok := cam.at(fleet.centres[index])
+		if !ok {
+			tb.Fatalf("aircraft %d at %+v is off the camera", index, fleet.centres[index])
+		}
+
+		fleet.at[index] = image.Pt(x, y)
+	}
+
+	return fleet
+}
+
+// BenchmarkModels3 prices the aircraft models alone, 120 of them on a
+// 2560x1440 canvas, at the span the panel draws (scale 1) and the span the
+// stream draws (scale 2).
+func BenchmarkModels3(b *testing.B) {
+	const width, height = 2560, 1440
+
+	for _, bench := range []struct {
+		name  string
+		scale int
+	}{
+		{name: "scale 1", scale: 1},
+		{name: "scale 2", scale: 2},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			cam, built := newCamera3(image.Rect(0, 0, width, height), framing3{
+				scopeNm:     cameraRangeNm,
+				azimuth:     200,
+				elevation:   defaultElevation,
+				topNm:       cameraTopNm,
+				topRadiusNm: bowlRadiusNm(bowlTopFt, cameraRangeNm),
+			})
+			if !built {
+				b.Fatal("newCamera3 refused the bench box")
+			}
+
+			cam.modelSpan = modelSpanPx * float64(bench.scale)
+
+			fleet := newBenchFleet3(b, cam)
+
+			canv, err := canvas.New(width, height)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			scene := &Scene{}
+			scene.SetPalette(theme.VectorNight)
+
+			ink := theme.VectorNight.Ink
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for range b.N {
+				for index := range benchModels {
+					scene.drawShape3(canv, cam, fleet.planes[index], fleet.centres[index], fleet.at[index],
+						ink, bench.scale)
+				}
+			}
+		})
+	}
+}
+
+// TestJetMeshFillsItsArrays checks the hand-counted sizes of the twin jet
+// against what the build actually made. The counts size Scene.posed and the
+// mesh's own arrays, so a table edited without them would either panic at
+// init or leave a run of zero faces drawn at the origin.
+func TestJetMeshFillsItsArrays(t *testing.T) {
+	t.Parallel()
+
+	if jet.vertexCount != jetVertexCount {
+		t.Errorf("the build made %d vertices, jetVertexCount is %d", jet.vertexCount, jetVertexCount)
+	}
+
+	if jet.faceCount != jetFaceCount {
+		t.Errorf("the build made %d faces, jetFaceCount is %d", jet.faceCount, jetFaceCount)
+	}
+
+	covered := make([]int, jetFaceCount)
+
+	for index, part := range jet.parts {
+		if part.end <= part.first {
+			t.Errorf("part %d has no faces", index)
+		}
+
+		for face := part.first; face < part.end; face++ {
+			covered[face]++
+		}
+	}
+
+	for face, count := range covered {
+		if count != 1 {
+			t.Errorf("face %d is in %d parts, want exactly one", face, count)
+		}
+	}
+}
+
+// TestJetFacesAreConvexAndOutward checks the two things the painter's order
+// rests on. Every face is filled as a fan, which is only right for a convex
+// polygon, so every corner of every face has to turn the same way. And a
+// closed part's normals have to point out of it, or culling would draw the
+// inside of the tube and hide the outside.
+func TestJetFacesAreConvexAndOutward(t *testing.T) {
+	t.Parallel()
+
+	const tolerance = 1e-9
+
+	for index := range jetFaceCount {
+		face := &jet.faces[index]
+
+		if length := face.normal.dot(face.normal); math.Abs(length-1) > tolerance {
+			t.Errorf("face %d's normal has a squared length of %g, want 1", index, length)
+		}
+
+		// faceOutwards may have turned the normal against the winding, so
+		// what matters is that every corner turns the same way as the first.
+		var first float64
+
+		for corner := range face.count {
+			here := jet.vertices[face.corners[corner]]
+			next := jet.vertices[face.corners[(corner+1)%face.count]]
+			after := jet.vertices[face.corners[(corner+2)%face.count]]
+
+			turn := cross3(next.minus(here), after.minus(next)).dot(face.normal)
+			if corner == 0 {
+				first = turn
+			}
+
+			if turn*first < -tolerance {
+				t.Errorf("face %d turns the other way at corner %d, so it is not convex", index, corner)
+			}
+		}
+	}
+
+	for index, part := range jet.parts {
+		if !part.closed {
+			continue
+		}
+
+		middle := partMiddle(part)
+
+		for face := part.first; face < part.end; face++ {
+			if out := jet.faces[face].normal.dot(faceMiddle(&jet.faces[face]).minus(middle)); out <= 0 {
+				t.Errorf("part %d face %d points into the part", index, face)
+			}
+		}
+	}
+}
+
+// cross3 is the vector product, which the convexity check needs and the
+// draw path does not.
+func cross3(first, second point3) point3 {
+	return point3{
+		east:  first.north*second.up - first.up*second.north,
+		north: first.up*second.east - first.east*second.up,
+		up:    first.east*second.north - first.north*second.east,
+	}
+}
+
+// faceMiddle is the average of a face's corners.
+func faceMiddle(face *jetFace) point3 {
+	var sum point3
+
+	for _, corner := range face.corners[:face.count] {
+		sum = point3{
+			east:  sum.east + jet.vertices[corner].east,
+			north: sum.north + jet.vertices[corner].north,
+			up:    sum.up + jet.vertices[corner].up,
+		}
+	}
+
+	count := float64(face.count)
+
+	return point3{east: sum.east / count, north: sum.north / count, up: sum.up / count}
+}
+
+// partMiddle is the average of a part's face middles, which is inside a
+// convex part.
+func partMiddle(part jetPart) point3 {
+	var sum point3
+
+	for face := part.first; face < part.end; face++ {
+		middle := faceMiddle(&jet.faces[face])
+		sum = point3{east: sum.east + middle.east, north: sum.north + middle.north, up: sum.up + middle.up}
+	}
+
+	count := float64(part.end - part.first)
+
+	return point3{east: sum.east / count, north: sum.north / count, up: sum.up / count}
+}
+
+// TestJetLampsSitWhereTheLightsGo checks the lights land on the twin jet's
+// own wingtips, the end of its tail and the top of its body, which are not
+// where the dart's are.
+func TestJetLampsSitWhereTheLightsGo(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		vertex int
+		want   point3
+	}{
+		{name: "port wingtip", vertex: jet.lamps.port, want: point3{east: -0.5, north: -0.2, up: jetWingUp(0.5)}},
+		{
+			name: "starboard wingtip", vertex: jet.lamps.starboard,
+			want: point3{east: 0.5, north: -0.2, up: jetWingUp(0.5)},
+		},
+		{name: "tail", vertex: jet.lamps.tail, want: point3{north: -0.51, up: 0.042}},
+		{name: "beacon", vertex: jet.lamps.beacon, want: jetBeaconAt},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			const tolerance = 1e-12
+
+			got := jet.vertices[testCase.vertex]
+			if off := got.minus(testCase.want); off.dot(off) > tolerance {
+				t.Errorf("vertex %d is at %+v, want %+v", testCase.vertex, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestJetOrder checks the painter's order for each answer to the three
+// questions it asks of the camera: which wing is further, whether the camera
+// is above, and whether the nose points at it.
+func TestJetOrder(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		look point3
+		want [jetPartCount]int
+	}{
+		{
+			name: "from above and behind, left wing away",
+			look: point3{east: -0.5, north: 0.5, up: -0.5},
+			want: [jetPartCount]int{
+				jetEngineLeft, jetWingLeft, jetTailLeft, jetFuselage, jetFin,
+				jetEngineRight, jetWingRight, jetTailRight,
+			},
+		},
+		{
+			name: "from above and in front, right wing away",
+			look: point3{east: 0.5, north: -0.5, up: -0.5},
+			want: [jetPartCount]int{
+				jetTailRight, jetEngineRight, jetWingRight, jetFuselage, jetFin,
+				jetTailLeft, jetEngineLeft, jetWingLeft,
+			},
+		},
+		{
+			name: "from below and behind, right wing away",
+			look: point3{east: 0.5, north: 0.5, up: 0.5},
+			want: [jetPartCount]int{
+				jetWingRight, jetEngineRight, jetTailRight, jetFin, jetFuselage,
+				jetWingLeft, jetEngineLeft, jetTailLeft,
+			},
+		},
+		{
+			name: "from below and in front, left wing away",
+			look: point3{east: -0.5, north: -0.5, up: 0.5},
+			want: [jetPartCount]int{
+				jetTailLeft, jetWingLeft, jetEngineLeft, jetFin, jetFuselage,
+				jetTailRight, jetWingRight, jetEngineRight,
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, far := jetOrder(testCase.look)
+			if got != testCase.want {
+				t.Errorf("jetOrder = %v, want %v", got, testCase.want)
+			}
+
+			if far != 3 {
+				t.Errorf("far = %d, want the three parts of one side", far)
+			}
+		})
+	}
+}
+
+// TestJetInk checks the two ends of the shade scale on each kind of palette:
+// on a night one the lit faces carry the full ink and the dim ones fade
+// towards the field, on a day one it runs the other way round.
+func TestJetInk(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		pal   theme.Palette
+		shade float64
+		alpha float64
+	}{
+		{name: "night, brightest", pal: theme.Night, shade: 1, alpha: 1},
+		{name: "night, dimmest", pal: theme.Night, shade: jetDarkest, alpha: jetDarkest},
+		{name: "day, brightest", pal: theme.Day, shade: 1, alpha: jetDayFloor},
+		{name: "day, dimmest", pal: theme.Day, shade: jetDarkest, alpha: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			scene.SetPalette(testCase.pal)
+
+			got := scene.jetInk(testCase.pal.Ink, testCase.shade)
+			if want := scene.fade(testCase.pal.Ink, testCase.alpha); got != want {
+				t.Errorf("jetInk(%g) = %v, want %v", testCase.shade, got, want)
+			}
+		})
+	}
+}
+
+// jetTestCanvas is a canvas the size of the test camera's box, cleared to
+// the night field.
+func jetTestCanvas(tb testing.TB) *canvas.Canvas {
+	tb.Helper()
+
+	canv, err := canvas.New(cameraSide, cameraSide)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	canv.Clear(theme.Night.Field)
+
+	return canv
+}
+
+// nightPainted counts the pixels that are not the night field.
+func nightPainted(canv *canvas.Canvas) int {
+	img := canv.Image()
+	count := 0
+
+	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
+		for x := img.Rect.Min.X; x < img.Rect.Max.X; x++ {
+			if img.RGBAAt(x, y) != theme.Night.Field {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+// TestDrawModelPicksTheModelBySpan checks the threshold: the dart below
+// jetMinSpanPx and the twin jet from it, told apart by the lamps each leaves
+// in Scene.posed for the lights to read.
+func TestDrawModelPicksTheModelBySpan(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		span float64
+		want modelLamps
+	}{
+		{name: "the panel's sixteen pixels", span: modelSpanPx, want: dartLamps},
+		{name: "just under the threshold", span: jetMinSpanPx - 0.5, want: dartLamps},
+		{name: "at the threshold", span: jetMinSpanPx, want: jet.lamps},
+		{name: "the stream's thirty-two", span: 2 * modelSpanPx, want: jet.lamps},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cam := testCamera(0, defaultElevation)
+			cam.modelSpan = testCase.span
+
+			scene := &Scene{}
+			scene.SetPalette(theme.Night)
+
+			canv := jetTestCanvas(t)
+			scene.drawModel3(canv, cam, airplane.Snapshot{Heading: 60}, point3{north: modelNearNm},
+				theme.Night.Ink, 1)
+
+			if scene.posed.lamps != testCase.want {
+				t.Errorf("lamps = %+v, want %+v", scene.posed.lamps, testCase.want)
+			}
+
+			if nightPainted(canv) == 0 {
+				t.Error("drawModel3 painted nothing")
+			}
+		})
+	}
+}
+
+// TestJetLampsLandOnTheWingtips checks the lights follow the twin jet's
+// projected wingtips: a wing's span apart across the screen, the right wing
+// to the right of a northbound aircraft seen from the south.
+func TestJetLampsLandOnTheWingtips(t *testing.T) {
+	t.Parallel()
+
+	const span = 64.0
+
+	cam := testCamera(0, defaultElevation)
+	cam.modelSpan = span
+
+	scene := &Scene{}
+	scene.SetPalette(theme.Night)
+
+	centre := point3{north: modelNearNm}
+	scale := cam.spanScale(centre)
+	scene.drawJet3(jetTestCanvas(t), cam, centre, newOrient3(0, 0, 0, scale), scale, theme.Night.Ink)
+
+	left, right := scene.posed.lamps.port, scene.posed.lamps.starboard
+
+	const tolerance = 2
+
+	if got := scene.posed.atX[right] - scene.posed.atX[left]; math.Abs(float64(got)-span) > tolerance {
+		t.Errorf("the wingtip lights are %d px apart, want %g within %d", got, span, tolerance)
+	}
+}
+
+// TestJetShadesItsFaces checks the twin jet comes out in a spread of shades of
+// one ink rather than flat, which is what the light and the tones are for.
+func TestJetShadesItsFaces(t *testing.T) {
+	t.Parallel()
+
+	const span = 128.0
+
+	cam := testCamera(0, defaultElevation)
+	cam.modelSpan = span
+
+	scene := &Scene{}
+	scene.SetPalette(theme.Night)
+
+	centre := point3{north: modelNearNm}
+	scale := cam.spanScale(centre)
+	canv := jetTestCanvas(t)
+	scene.drawJet3(canv, cam, centre, newOrient3(70, 0, 0, scale), scale, theme.Night.Ink)
+
+	shades := map[color.RGBA]bool{}
+	img := canv.Image()
+
+	for y := range cameraSide {
+		for x := range cameraSide {
+			if got := img.RGBAAt(x, y); got != theme.Night.Field {
+				shades[got] = true
+			}
+		}
+	}
+
+	const atLeast = 8
+
+	if len(shades) < atLeast {
+		t.Errorf("the twin jet came out in %d colours, want at least %d shades", len(shades), atLeast)
+	}
+}
+
+// TestJetDropsWhatTheCameraRefuses checks a twin jet behind the camera paints
+// nothing, as the dart does: every face touches a refused vertex.
+func TestJetDropsWhatTheCameraRefuses(t *testing.T) {
+	t.Parallel()
+
+	cam := testCamera(0, defaultElevation)
+	cam.modelSpan = 2 * modelSpanPx
+
+	scene := &Scene{}
+	scene.SetPalette(theme.Night)
+
+	canv := jetTestCanvas(t)
+	scene.drawJet3(canv, cam, point3{north: -10 * cameraRangeNm}, newOrient3(0, 0, 0, 1), 1, theme.Night.Ink)
+
+	if got := nightPainted(canv); got != 0 {
+		t.Errorf("a twin jet behind the camera painted %d pixels, want none", got)
+	}
+}
+
+// levelCamera is a cell camera at the height of its subject, so a wings-level
+// aircraft's wings are seen almost exactly edge on.
+func levelCamera(centre image.Point, span float64) camera3 {
+	return camera3{
+		eye:       point3{north: -attDepthNm},
+		forward:   point3{north: 1},
+		right:     point3{east: 1},
+		above:     point3{up: 1},
+		focal:     attDepthNm,
+		centerX:   centre.X,
+		centerY:   centre.Y,
+		limitX:    cameraSide,
+		limitY:    cameraSide,
+		modelSpan: span,
+	}
+}
+
+// TestJetEdgeOnWingStaysALine checks a wing seen edge on is drawn unbroken
+// from the body to the tip. Filled by pixel centres alone it would be a dotted
+// line or nothing, since its width on screen is a fraction of a pixel.
+func TestJetEdgeOnWingStaysALine(t *testing.T) {
+	t.Parallel()
+
+	const span = 64
+
+	centre := image.Pt(cameraSide/2, cameraSide/2)
+	cam := levelCamera(centre, span)
+
+	scene := &Scene{}
+	scene.SetPalette(theme.Night)
+
+	canv := jetTestCanvas(t)
+	scale := cam.spanScale(point3{})
+	scene.drawJet3(canv, cam, point3{}, newOrient3(0, 0, 0, scale), scale, theme.Night.Ink)
+
+	img := canv.Image()
+
+	// From the edge of the body to just short of the tip on the right, every
+	// column holds something within a couple of rows of the wing's height.
+	for column := centre.X + span/8; column < centre.X+span/2-1; column++ {
+		found := false
+
+		for row := centre.Y - 4; row <= centre.Y+4; row++ {
+			if img.RGBAAt(column, row) != theme.Night.Field {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			t.Fatalf("column %d of the edge-on wing is empty, want an unbroken line to the tip", column)
+		}
+	}
+}
+
+// TestJetAllocations checks the twin jet keeps the draw path's rule: nothing
+// is allocated per aircraft, at the stream's span or a close shot's.
+//
+//nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
+func TestJetAllocations(t *testing.T) {
+	cam := testCamera(200, defaultElevation)
+	canv := jetTestCanvas(t)
+
+	scene := &Scene{}
+	scene.SetPalette(theme.Day)
+
+	plane := airplane.Snapshot{Heading: 120, VertRate: 1500}
+	centre := point3{north: modelNearNm}
+
+	atX, atY, seen := cam.at(centre)
+	if !seen {
+		t.Fatal("the camera refused the test aircraft")
+	}
+
+	for _, span := range []float64{2 * modelSpanPx, 8 * modelSpanPx} {
+		cam.modelSpan = span
+
+		draw := func() { scene.drawShape3(canv, cam, plane, centre, image.Pt(atX, atY), theme.Day.Ink, 1) }
+		if got := testing.AllocsPerRun(allocRuns3, draw); got != 0 {
+			t.Errorf("drawing a twin jet %g px across allocated %.1f times, want 0", span, got)
+		}
+	}
+}
+
+// allocRuns3 is how many draws TestJetAllocations averages over.
+const allocRuns3 = 20
