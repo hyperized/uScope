@@ -22,14 +22,14 @@ import (
 const (
 	// approachLeftPercent, approachTopPercent and approachWidthPercent place
 	// the panel as shares of the scope box, which is the picture less the
-	// bar and the board when either is on.
-	approachLeftPercent  = 3
-	approachTopPercent   = 6
-	approachWidthPercent = 40
-
-	// approachAspectTenths is the panel's width over its height, in tenths:
-	// 2 to 1, which holds the plot and the rows of callsigns over it.
-	approachAspectTenths = 20
+	// bar and the board when either is on. approachHeightPercent is its
+	// height as a share of the box's width: a tenth, half the thickness of
+	// the 40 percent wide, 2 to 1 panel it replaced, which the owner found
+	// too heavy on the live stream.
+	approachLeftPercent   = 3
+	approachTopPercent    = 6
+	approachWidthPercent  = 65
+	approachHeightPercent = 10
 
 	// approachReachNm is the distance at the plot's left edge and
 	// approachCeilingFt the height at its top. A three-degree descent is
@@ -39,17 +39,21 @@ const (
 	approachCeilingFt = 5000.0
 	approachGlideDeg  = 3.0
 
-	// approachLowFt and approachHighFt are the heights the two quiet labels
-	// on the left stand at; approachTickNm is the step of the labels along
-	// the bottom.
-	approachLowFt  = 2500.0
-	approachHighFt = 5000.0
+	// approachTickNm is the step of the distance labels along the bottom.
 	approachTickNm = 5.0
 
-	// approachPad is the air inside the panel's edge and approachGap the air
-	// between its rows, in glyph pixels so both grow with the type.
-	approachPad = 6
-	approachGap = 4
+	// approachPad is the air inside the panel's sides, approachTopPad and
+	// approachBottomPad the air over the heading and under the distances,
+	// approachGap the air between the gutter and the plot and approachAxisGap
+	// between the plot and its distances, all in glyph pixels so they grow
+	// with the type. The top and bottom are tighter than the sides because
+	// at a tenth of the width every glyph pixel of height is a share of the
+	// plot.
+	approachPad       = 6
+	approachTopPad    = 4
+	approachBottomPad = 3
+	approachGap       = 4
+	approachAxisGap   = 2
 
 	// approachDotRadius and approachFocusRadius are the dots' radii in glyph pixels:
 	// the aircraft the caption is on is drawn half again as large.
@@ -76,16 +80,19 @@ const (
 	approachMaxDots = 32
 
 	// approachFixedObstacles is room for the ground line, the heading, the
-	// six axis labels and the "+N" corner in the label table, ahead of the
+	// five axis labels and the "+N" corner in the label table, ahead of the
 	// dots and their callsigns.
-	approachFixedObstacles = 10
+	approachFixedObstacles = 8
 
 	// approachRows is how many rows over its dot a callsign may climb before
 	// it gives up, and approachHeadroomRows how many of them the panel keeps
 	// clear above the plot, so a dot at the ceiling still has room for its
-	// name. approachRowGap is the air between two rows, in glyph pixels.
-	approachRows         = 3
-	approachHeadroomRows = 2
+	// name. The heading shares that row, in the gutter. approachRowGap is the
+	// air between two rows, in glyph pixels. Two rows is what the thinner
+	// panel holds: from a dot on the ground the second row reaches the top of
+	// the plot.
+	approachRows         = 2
+	approachHeadroomRows = 1
 	approachRowGap       = 1
 
 	// approachSlideSteps bounds how many things a callsign steps past on one
@@ -117,7 +124,6 @@ const (
 const (
 	approachHeading = "INBOUND TRAFFIC"
 	approachField   = "field"
-	approachLowText = "2,500 ft"
 	approachTopText = "5,000 ft"
 
 	// approachMorePrefix leads the count of dots without a callsign, and
@@ -131,7 +137,7 @@ const (
 func (s *Scene) approachShown() bool { return s.shown == ViewMinimal3D && s.approach }
 
 // approachLayout is where the strip's pieces go on this frame: the panel, the
-// plot inside it, and the type's scale.
+// plot inside it, the gutter left of the plot, and the type's scale.
 type approachLayout struct {
 	panel  image.Rectangle
 	plot   image.Rectangle
@@ -145,39 +151,60 @@ type approachLayout struct {
 // newApproachLayout fits the strip into the top left of the scope box, and
 // reports false when the box is too small for its heading and a plot, or
 // there is no face to set it in.
+//
+// The heading sits in the gutter left of the plot, on the row above it, with
+// the ceiling's height under it and the "+N" at the ground. That gutter is as
+// wide as the heading, which costs about a quarter of its width; the other place
+// for it, a line of its own over the plot, would cost a fifth of the height,
+// and height is what the panel is short of.
 func (s *Scene) newApproachLayout(lay *layout) (approachLayout, bool) {
 	win := newWindowLayout(lay)
 	box := lay.scope
 	left := box.Min.X + box.Dx()*approachLeftPercent/percent
 	top := box.Min.Y + box.Dy()*approachTopPercent/percent
-	width := box.Dx() * approachWidthPercent / percent
+	right := min(left+box.Dx()*approachWidthPercent/percent, s.approachRightLimit(lay, &win))
 
 	strip := approachLayout{
-		panel:  image.Rect(left, top, left+width, top+width*tenths/approachAspectTenths),
+		panel:  image.Rect(left, top, right, top+box.Dx()*approachHeightPercent/percent),
 		scale:  win.scale,
 		shadow: win.shadow,
 		gap:    win.scale * approachGap,
 	}
 
 	pen := s.windowPen(lay, &win, s.faces.Small, 0)
+	heading := s.windowPen(lay, &win, s.faces.Small, windowTracking)
 	strip.line = pen.height()
 	strip.pitch = strip.line + win.scale*approachRowGap
 	pad := win.scale * approachPad
-	gutter := pen.measure(approachTopText) + strip.gap
-	headroom := approachHeadroomRows * strip.pitch
+	gutter := max(heading.measure(approachHeading), pen.measure(approachTopText), pen.measure(approachMoreWidest))
 
 	strip.plot = image.Rect(
-		strip.panel.Min.X+pad+gutter, strip.panel.Min.Y+pad+strip.line+strip.gap+headroom,
-		strip.panel.Max.X-pad, strip.panel.Max.Y-pad-strip.line-strip.gap,
+		strip.panel.Min.X+pad+gutter+strip.gap,
+		strip.panel.Min.Y+win.scale*approachTopPad+approachHeadroomRows*strip.pitch,
+		strip.panel.Max.X-pad,
+		strip.panel.Max.Y-win.scale*(approachBottomPad+approachAxisGap)-strip.line,
 	)
 
-	heading := s.windowPen(lay, &win, s.faces.Small, windowTracking)
-	fits := heading.measure(approachHeading) <= strip.panel.Dx()-2*pad
+	// A plot shorter than its rows of callsigns, or narrower than its own
+	// heading, has no room for a queue.
+	tall := strip.plot.Dy() >= approachRows*strip.pitch
+	wide := strip.plot.Dx() >= gutter
 
-	// A plot shorter than two rows of type has no room for a queue.
-	tall := strip.plot.Dy() >= approachHeadroomRows*strip.pitch
+	return strip, strip.line > 0 && tall && wide
+}
 
-	return strip, strip.line > 0 && fits && tall
+// approachRightLimit is the x the strip has to end at to stay clear of the
+// window overlay's clock, with the overlay's usual gap, or no limit while
+// the overlay is off. The clock face has fixed-width digits, so measuring
+// the format itself gives the width of every time it can show.
+func (s *Scene) approachRightLimit(lay *layout, win *windowLayout) int {
+	if !s.windowShown() {
+		return math.MaxInt
+	}
+
+	clock := s.windowPen(lay, win, s.faces.Large, 0)
+
+	return win.box.Max.X - clock.measure(clockFormat) - win.scale*windowCountGap
 }
 
 // percent and tenths are the denominators of the layout's shares, and
@@ -224,7 +251,7 @@ func (s *Scene) drawApproachPanel(lay *layout, strip *approachLayout) {
 
 	win := windowLayout{scale: strip.scale, shadow: strip.shadow}
 	heading := s.windowPen(lay, &win, s.faces.Small, windowTracking)
-	heading.x, heading.y = panel.Min.X+strip.scale*approachPad, panel.Min.Y+strip.scale*approachPad
+	heading.x, heading.y = panel.Min.X+strip.scale*approachPad, panel.Min.Y+strip.scale*approachTopPad
 	s.approachText(&heading, approachHeading, s.pal.Muted)
 
 	thin := max(1, strip.scale/approachThinDivisor)
@@ -240,12 +267,18 @@ func (s *Scene) drawApproachPanel(lay *layout, strip *approachLayout) {
 	s.drawApproachAxes(lay, strip, &win)
 }
 
-// drawApproachAxes sets the distance labels under the plot and the two
-// height labels left of it.
+// drawApproachAxes sets the distance labels under the plot and the
+// ceiling's height in the gutter under the heading.
+//
+// The ceiling's label hangs from the top of the plot rather than being
+// centred on it, which would put it half over the heading. The panel used
+// to mark 2,500 ft as well; at half the height that label sat on top of
+// both the ceiling's and the "+N", and the reference line already shows
+// how the height falls.
 func (s *Scene) drawApproachAxes(lay *layout, strip *approachLayout, win *windowLayout) {
 	plot := strip.plot
 	pen := s.windowPen(lay, win, s.faces.Small, 0)
-	pen.y = plot.Max.Y + strip.gap
+	pen.y = plot.Max.Y + strip.scale*approachAxisGap
 
 	// The labels at 15, 10 and 5 NM, far to near; the field's own closes
 	// the row.
@@ -263,14 +296,8 @@ func (s *Scene) drawApproachAxes(lay *layout, strip *approachLayout, win *window
 	pen.x = plot.Max.X - pen.measure(approachField)
 	s.approachText(&pen, approachField, s.pal.Muted)
 
-	for _, mark := range [...]struct {
-		feet float64
-		word string
-	}{{approachLowFt, approachLowText}, {approachHighFt, approachTopText}} {
-		pen.x = plot.Min.X - strip.gap - pen.measure(mark.word)
-		pen.y = approachY(plot, mark.feet) - strip.line/2
-		s.approachText(&pen, mark.word, s.pal.Muted)
-	}
+	pen.x, pen.y = plot.Min.X-strip.gap-pen.measure(approachTopText), plot.Min.Y
+	s.approachText(&pen, approachTopText, s.pal.Muted)
 }
 
 // drawApproachGlide draws the faint dashed line a three-degree descent to
@@ -295,9 +322,11 @@ func drawApproachGlide(lay *layout, strip *approachLayout, ink color.RGBA, width
 }
 
 // approachText sets value at the pen and enters the place it took in the
-// label table.
+// label table, widened by the air a callsign keeps from another, so a
+// callsign slid up against the heading does not run on into it.
 func (s *Scene) approachText(pen *windowPen, value string, ink color.RGBA) {
-	s.approachLabels.add(image.Rect(pen.x, pen.y, pen.x+pen.measure(value), pen.y+pen.height()))
+	air := pen.scale * approachLabelGap
+	s.approachLabels.add(image.Rect(pen.x-air, pen.y, pen.x+pen.measure(value)+air, pen.y+pen.height()))
 	pen.draw(value, ink, 1)
 }
 
@@ -511,25 +540,38 @@ const (
 	// needs it: a centred callsign over the nearest dot covers the spot
 	// the next dot's leader has to come down through.
 	leanRight
+
+	// leanStagger leans right and also keeps a callsign on any row but the
+	// top one off the next dot's column. With two rows a bunch only fits by
+	// alternating: a lower callsign over the next dot shuts that dot out of
+	// its own row and puts the lower row across its leader.
+	leanStagger
 )
 
 // placeApproachLabels gives each dot its callsign's place and returns how
-// many found none, keeping that count on the label table. It lays the queue
-// out centred first, and when that leaves a dot bare it lays it out again
-// leaning right, keeping whichever leaves fewer bare.
+// many found none, keeping that count on the label table. It tries each
+// lean in the order they are declared, stopping at the first that labels
+// every dot; when none does it keeps the earliest that left the fewest bare.
 func (s *Scene) placeApproachLabels(pen *windowPen, strip *approachLayout, dots []approachDot) int {
 	base := s.approachLabels.count
+	best, fewest := leanCentre, math.MaxInt
 
-	if s.layApproachLabels(pen, strip, dots, leanCentre) == 0 {
-		return 0
+	for lean := leanCentre; lean <= leanStagger; lean++ {
+		s.approachLabels.count = base
+
+		bare := s.layApproachLabels(pen, strip, dots, lean)
+		if bare == 0 {
+			return 0
+		}
+
+		if bare < fewest {
+			best, fewest = lean, bare
+		}
 	}
 
-	centred := s.approachLabels.unlabelled
-	s.approachLabels.count = base
-
-	if s.layApproachLabels(pen, strip, dots, leanRight) > centred {
+	if best != leanStagger {
 		s.approachLabels.count = base
-		s.layApproachLabels(pen, strip, dots, leanCentre)
+		s.layApproachLabels(pen, strip, dots, best)
 	}
 
 	return s.approachLabels.unlabelled
@@ -565,7 +607,11 @@ func (s *Scene) layApproachLabels(pen *windowPen, strip *approachLayout, dots []
 		dot := &dots[index]
 		probe := approachProbe{
 			strip: strip, dot: dot, width: pen.measure(dot.callsign), height: pen.height(),
-			own: labels.dotsFrom + index,
+			own: labels.dotsFrom + index, next: math.MinInt, stagger: lean == leanStagger,
+		}
+
+		if index+1 < len(dots) {
+			probe.next = dots[index+1].x
 		}
 
 		dot.label, dot.labelled = s.findApproachSpot(&probe, &run, lean)
@@ -588,13 +634,22 @@ func (s *Scene) layApproachLabels(pen *windowPen, strip *approachLayout, dots []
 	return labels.unlabelled
 }
 
-// approachProbe is one callsign being placed: its dot, its size, and where
-// its own disc is in the label table.
+// approachProbe is one callsign being placed: its dot, its size, where its
+// own disc is in the label table, and the column of the dot placed after it,
+// which a staggered lay-out keeps its lower rows off.
 type approachProbe struct {
 	strip         *approachLayout
 	dot           *approachDot
 	width, height int
 	own           int
+	next          int
+	stagger       bool
+}
+
+// coversNext reports whether box, on row, would sit over the next dot's
+// column on a row a staggered lay-out keeps clear for it.
+func (p *approachProbe) coversNext(box image.Rectangle, row int) bool {
+	return p.stagger && row < approachRows-1 && box.Min.X <= p.next+p.strip.scale
 }
 
 // box is the callsign's box with its left edge at x, on row.
@@ -612,7 +667,7 @@ func (p *approachProbe) box(x, row int) image.Rectangle {
 // width either side of centre.
 func (s *Scene) findApproachSpot(probe *approachProbe, run *approachRun, lean approachLean) (approachSpot, bool) {
 	preferred := probe.dot.x - probe.width/2
-	if lean == leanRight {
+	if lean != leanCentre {
 		preferred = probe.dot.x
 	}
 
@@ -667,13 +722,14 @@ func (r *approachRun) limit(probe *approachProbe, row int) int {
 
 // spotFree reports whether a callsign may go in box on row: inside the
 // panel, over its own dot's column, left of the row's barrier and of the
-// last callsign's centre, with every row under it open at the dot's column
-// for the leader, and clear of everything in the label table but its own
-// disc.
+// last callsign's centre, off the next dot's column when the lay-out is
+// staggered, with every row under it open at the dot's column for the
+// leader, and clear of everything in the label table but its own disc.
 func (s *Scene) spotFree(probe *approachProbe, run *approachRun, box image.Rectangle, row int) bool {
 	dotX := probe.dot.x
 
-	if !box.In(probe.strip.panel) || box.Min.X > dotX || box.Max.X < dotX || box.Max.X > run.limit(probe, row) {
+	if !box.In(probe.strip.panel) || box.Min.X > dotX || box.Max.X < dotX || box.Max.X > run.limit(probe, row) ||
+		probe.coversNext(box, row) {
 		return false
 	}
 

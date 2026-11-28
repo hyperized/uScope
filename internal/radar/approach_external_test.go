@@ -69,8 +69,8 @@ func TestApproachOnlyInTheBare3DView(t *testing.T) {
 	}
 }
 
-// TestApproachStaysTopLeft checks that the strip draws in the top-left
-// corner, with or without the window overlay, and nowhere else; and that it
+// TestApproachStaysTopLeft checks that the strip draws along the top left,
+// with or without the window overlay, and nowhere else; and that it
 // draws its panel over a frame with no arrivals at all.
 func TestApproachStaysTopLeft(t *testing.T) {
 	t.Parallel()
@@ -97,7 +97,9 @@ func TestApproachStaysTopLeft(t *testing.T) {
 			on.Approach = true
 
 			before, after := approachPixels(t, testCase.frame, off), approachPixels(t, testCase.frame, on)
-			corner := image.Rect(0, 0, windowWidth/2, windowHeight/2)
+			// The strip spans 65 percent of the width from a 3 percent inset
+			// and a tenth of the width in height.
+			corner := image.Rect(0, 0, windowWidth*68/100, windowHeight/3)
 
 			if changedOutside(t, before, after, corner) == 0 {
 				t.Error("nothing drawn for the strip")
