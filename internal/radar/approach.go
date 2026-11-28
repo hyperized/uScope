@@ -28,9 +28,8 @@ const (
 	approachWidthPercent = 40
 
 	// approachAspectTenths is the panel's width over its height, in tenths:
-	// 2.2 to 1, tall enough for a queue bunched near the ground to stack its
-	// callsigns in rows above it.
-	approachAspectTenths = 22
+	// 2 to 1, which holds the plot and the rows of callsigns over it.
+	approachAspectTenths = 20
 
 	// approachReachNm is the distance at the plot's left edge and
 	// approachCeilingFt the height at its top. A three-degree descent is
@@ -81,15 +80,17 @@ const (
 	// dots and their callsigns.
 	approachFixedObstacles = 10
 
-	// approachRows is how many rows above the dot, and as many below, a
-	// callsign may move out to before it gives up; approachRowGap is the air
-	// between two rows, in glyph pixels.
-	approachRows   = 5
-	approachRowGap = 1
+	// approachRows is how many rows over its dot a callsign may climb before
+	// it gives up, and approachHeadroomRows how many of them the panel keeps
+	// clear above the plot, so a dot at the ceiling still has room for its
+	// name. approachRowGap is the air between two rows, in glyph pixels.
+	approachRows         = 3
+	approachHeadroomRows = 2
+	approachRowGap       = 1
 
-	// approachLeaderStep is how many pixels apart a leader is tested for
-	// running through another callsign.
-	approachLeaderStep = 2
+	// approachSlideSteps bounds how many things a callsign steps past on one
+	// row before that row is given up.
+	approachSlideSteps = 16
 
 	// approachThinDivisor turns the glyph scale into the width of the
 	// strip's hairlines: one pixel up to 1440p, two at 2160p.
@@ -114,7 +115,7 @@ const (
 // The strip's words. Distance is to the field rather than to a runway,
 // because the scope does not know which runway is in use.
 const (
-	approachHeading = "COMING IN, SEEN FROM THE SIDE"
+	approachHeading = "INBOUND TRAFFIC"
 	approachField   = "field"
 	approachLowText = "2,500 ft"
 	approachTopText = "5,000 ft"
@@ -137,12 +138,13 @@ type approachLayout struct {
 	scale  int
 	shadow int
 	line   int
+	pitch  int
 	gap    int
 }
 
 // newApproachLayout fits the strip into the top left of the scope box, and
-// reports false when the box is too narrow for its heading or there is no
-// face to set it in.
+// reports false when the box is too small for its heading and a plot, or
+// there is no face to set it in.
 func (s *Scene) newApproachLayout(lay *layout) (approachLayout, bool) {
 	win := newWindowLayout(lay)
 	box := lay.scope
@@ -159,21 +161,23 @@ func (s *Scene) newApproachLayout(lay *layout) (approachLayout, bool) {
 
 	pen := s.windowPen(lay, &win, s.faces.Small, 0)
 	strip.line = pen.height()
+	strip.pitch = strip.line + win.scale*approachRowGap
 	pad := win.scale * approachPad
 	gutter := pen.measure(approachTopText) + strip.gap
+	headroom := approachHeadroomRows * strip.pitch
 
 	strip.plot = image.Rect(
-		strip.panel.Min.X+pad+gutter, strip.panel.Min.Y+pad+strip.line+strip.gap+strip.line/2,
+		strip.panel.Min.X+pad+gutter, strip.panel.Min.Y+pad+strip.line+strip.gap+headroom,
 		strip.panel.Max.X-pad, strip.panel.Max.Y-pad-strip.line-strip.gap,
 	)
 
 	heading := s.windowPen(lay, &win, s.faces.Small, windowTracking)
 	fits := heading.measure(approachHeading) <= strip.panel.Dx()-2*pad
 
-	// A panel wide enough for the heading is always tall enough for a plot:
-	// the heading needs about 540 glyph pixels of width, which gives the
-	// panel some 80 of height against the 50 its rows and padding take.
-	return strip, strip.line > 0 && fits
+	// A plot shorter than two rows of type has no room for a queue.
+	tall := strip.plot.Dy() >= approachHeadroomRows*strip.pitch
+
+	return strip, strip.line > 0 && fits && tall
 }
 
 // percent and tenths are the denominators of the layout's shares, and
@@ -433,8 +437,8 @@ func (s *Scene) approachDotFor(plane *airplane.Snapshot, field source.Corridors,
 
 // drawApproachDots draws the dots and their callsigns. The dots go into the
 // label table first, so no callsign covers another aircraft's dot; then the
-// callsigns are placed, the focus first and the rest nearest the field
-// first, and drawn once all have a place.
+// callsigns are placed over their dots in order, and drawn once all have a
+// place.
 //
 // Every dot gets a callsign while there is room for one in any of its rows.
 // The first try leaves the corner the "+N" would take open to callsigns; if
@@ -453,11 +457,8 @@ func (s *Scene) drawApproachDots(lay *layout, strip *approachLayout) {
 		radius := approachRadius(strip, &dots[index])
 		lay.dst.BlendCircle(dots[index].x, dots[index].y, radius, arrival, dots[index].alpha)
 
-		// The disc goes in with a margin, so a callsign is not set so close
-		// to another aircraft's dot that it reads as that one's.
-		margin := radius + strip.scale*approachLabelGap
-		labels.add(image.Rect(dots[index].x-margin, dots[index].y-margin,
-			dots[index].x+margin+1, dots[index].y+margin+1))
+		labels.add(image.Rect(dots[index].x-radius, dots[index].y-radius,
+			dots[index].x+radius+1, dots[index].y+radius+1))
 	}
 
 	win := windowLayout{scale: strip.scale, shadow: strip.shadow}
@@ -490,46 +491,214 @@ func approachRadius(strip *approachLayout, dot *approachDot) int {
 	return strip.scale * approachDotRadius
 }
 
-// approachSpot is where a callsign goes and which row that is: row 0 sits
-// beside the dot, and any further row is joined to it by a leader.
+// approachSpot is the box a callsign goes in and which row that is: row 0
+// sits just over the dot, and any higher row is joined to it by a leader.
 type approachSpot struct {
-	at  image.Point
+	box image.Rectangle
 	row int
 }
 
-// placeApproachLabels finds every dot its callsign's place, the focus first
-// and then the rest nearest the field first, entering each in the label
-// table as it goes. It returns how many found none, and keeps that count on
-// the table.
+// approachLean is where a callsign would rather sit over its dot when
+// nothing is in the way: centred on it, or with its left edge on it.
+type approachLean int
+
+const (
+	// leanCentre centres every callsign on its dot, staggering rows before
+	// sliding anything sideways. It is what a spread-out queue gets.
+	leanCentre approachLean = iota
+
+	// leanRight puts every callsign's left edge on its dot. A tight bunch
+	// needs it: a centred callsign over the nearest dot covers the spot
+	// the next dot's leader has to come down through.
+	leanRight
+)
+
+// placeApproachLabels gives each dot its callsign's place and returns how
+// many found none, keeping that count on the label table. It lays the queue
+// out centred first, and when that leaves a dot bare it lays it out again
+// leaning right, keeping whichever leaves fewer bare.
 func (s *Scene) placeApproachLabels(pen *windowPen, strip *approachLayout, dots []approachDot) int {
+	base := s.approachLabels.count
+
+	if s.layApproachLabels(pen, strip, dots, leanCentre) == 0 {
+		return 0
+	}
+
+	centred := s.approachLabels.unlabelled
+	s.approachLabels.count = base
+
+	if s.layApproachLabels(pen, strip, dots, leanRight) > centred {
+		s.approachLabels.count = base
+		s.layApproachLabels(pen, strip, dots, leanCentre)
+	}
+
+	return s.approachLabels.unlabelled
+}
+
+// approachRun is the state of one lay-out, worked from the field outwards.
+// barriers holds, for each row, the x a callsign on that row must end left
+// of: the left edge of the last callsign set on it, or a leader that comes
+// down through it from a row above, whichever is further left. rightmost is
+// the centre of the last callsign set, which the next must stay left of.
+type approachRun struct {
+	barriers  [approachRows]int
+	rightmost int
+	gap       int
+}
+
+// layApproachLabels places the callsigns nearest the field first, which is
+// right to left, so the names keep the order of their dots and the ones
+// that go without, when any must, are the furthest out. Every callsign sits
+// above its dot, on the lowest row that has room, with its leader dropping
+// straight down to the dot; the barriers keep any callsign off a leader
+// already placed and any leader off a callsign already placed.
+func (s *Scene) layApproachLabels(pen *windowPen, strip *approachLayout, dots []approachDot, lean approachLean) int {
 	labels := &s.approachLabels
 	labels.unlabelled = 0
 
-	for pass := range 2 {
-		for index := range dots {
-			dot := &dots[index]
-			if dot.focus != (pass == 0) {
-				continue
-			}
+	run := approachRun{rightmost: math.MaxInt, gap: strip.scale * approachLabelGap}
+	for row := range run.barriers {
+		run.barriers[row] = strip.panel.Max.X + run.gap
+	}
 
-			width, height := pen.measure(dot.callsign), pen.height()
-			dot.label, dot.labelled = s.findApproachSpot(strip, dot, width, height, labels.dotsFrom+index)
+	for index := range dots {
+		dot := &dots[index]
+		probe := approachProbe{
+			strip: strip, dot: dot, width: pen.measure(dot.callsign), height: pen.height(),
+			own: labels.dotsFrom + index,
+		}
 
-			if !dot.labelled {
-				labels.unlabelled++
+		dot.label, dot.labelled = s.findApproachSpot(&probe, &run, lean)
+		if !dot.labelled {
+			labels.unlabelled++
 
-				continue
-			}
+			continue
+		}
 
-			labels.add(image.Rectangle{Min: dot.label.at, Max: dot.label.at.Add(image.Pt(width, height))})
+		box := dot.label.box
+		labels.add(box)
+		run.barriers[dot.label.row] = box.Min.X
+		run.rightmost = (box.Min.X + box.Max.X) / 2
+
+		for below := range dot.label.row {
+			run.barriers[below] = min(run.barriers[below], dot.x)
 		}
 	}
 
 	return labels.unlabelled
 }
 
-// drawApproachLabel sets one placed callsign, with a leader back to the dot
-// when it had to move a row or more away. A dot with no place gets nothing.
+// approachProbe is one callsign being placed: its dot, its size, and where
+// its own disc is in the label table.
+type approachProbe struct {
+	strip         *approachLayout
+	dot           *approachDot
+	width, height int
+	own           int
+}
+
+// box is the callsign's box with its left edge at x, on row.
+func (p *approachProbe) box(x, row int) image.Rectangle {
+	bottom := p.dot.y - approachRadius(p.strip, p.dot) - p.strip.scale*approachLabelGap - row*p.strip.pitch
+
+	return image.Rect(x, bottom-p.height, x+p.width, bottom)
+}
+
+// findApproachSpot is the place for one callsign. It tries the preferred
+// place for the lean on each row from the lowest up, so a queue staggers
+// before anything slides; then on each row again the furthest right the
+// barriers allow, sliding left past whatever is in the way. A callsign
+// always covers its own dot's column, which bounds the slide to half its
+// width either side of centre.
+func (s *Scene) findApproachSpot(probe *approachProbe, run *approachRun, lean approachLean) (approachSpot, bool) {
+	preferred := probe.dot.x - probe.width/2
+	if lean == leanRight {
+		preferred = probe.dot.x
+	}
+
+	for row := range approachRows {
+		if box := probe.box(preferred, row); s.spotFree(probe, run, box, row) {
+			return approachSpot{box: box, row: row}, true
+		}
+	}
+
+	for row := range approachRows {
+		if spot, found := s.slideApproachSpot(probe, run, row); found {
+			return spot, true
+		}
+	}
+
+	return approachSpot{}, false
+}
+
+// slideApproachSpot sets a callsign on row as far right as the barriers
+// allow and slides it left past anything in the label table, until it is
+// free or would no longer cover its dot.
+func (s *Scene) slideApproachSpot(probe *approachProbe, run *approachRun, row int) (approachSpot, bool) {
+	start := min(probe.dot.x, run.limit(probe, row)-probe.width)
+
+	for range approachSlideSteps {
+		box := probe.box(start, row)
+		if s.spotFree(probe, run, box, row) {
+			return approachSpot{box: box, row: row}, true
+		}
+
+		blocker, hit := s.approachLabels.firstHit(box, probe.own, 0)
+		if !hit {
+			break
+		}
+
+		start = blocker.Min.X - run.gap - probe.width
+	}
+
+	return approachSpot{}, false
+}
+
+// limit is the x a callsign on row must end at or left of: the row's
+// barrier, the panel's edge, and the order of the callsigns.
+func (r *approachRun) limit(probe *approachProbe, row int) int {
+	byOrder := math.MaxInt
+	if r.rightmost != math.MaxInt {
+		byOrder = r.rightmost - 1 + probe.width - probe.width/2
+	}
+
+	return min(r.barriers[row]-r.gap, probe.strip.panel.Max.X, byOrder)
+}
+
+// spotFree reports whether a callsign may go in box on row: inside the
+// panel, over its own dot's column, left of the row's barrier and of the
+// last callsign's centre, with every row under it open at the dot's column
+// for the leader, and clear of everything in the label table but its own
+// disc.
+func (s *Scene) spotFree(probe *approachProbe, run *approachRun, box image.Rectangle, row int) bool {
+	dotX := probe.dot.x
+
+	if !box.In(probe.strip.panel) || box.Min.X > dotX || box.Max.X < dotX || box.Max.X > run.limit(probe, row) {
+		return false
+	}
+
+	// A hairline needs only a glyph pixel of air beside a callsign.
+	for below := range row {
+		if run.barriers[below] < dotX+probe.strip.scale {
+			return false
+		}
+	}
+
+	_, hit := s.approachLabels.firstHit(box, probe.own, 0)
+
+	return !hit
+}
+
+// drawApproachLeader draws the hairline straight down from a callsign's box
+// to the top of its dot.
+func (s *Scene) drawApproachLeader(lay *layout, strip *approachLayout, dot *approachDot, box image.Rectangle) {
+	top := float64(dot.y - approachRadius(strip, dot))
+	lay.dst.BlendLineAA(float64(dot.x), float64(box.Max.Y), float64(dot.x), top,
+		max(1, strip.scale/approachThinDivisor), s.pal.Muted, approachLeaderAlpha)
+}
+
+// drawApproachLabel sets one placed callsign, with a leader down to the dot
+// when it sits a row or more up. A dot with no place gets nothing.
 //
 // The focus is set in the palette's ink and every other callsign in its
 // muted ink, so the one the caption is about stands out from the queue.
@@ -543,117 +712,12 @@ func (s *Scene) drawApproachLabel(lay *layout, pen *windowPen, strip *approachLa
 		ink = s.pal.Ink
 	}
 
-	corner := dot.label.at
 	if dot.label.row > 0 {
-		box := image.Rect(corner.X, corner.Y, corner.X+pen.measure(dot.callsign), corner.Y+pen.height())
-		s.drawApproachLeader(lay, strip, dot, box)
+		s.drawApproachLeader(lay, strip, dot, dot.label.box)
 	}
 
-	pen.x, pen.y = corner.X, corner.Y
+	pen.x, pen.y = dot.label.box.Min.X, dot.label.box.Min.Y
 	pen.draw(dot.callsign, ink, dot.alpha)
-}
-
-// findApproachSpot is the first spot for a callsign width by height that
-// stays in the panel and clears every entry in the label table but own, the
-// dot's own disc. It looks twice: first for a spot whose leader also runs
-// clear of the callsigns already set, then, when a bunched queue leaves none,
-// for any free spot, since a crossed leader reads better than a missing name.
-func (s *Scene) findApproachSpot(
-	strip *approachLayout, dot *approachDot, width, height, own int,
-) (approachSpot, bool) {
-	for _, strict := range [...]bool{true, false} {
-		if spot, found := s.scanApproachRows(strip, dot, width, height, own, strict); found {
-			return spot, true
-		}
-	}
-
-	return approachSpot{}, false
-}
-
-// scanApproachRows is one look for findApproachSpot. It tries row 0 above
-// the dot, then row 0 below it, then each further row above and below in
-// turn, out to approachRows. On each row it tries the right of the dot
-// before the left, because the queue runs down to the right and that side of
-// a dot above the line is most often free. With strict set a spot whose
-// leader would cross a callsign does not count.
-//
-//nolint:revive // strict is the one difference between findApproachSpot's two looks.
-func (s *Scene) scanApproachRows(
-	strip *approachLayout, dot *approachDot, width, height, own int, strict bool,
-) (approachSpot, bool) {
-	gap := approachRadius(strip, dot) + strip.scale*approachLabelGap
-	pitch := height + strip.scale*approachRowGap
-	sides := [...]int{dot.x + gap, dot.x - gap - width}
-
-	for step := range 2 * approachRows {
-		row := step / 2
-
-		top := dot.y - height - row*pitch
-		if step%2 == 1 {
-			top = dot.y + row*pitch
-		}
-
-		for _, left := range sides {
-			box := image.Rect(left, top, left+width, top+height)
-			if !box.In(strip.panel) || s.approachLabels.hits(box, own) {
-				continue
-			}
-
-			if !strict || s.leaderClear(dot, box, row) {
-				return approachSpot{at: box.Min, row: row}, true
-			}
-		}
-	}
-
-	return approachSpot{}, false
-}
-
-// drawApproachLeader draws a hairline from the dot to the corner of its
-// callsign's box that faces it.
-func (s *Scene) drawApproachLeader(lay *layout, strip *approachLayout, dot *approachDot, box image.Rectangle) {
-	end := leaderEnd(dot, box)
-	lay.dst.BlendLineAA(float64(dot.x), float64(dot.y), float64(end.X), float64(end.Y),
-		max(1, strip.scale/approachThinDivisor), s.pal.Muted, approachLeaderAlpha)
-}
-
-// leaderEnd is the corner of box that faces the dot, where its leader ends.
-func leaderEnd(dot *approachDot, box image.Rectangle) image.Point {
-	end := image.Pt(box.Min.X, box.Max.Y)
-	if box.Min.X < dot.x {
-		end.X = box.Max.X
-	}
-
-	if box.Min.Y > dot.y {
-		end.Y = box.Min.Y
-	}
-
-	return end
-}
-
-// leaderClear reports whether the leader a callsign in box on row would
-// need runs clear of the callsigns already set, so it does not strike one
-// through. Row 0 needs no leader. Dots are not tested: in a bunched queue a
-// leader has to pass its neighbours to reach a free row. The line is tested a
-// few pixels at a time, which is fine enough for type of this size.
-func (s *Scene) leaderClear(dot *approachDot, box image.Rectangle, row int) bool {
-	if row == 0 {
-		return true
-	}
-
-	end := leaderEnd(dot, box)
-	callsigns := s.approachLabels.dotsFrom + s.approachDots.count
-	steps := max(intAbs(end.X-dot.x), intAbs(end.Y-dot.y)) / approachLeaderStep
-
-	for step := 1; step < steps; step++ {
-		x := dot.x + (end.X-dot.x)*step/steps
-		y := dot.y + (end.Y-dot.y)*step/steps
-
-		if s.approachLabels.hitsFrom(image.Rect(x, y, x+1, y+1), callsigns) {
-			return false
-		}
-	}
-
-	return true
 }
 
 // approachMoreBox is where the "+N" goes: in the gutter left of the plot,
@@ -678,7 +742,8 @@ func (s *Scene) drawApproachMore(pen *windowPen, box image.Rectangle, count int)
 // approachLabels is the places taken on the strip this frame, which a
 // callsign may not overlap: the ground line, the heading, the axis labels
 // and the "+N" corner, then one disc per dot from dotsFrom on, then the
-// callsigns already set. unlabelled is how many dots found no room for a callsign this frame.
+// callsigns already set. unlabelled is how many dots found no room for a
+// callsign this frame.
 type approachLabels struct {
 	boxes      [approachFixedObstacles + 2*approachMaxDots]image.Rectangle
 	count      int
@@ -695,33 +760,14 @@ func (l *approachLabels) add(box image.Rectangle) {
 	}
 }
 
-// hitsFrom reports whether box overlaps any entry from index from on.
-func (l *approachLabels) hitsFrom(box image.Rectangle, from int) bool {
+// firstHit is the first entry from index from on, other than skip, that box
+// overlaps.
+func (l *approachLabels) firstHit(box image.Rectangle, skip, from int) (image.Rectangle, bool) {
 	for index := from; index < l.count; index++ {
-		if l.boxes[index].Overlaps(box) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// hits reports whether box overlaps any entry but the one at skip.
-func (l *approachLabels) hits(box image.Rectangle, skip int) bool {
-	for index := range l.count {
 		if index != skip && l.boxes[index].Overlaps(box) {
-			return true
+			return l.boxes[index], true
 		}
 	}
 
-	return false
-}
-
-// intAbs is the size of value.
-func intAbs(value int) int {
-	if value < 0 {
-		return -value
-	}
-
-	return value
+	return image.Rectangle{}, false
 }

@@ -24,6 +24,9 @@ const (
 
 	// glideFtPerNm puts the test queues on a three-degree path.
 	glideFtPerNm = 318
+
+	// approachFocusCall is the callsign the test queues open with.
+	approachFocusCall = "KLM1452"
 )
 
 // approachPlane is an arrival nm east of boardCorridors' field at feet,
@@ -108,7 +111,7 @@ func TestNewApproachLayout(t *testing.T) {
 	}{
 		{name: "stream", width: approachTestWidth, height: approachTestHeight, wantOK: true},
 		{name: "1440p", width: approachBenchWidth, height: approachBenchHeight, wantOK: true},
-		{name: "too narrow for the heading", width: 400, height: 300},
+		{name: "too small", width: 400, height: 300},
 		{name: "no face", width: approachTestWidth, height: approachTestHeight},
 	} {
 		lay := approachLay(t, testCase.width, testCase.height)
@@ -197,16 +200,20 @@ func TestApproachLabelsTable(t *testing.T) {
 
 	one.add(box)
 
-	if one.hits(box, 0) {
+	if _, hit := one.firstHit(box, 0, 0); hit {
 		t.Error("a box hit the entry it was told to skip")
 	}
 
-	if !one.hits(box.Add(image.Pt(5, 5)), -1) {
+	if got, hit := one.firstHit(box.Add(image.Pt(5, 5)), -1, 0); !hit || got != box {
 		t.Error("an overlapping box did not hit")
 	}
 
-	if one.hits(box.Add(image.Pt(20, 0)), -1) {
+	if _, hit := one.firstHit(box.Add(image.Pt(20, 0)), -1, 0); hit {
 		t.Error("a clear box hit")
+	}
+
+	if _, hit := one.firstHit(box, -1, 1); hit {
+		t.Error("an entry before from was looked at")
 	}
 }
 
@@ -349,8 +356,7 @@ func TestEveryArrivalIsLabelled(t *testing.T) {
 		for name, planes := range map[string][]airplane.Snapshot{
 			"eight spread": approachSpread(),
 			"four bunched": approachBunched(),
-			"bunched low":  approachBunchedAt(1),
-			"bunched high": approachBunchedAt(13),
+			"bunched mid":  approachBunchedAt(8),
 		} {
 			t.Run(fmt.Sprintf("%s at %dp", name, size.Y), func(t *testing.T) {
 				t.Parallel()
@@ -363,11 +369,29 @@ func TestEveryArrivalIsLabelled(t *testing.T) {
 	}
 }
 
+// TestApproachBunchedAtTheEnds checks the two places a bunch cannot all be
+// labelled, against the field and against the ceiling: every callsign that
+// is set keeps the rules, and the rest are counted for the "+N".
+func TestApproachBunchedAtTheEnds(t *testing.T) {
+	t.Parallel()
+
+	for name, planes := range map[string][]airplane.Snapshot{
+		"at the field":   approachBunchedAt(1),
+		"at the ceiling": approachBunchedAt(13),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			checkApproachLabels(t, approachTestWidth, approachTestHeight, planes)
+		})
+	}
+}
+
 // approachSpread is eight arrivals evenly over the strip's 15 NM, on a
 // three-degree path.
 func approachSpread() []airplane.Snapshot {
 	planes := make([]airplane.Snapshot, 0, 8)
-	calls := []string{"KLM1452", "CND093P", "TRA6721", "EZY77KL", "KLM88", "BAW432", "DLH4EA", "RJA151"}
+	calls := []string{approachFocusCall, "CND093P", "TRA6721", "EZY77KL", "KLM88", "BAW432", "DLH4EA", "RJA151"}
 
 	for index, call := range calls {
 		nm := 1 + 1.9*float64(index)
@@ -385,7 +409,7 @@ func approachBunched() []airplane.Snapshot { return approachBunchedAt(5) }
 func approachBunchedAt(fromNm float64) []airplane.Snapshot {
 	planes := make([]airplane.Snapshot, 0, 4)
 
-	for index, call := range []string{"KLM1452", "CND093P", "TRA6721", "EZY77KL"} {
+	for index, call := range []string{approachFocusCall, "CND093P", "TRA6721", "EZY77KL"} {
 		nm := fromNm + 0.5*float64(index)
 		planes = append(planes, approachPlane(fmt.Sprintf("4843%02X", index), call, nm, nm*glideFtPerNm))
 	}
@@ -412,11 +436,59 @@ func checkApproachLabels(t *testing.T, width, height int, planes []airplane.Snap
 		checkCallsign(t, labels.boxes[first:index], labels.boxes[index], strip.panel)
 	}
 
+	checkApproachOrder(t, scene)
+
 	if labelled := labels.count - first; labelled+labels.unlabelled != scene.approachDots.count {
 		t.Errorf("%d labelled and %d counted, for %d dots", labelled, labels.unlabelled, scene.approachDots.count)
 	}
 
 	return labels.unlabelled
+}
+
+// checkApproachOrder fails the test when the callsigns are not in the order
+// of their dots, sit below their dots, or when a leader runs through any
+// callsign.
+func checkApproachOrder(t *testing.T, scene *Scene) {
+	t.Helper()
+
+	labels := &scene.approachLabels
+	dots := scene.approachDots.dots[:scene.approachDots.count]
+	lastCentre := math.MaxInt
+
+	for index := range dots {
+		dot := &dots[index]
+		if !dot.labelled {
+			continue
+		}
+
+		centre := (dot.label.box.Min.X + dot.label.box.Max.X) / 2
+		if centre >= lastCentre {
+			t.Errorf("callsign %q is out of its dot's order", dot.callsign)
+		}
+
+		if dot.label.box.Max.Y > dot.y {
+			t.Errorf("callsign %q is not above its dot", dot.callsign)
+		}
+
+		lastCentre = centre
+	}
+
+	first := labels.dotsFrom + len(dots)
+
+	for index := range dots {
+		dot := &dots[index]
+		if !dot.labelled || dot.label.row == 0 {
+			continue
+		}
+
+		leader := image.Rect(dot.x, dot.label.box.Max.Y, dot.x+1, dot.y)
+
+		for box := first; box < labels.count; box++ {
+			if labels.boxes[box] != dot.label.box && labels.boxes[box].Overlaps(leader) {
+				t.Errorf("the leader of %q runs through callsign %v", dot.callsign, labels.boxes[box])
+			}
+		}
+	}
 }
 
 // checkCallsign fails the test when box leaves the panel or overlaps one of
@@ -443,7 +515,7 @@ func TestApproachMoreCount(t *testing.T) {
 	crowd := make([]airplane.Snapshot, 0, approachMaxDots)
 	for index := range approachMaxDots {
 		nm := 5 + 0.05*float64(index)
-		crowd = append(crowd, approachPlane(fmt.Sprintf("4844%02X", index), "KLM1452", nm, nm*glideFtPerNm))
+		crowd = append(crowd, approachPlane(fmt.Sprintf("4844%02X", index), approachFocusCall, nm, nm*glideFtPerNm))
 	}
 
 	for _, testCase := range []struct {
@@ -488,80 +560,93 @@ func uniform(canv *canvas.Canvas, box image.Rectangle) bool {
 	return true
 }
 
-// TestFindApproachSpotOrder checks the order spots are tried in: above
-// right, above left, below right, below left, then the next row out.
-func TestFindApproachSpotOrder(t *testing.T) {
+// TestFindApproachSpot checks the ordered rule on a bare panel: centred
+// over the dot on the lowest row, a row up before sliding, slid when every
+// row is taken at the centre, and nothing when the order or the barriers
+// leave no room.
+func TestFindApproachSpot(t *testing.T) {
 	t.Parallel()
 
-	strip := approachLayout{panel: image.Rect(0, 0, 1000, 1000), scale: 1}
+	strip := approachLayout{panel: image.Rect(0, 0, 1000, 1000), scale: 1, pitch: 11}
 	dot := approachDot{x: 500, y: 500}
-	gap := approachDotRadius + approachLabelGap
-	pitch := 10 + approachRowGap
+	bottom := 500 - approachDotRadius - approachLabelGap
+	open := func() approachRun {
+		run := approachRun{rightmost: math.MaxInt, gap: approachLabelGap}
+		for row := range run.barriers {
+			run.barriers[row] = 1000 + approachLabelGap
+		}
 
-	aboveRight := image.Rect(500+gap, 490, 500+gap+20, 500)
-	aboveLeft := image.Rect(500-gap-20, 490, 500-gap, 500)
-	belowRight := image.Rect(500+gap, 500, 500+gap+20, 510)
-	belowLeft := image.Rect(500-gap-20, 500, 500-gap, 510)
+		return run
+	}
 
 	for _, testCase := range []struct {
-		name    string
-		blocked []image.Rectangle
-		want    approachSpot
+		name      string
+		blocked   []image.Rectangle
+		lean      approachLean
+		edit      func(*approachRun)
+		want      approachSpot
+		wantFound bool
 	}{
-		{name: "free", want: approachSpot{at: aboveRight.Min}},
-		{name: "right taken", blocked: []image.Rectangle{aboveRight}, want: approachSpot{at: aboveLeft.Min}},
+		{name: "centred", want: approachSpot{box: image.Rect(490, bottom-10, 510, bottom)}, wantFound: true},
 		{
-			name: "above taken", blocked: []image.Rectangle{aboveRight, aboveLeft},
-			want: approachSpot{at: belowRight.Min},
+			name: "leaning right", lean: leanRight,
+			want: approachSpot{box: image.Rect(500, bottom-10, 520, bottom)}, wantFound: true,
 		},
 		{
-			name: "row taken", blocked: []image.Rectangle{aboveRight, aboveLeft, belowRight, belowLeft},
-			want: approachSpot{at: image.Pt(500+gap, 490-pitch), row: 1},
+			name: "a row up", blocked: []image.Rectangle{image.Rect(505, bottom-10, 600, bottom)},
+			want: approachSpot{box: image.Rect(490, bottom-21, 510, bottom-11), row: 1}, wantFound: true,
 		},
+		{
+			name: "slid left", blocked: []image.Rectangle{image.Rect(505, 0, 600, 1000)},
+			want: approachSpot{box: image.Rect(483, bottom-10, 503, bottom)}, wantFound: true,
+		},
+		{
+			name: "slid past a blocker", blocked: []image.Rectangle{image.Rect(495, 0, 600, 1000)},
+			want: approachSpot{}, wantFound: false,
+		},
+		{
+			name: "leader shut by a barrier", blocked: []image.Rectangle{image.Rect(480, bottom-10, 520, bottom)},
+			edit: func(run *approachRun) { run.barriers[0] = 499 },
+		},
+		{name: "kept left of the last centre", edit: func(run *approachRun) { run.rightmost = 480 }},
 	} {
 		scene := &Scene{}
 		for _, box := range testCase.blocked {
 			scene.approachLabels.add(box)
 		}
 
-		got, found := scene.findApproachSpot(&strip, &dot, 20, 10, -1)
-		if !found || got != testCase.want {
-			t.Errorf("%s: %v %v, want %v", testCase.name, got, found, testCase.want)
+		run := open()
+		if testCase.edit != nil {
+			testCase.edit(&run)
 		}
-	}
 
-	full := &Scene{}
-	full.approachLabels.add(strip.panel)
+		probe := approachProbe{strip: &strip, dot: &dot, width: 20, height: 10, own: -1}
 
-	if _, found := full.findApproachSpot(&strip, &dot, 20, 10, -1); found {
-		t.Error("a spot found in a full panel")
+		got, found := scene.findApproachSpot(&probe, &run, testCase.lean)
+		if found != testCase.wantFound || got != testCase.want {
+			t.Errorf("%s: %v %v, want %v %v", testCase.name, got, found, testCase.want, testCase.wantFound)
+		}
 	}
 }
 
-// TestDrawApproachLeader checks the leader reaches the corner of the box
-// that faces the dot, on all four sides.
+// TestDrawApproachLeader checks the leader drops straight from the box to
+// the top of the dot.
 func TestDrawApproachLeader(t *testing.T) {
 	t.Parallel()
 
 	scene := approachScene(t, windowFrame(), false)
 	strip := approachLayout{scale: 1}
 	dot := approachDot{x: 100, y: 100}
+	lay := approachLay(t, 200, 200)
 
-	for _, testCase := range []struct {
-		box  image.Rectangle
-		want image.Point
-	}{
-		{box: image.Rect(120, 40, 160, 60), want: image.Pt(110, 80)},
-		{box: image.Rect(40, 40, 80, 60), want: image.Pt(90, 80)},
-		{box: image.Rect(120, 140, 160, 160), want: image.Pt(110, 120)},
-		{box: image.Rect(40, 140, 80, 160), want: image.Pt(90, 120)},
-	} {
-		lay := approachLay(t, 200, 200)
-		scene.drawApproachLeader(&lay, &strip, &dot, testCase.box)
+	scene.drawApproachLeader(&lay, &strip, &dot, image.Rect(60, 30, 140, 50))
 
-		if lay.dst.Image().RGBAAt(testCase.want.X, testCase.want.Y) == (color.RGBA{}) {
-			t.Errorf("box %v: no leader through %v", testCase.box, testCase.want)
-		}
+	if lay.dst.Image().RGBAAt(100, 70) == (color.RGBA{}) {
+		t.Error("no leader between the box and the dot")
+	}
+
+	if lay.dst.Image().RGBAAt(110, 70) != (color.RGBA{}) {
+		t.Error("the leader is not straight down")
 	}
 }
 
@@ -633,5 +718,38 @@ func TestApproachPanelWash(t *testing.T) {
 		if math.Abs(float64(got.G)-want) > 2 {
 			t.Errorf("%s: panel green %d, want about %.0f", testCase.name, got.G, want)
 		}
+	}
+}
+
+// TestPlaceApproachLabelsKeepsTheBetterLean builds a table where leaning
+// right does worse than centring: a thin post just right of the centred
+// place catches the rightward slide, and a second post just left of it
+// stops the slide there. A dot that nothing can label makes the centred
+// lay-out leave one bare, so both are tried and the centred one is kept.
+func TestPlaceApproachLabelsKeepsTheBetterLean(t *testing.T) {
+	t.Parallel()
+
+	scene := approachScene(t, windowFrame(), false)
+	lay := approachLay(t, approachTestWidth, approachTestHeight)
+	win := windowLayout{scale: 1, shadow: 1}
+	pen := scene.windowPen(&lay, &win, scene.faces.Small, 0)
+	pen.scale = 1
+
+	strip := approachLayout{panel: image.Rect(0, 0, 1000, 1000), scale: 1, pitch: pen.height() + 1}
+	dots := []approachDot{{x: 500, y: 500, callsign: "AB"}, {x: 100, y: 500, callsign: "AB"}}
+	half := pen.measure("AB") / 2
+
+	scene.approachLabels = approachLabels{}
+	scene.approachLabels.add(image.Rect(500+half+1, 0, 500+half+3, 1000))
+	scene.approachLabels.add(image.Rect(500-half-1, 0, 500-half, 1000))
+	scene.approachLabels.add(image.Rect(0, 0, 300, 1000))
+	scene.approachLabels.dotsFrom = 100
+
+	if got := scene.placeApproachLabels(&pen, &strip, dots); got != 1 {
+		t.Fatalf("%d bare, want 1", got)
+	}
+
+	if !dots[0].labelled || dots[0].label.box.Min.X != 500-half {
+		t.Errorf("the first dot's callsign is at %v, want centred", dots[0].label.box)
 	}
 }
