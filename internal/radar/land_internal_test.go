@@ -47,7 +47,7 @@ func TestLandInk(t *testing.T) {
 		{name: "mono night is a grey", pal: theme.MonoNight, want: rgba(25, 25, 27)},
 		{name: "mono day is a grey on a light field", pal: theme.MonoDay, want: rgba(229, 226, 220)},
 		{name: "vector night is a slate grey-green", pal: theme.VectorNight, want: rgba(42, 54, 52)},
-		{name: "vector day is a pale grey-green", pal: theme.VectorDay, want: rgba(212, 221, 216)},
+		{name: "vector day is a pale yellow-green", pal: theme.VectorDay, want: rgba(217, 226, 196)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

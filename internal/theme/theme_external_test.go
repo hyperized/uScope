@@ -643,9 +643,12 @@ func TestOnBandReturnsSomethingLegible(t *testing.T) {
 // back untouched, or Glass's cyan clocks would quietly become white ones and
 // the cockpit grammar every other palette is measured against would be gone.
 //
-// The seven palettes listed here are every one except MonoDay, and the tightest
-// of them is PhosphorDay's Data at 0.118 against a floor of 0.10, so this is a
-// real margin rather than a coincidence.
+// The seven palettes listed here are every one except MonoDay. The tightest
+// of them is VectorDay's Data at 0.101 against a floor of 0.10, on purpose:
+// the approved arrival blue was 0x004F86, which fell under the floor and
+// would have turned the scope header's clocks white, so it was lifted along
+// its own hue just far enough to clear it. The next tightest is PhosphorDay's
+// Data at 0.118.
 func TestOnBandLeavesTheReadableOnesAlone(t *testing.T) {
 	t.Parallel()
 
@@ -1084,10 +1087,10 @@ func TestPaletteLight(t *testing.T) {
 }
 
 // TestVectorDayIsGlassDay pins the differences the vector day palette
-// is allowed: the look it names and its own ground and coast. A light
-// field has nothing under the luma floor to lift, so any other colour that
-// drifted away from Glass Day here would be a second day palette nobody asked
-// for.
+// is allowed: the look it names, its own ground and coast, and the two tube
+// inks. A light field has nothing under the luma floor to lift, so any other
+// colour that drifted away from Glass Day here would be a second day palette
+// nobody asked for.
 func TestVectorDayIsGlassDay(t *testing.T) {
 	t.Parallel()
 
@@ -1096,6 +1099,8 @@ func TestVectorDayIsGlassDay(t *testing.T) {
 	want.Shore = theme.VectorDay.Shore
 	want.Water = theme.VectorDay.Water
 	want.Land = theme.VectorDay.Land
+	want.Data = theme.VectorDay.Data
+	want.Caution = theme.VectorDay.Caution
 
 	if theme.VectorDay != want {
 		t.Errorf("VectorDay = %v, want Day under LookVector %v", theme.VectorDay, want)
@@ -1233,9 +1238,11 @@ func TestVectorGround(t *testing.T) {
 		{name: "night water", got: theme.VectorNight.Water, want: color.RGBA{R: 0x17, G: 0x35, B: 0x57, A: 0xFF}},
 		{name: "night land", got: theme.VectorNight.Land, want: color.RGBA{R: 0x2A, G: 0x36, B: 0x34, A: 0xFF}},
 		{name: "night shore", got: theme.VectorNight.Shore, want: color.RGBA{R: 0x8F, G: 0xB0, B: 0xC4, A: 0xFF}},
-		{name: "day water", got: theme.VectorDay.Water, want: color.RGBA{R: 0xB4, G: 0xCD, B: 0xE3, A: 0xFF}},
-		{name: "day land", got: theme.VectorDay.Land, want: color.RGBA{R: 0xD4, G: 0xDD, B: 0xD8, A: 0xFF}},
-		{name: "day shore", got: theme.VectorDay.Shore, want: color.RGBA{R: 0x5A, G: 0x7A, B: 0x90, A: 0xFF}},
+		{name: "day water", got: theme.VectorDay.Water, want: color.RGBA{R: 0xA7, G: 0xCB, B: 0xE8, A: 0xFF}},
+		{name: "day land", got: theme.VectorDay.Land, want: color.RGBA{R: 0xD9, G: 0xE2, B: 0xC4, A: 0xFF}},
+		{name: "day shore", got: theme.VectorDay.Shore, want: color.RGBA{R: 0x2F, G: 0x5E, B: 0x52, A: 0xFF}},
+		{name: "day arrivals", got: theme.VectorDay.Data, want: color.RGBA{R: 0x00, G: 0x62, B: 0xA6, A: 0xFF}},
+		{name: "day departures", got: theme.VectorDay.Caution, want: color.RGBA{R: 0xD0, G: 0x60, B: 0x0A, A: 0xFF}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

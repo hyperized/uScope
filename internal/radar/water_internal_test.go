@@ -64,7 +64,7 @@ func TestWaterInk(t *testing.T) {
 		{name: "mono night is a lighter grey", pal: theme.MonoNight, want: rgba(29, 29, 31)},
 		{name: "mono day is a darker grey on paper", pal: theme.MonoDay, want: rgba(225, 222, 216)},
 		{name: "vector night is a deep blue", pal: theme.VectorNight, want: rgba(23, 53, 87)},
-		{name: "vector day is a pale blue", pal: theme.VectorDay, want: rgba(180, 205, 227)},
+		{name: "vector day is a clear pale blue", pal: theme.VectorDay, want: rgba(167, 203, 232)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

@@ -665,6 +665,51 @@ func TestTaperScalesTheStyle(t *testing.T) {
 	}
 }
 
+// TestTubeWallWeight checks only the vector look's day palette gets the
+// heavier walls. Every other palette has to keep the base it was judged on,
+// so the glass handheld by day and every night picture draw the bytes they
+// drew before; the edges and the centreline do not move on any of them.
+func TestTubeWallWeight(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		pal  theme.Palette
+		want float64
+	}{
+		{name: "vector day", pal: theme.VectorDay, want: tubeVectorDayWeight},
+		{name: "vector night", pal: theme.VectorNight, want: 1},
+		{name: "glass day", pal: theme.Day, want: 1},
+		{name: "glass night", pal: theme.Night, want: 1},
+		{name: "phosphor day", pal: theme.PhosphorDay, want: 1},
+		{name: "mono day", pal: theme.MonoDay, want: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene := &Scene{}
+			scene.SetPalette(testCase.pal)
+
+			if got := scene.tubeWallWeight(); got != testCase.want {
+				t.Errorf("tubeWallWeight = %v, want %v", got, testCase.want)
+			}
+
+			style := testStyle(scene)
+			if want := tubeFill3 * testCase.want; math.Abs(style.nearBase-want) > 1e-12 {
+				t.Errorf("nearBase = %v, want %v", style.nearBase, want)
+			}
+
+			if want := tubeFill3 * testCase.want * tubeFarWall; math.Abs(style.farBase-want) > 1e-12 {
+				t.Errorf("farBase = %v, want %v", style.farBase, want)
+			}
+
+			if want := scene.fade(style.ink, tubeEdgeStrength); style.edge != want {
+				t.Errorf("edge = %v, want %v", style.edge, want)
+			}
+		})
+	}
+}
+
 // TestTubeDepthOrder checks the near wall goes over the lines behind it and
 // under the lines in front of it: the middle of a ring's farthest segment is
 // tinted by the wall in front of it, and the middle of its nearest segment is
