@@ -24,6 +24,8 @@ const (
 
 	windowDescentFpm = -800
 	windowClimbFpm   = 1500
+	windowApproachKt = 140
+	windowTaxiKt     = 15
 	windowLowFt      = 3000
 	windowWestDeg    = 270
 	windowNorthDeg   = 0
@@ -41,6 +43,7 @@ func windowPlane(icao, callsign string, nmEast, vertRate float64) airplane.Snaps
 		Callsign: callsign,
 		Altitude: windowLowFt,
 		Heading:  windowWestDeg,
+		Velocity: windowApproachKt,
 		VertRate: vertRate,
 		Latitude: boardFieldLat, Longitude: lon,
 		PositionHistory: []airplane.PositionEntry{{Latitude: boardFieldLat, Longitude: lon, Altitude: windowLowFt}},
@@ -292,6 +295,170 @@ func TestCaptionLetsGo(t *testing.T) {
 		scene.followCaption(src.frame, time.Second)
 		checkCaption(t, scene, "rewound", arrival.ICAO, time.Second, 1)
 	})
+}
+
+// captionQueue is four arrivals on a three-degree path at 12, 6, 3 and 1 NM,
+// listed furthest first so the pick cannot lean on the frame's order. It is
+// the live frame the caption got wrong: a far arrival named while three
+// nearer ones were on the strip.
+func captionQueue() []airplane.Snapshot {
+	return []airplane.Snapshot{
+		approachPlane(captionFarICAO, "KLC42U", 12, 12*glideFtPerNm),
+		approachPlane("484AE3", "KLM88U", 6, 6*glideFtPerNm),
+		approachPlane(captionNextICAO, "KLM40E", 3, 3*glideFtPerNm),
+		approachPlane(captionFirstICAO, "KLM1782", 1, glideFtPerNm),
+	}
+}
+
+// The addresses in captionQueue the tests follow.
+const (
+	captionFirstICAO = "484AE1"
+	captionNextICAO  = "484AE2"
+	captionFarICAO   = "484AE4"
+)
+
+// TestCaptionNamesTheNextToLand checks the caption is on the arrival nearest
+// the field, and moves to the one behind it once that one has landed or
+// gone, not before.
+func TestCaptionNamesTheNextToLand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the nearest, then the next once it has landed", func(t *testing.T) {
+		t.Parallel()
+
+		planes := captionQueue()
+		scene, src := windowScene(t, windowFrame(planes...))
+		scene.followCaption(src.frame, 0)
+		checkCaption(t, scene, "first frame", captionFirstICAO, 0, 1)
+
+		planes[3].Velocity = windowTaxiKt
+		src.frame = windowFrame(planes...)
+		scene.followCaption(src.frame, captionHold)
+
+		if !scene.caption.leaving {
+			t.Fatal("the caption stayed on an aircraft that has landed")
+		}
+
+		scene.followCaption(src.frame, captionHold+captionFade)
+		checkCaption(t, scene, "after the fade", captionNextICAO, captionHold+captionFade, 0)
+	})
+
+	t.Run("the next once the first has gone from the frame", func(t *testing.T) {
+		t.Parallel()
+
+		planes := captionQueue()
+		scene, src := windowScene(t, windowFrame(planes...))
+		scene.followCaption(src.frame, 0)
+
+		src.frame = windowFrame(planes[:3]...)
+		scene.followCaption(src.frame, time.Second)
+		scene.followCaption(src.frame, time.Second+captionFade)
+		checkCaption(t, scene, "after the fade", captionNextICAO, time.Second+captionFade, 0)
+	})
+
+	t.Run("a far arrival gives way to the ones ahead of it", func(t *testing.T) {
+		t.Parallel()
+
+		planes := captionQueue()
+		scene, src := windowScene(t, windowFrame(planes[0]))
+		scene.followCaption(src.frame, 0)
+		checkCaption(t, scene, "alone", captionFarICAO, 0, 1)
+
+		src.frame = windowFrame(planes...)
+		scene.followCaption(src.frame, captionHold/2)
+		checkCaption(t, scene, "inside the hold", captionFarICAO, captionHold/2, 1)
+
+		scene.followCaption(src.frame, captionHold)
+		scene.followCaption(src.frame, captionHold+captionFade)
+		checkCaption(t, scene, "after the hold", captionFirstICAO, captionHold+captionFade, 0)
+	})
+}
+
+// TestCaptionKeepsItsArrival checks what does not move a held arrival's
+// caption, and what does besides landing.
+func TestCaptionKeepsItsArrival(t *testing.T) {
+	t.Parallel()
+
+	held := approachPlane("484AF1", "KLM88U", 6, 6*glideFtPerNm)
+	level := held
+	level.VertRate, level.Heading = 0, windowNorthDeg
+	goAround := held
+	goAround.VertRate = windowClimbFpm
+	lost := held
+	lost.Latitude, lost.Longitude = 0, 0
+
+	for _, testCase := range []struct {
+		name     string
+		planes   []airplane.Snapshot
+		wantKept bool
+	}{
+		{
+			name:     "another a little nearer",
+			planes:   []airplane.Snapshot{held, approachPlane("484AF2", "KLM40E", 4.5, 4.5*glideFtPerNm)},
+			wantKept: true,
+		},
+		{name: "a level leg across the field", planes: []airplane.Snapshot{level}, wantKept: true},
+		{name: "a go-around", planes: []airplane.Snapshot{goAround}},
+		{name: "its position lost", planes: []airplane.Snapshot{lost}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, src := windowScene(t, windowFrame(held))
+			scene.followCaption(src.frame, 0)
+
+			src.frame = windowFrame(testCase.planes...)
+			scene.followCaption(src.frame, 2*captionHold)
+
+			if kept := scene.caption.icao == held.ICAO && !scene.caption.leaving; kept != testCase.wantKept {
+				t.Errorf("kept %v, want %v", kept, testCase.wantKept)
+			}
+		})
+	}
+}
+
+// TestLandedIsNotAnArrival checks that an aircraft rolling slowly at the
+// field is neither captioned nor plotted, and that an unknown ground speed
+// or a slow aircraft further out is not taken for one on the ground.
+func TestLandedIsNotAnArrival(t *testing.T) {
+	t.Parallel()
+
+	taxiing := approachPlane("484AF3", "KLM1782", 0.4, 0)
+	taxiing.Altitude, taxiing.Velocity = 25, windowTaxiKt
+	unknown := taxiing
+	unknown.ICAO, unknown.Velocity = "484AF4", -1
+	slowFar := approachPlane("484AF5", "PHABC", landedReachNm+1, 1500)
+	slowFar.Velocity = windowTaxiKt
+	behind := approachPlane("484AF6", "KLM40E", 9, 9*glideFtPerNm)
+
+	for _, testCase := range []struct {
+		name   string
+		planes []airplane.Snapshot
+		want   string
+	}{
+		{name: "taxiing in", planes: []airplane.Snapshot{taxiing, behind}, want: behind.ICAO},
+		{name: "no ground speed yet", planes: []airplane.Snapshot{unknown, behind}, want: unknown.ICAO},
+		{name: "slow, outside the field", planes: []airplane.Snapshot{slowFar, behind}, want: slowFar.ICAO},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := windowFrame(testCase.planes...)
+			scene := approachScene(t, frame, false)
+
+			if pick := scene.captionCandidate(frame); pick.plane.ICAO != testCase.want {
+				t.Errorf("caption on %q, want %q", pick.plane.ICAO, testCase.want)
+			}
+
+			lay := approachLay(t, approachTestWidth, approachTestHeight)
+			strip, _ := scene.newApproachLayout(&lay)
+			_, plotted := scene.approachDotFor(&testCase.planes[0], frame.Corridors, &strip)
+
+			if plotted != (testCase.planes[0].ICAO == testCase.want) {
+				t.Errorf("%s plotted %v", testCase.planes[0].ICAO, plotted)
+			}
+		})
+	}
 }
 
 // checkCaption fails unless the caption is on icao at the given alpha.

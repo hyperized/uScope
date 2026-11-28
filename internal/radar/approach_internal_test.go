@@ -102,54 +102,84 @@ func TestApplyCarriesTheApproach(t *testing.T) {
 func TestNewApproachLayout(t *testing.T) {
 	t.Parallel()
 
-	scene := approachScene(t, windowFrame(), false)
-
 	for _, testCase := range []struct {
 		name          string
 		width, height int
+		window        bool
 		wantOK        bool
 	}{
 		{name: "stream", width: approachTestWidth, height: approachTestHeight, wantOK: true},
+		{
+			name: "stream under the overlay", width: approachTestWidth, height: approachTestHeight,
+			window: true, wantOK: true,
+		},
 		{name: "1440p", width: approachBenchWidth, height: approachBenchHeight, wantOK: true},
+		{name: "2160p", width: 3840, height: 2160, wantOK: true},
 		{name: "too small", width: 400, height: 300},
-		{name: "no face", width: approachTestWidth, height: approachTestHeight},
+		{name: "too short for two rows", width: 1100, height: 1080, window: true},
 	} {
-		lay := approachLay(t, testCase.width, testCase.height)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 
-		if testCase.name == "no face" {
-			faceless := *scene
-			faceless.faces.Small = nil
+			scene := approachScene(t, windowFrame(), testCase.window)
+			lay := approachLay(t, testCase.width, testCase.height)
 
-			if _, ok := faceless.newApproachLayout(&lay); ok {
-				t.Error("a layout with no face to set the type in")
+			strip, ok := scene.newApproachLayout(&lay)
+			if ok != testCase.wantOK {
+				t.Fatalf("ok %v, want %v", ok, testCase.wantOK)
 			}
 
-			continue
-		}
+			if !ok {
+				return
+			}
 
-		strip, ok := scene.newApproachLayout(&lay)
-		if ok != testCase.wantOK {
-			t.Fatalf("%s: ok %v, want %v", testCase.name, ok, testCase.wantOK)
-		}
+			win := newWindowLayout(&lay)
+			wantLeft := testCase.width * approachLeftPercent / percent
+			wantRight := min(wantLeft+testCase.width*approachWidthPercent/percent, scene.approachRightLimit(&lay, &win))
+			wantHeight := testCase.width * approachHeightPercent / percent
 
-		if !ok {
-			continue
-		}
+			if strip.panel.Min.X != wantLeft || strip.panel.Max.X != wantRight || strip.panel.Dy() != wantHeight {
+				t.Errorf("panel %v, want left %d, right %d and height %d", strip.panel, wantLeft, wantRight, wantHeight)
+			}
 
-		wantLeft := testCase.width * approachLeftPercent / percent
-		wantWidth := testCase.width * approachWidthPercent / percent
+			if !strip.plot.In(strip.panel) || strip.plot.Dy() < approachRows*strip.pitch {
+				t.Errorf("plot %v outside the panel %v or under %d rows", strip.plot, strip.panel, approachRows)
+			}
+		})
+	}
+}
 
-		if strip.panel.Min.X != wantLeft || strip.panel.Dx() != wantWidth {
-			t.Errorf("%s: panel %v, want left %d and width %d", testCase.name, strip.panel, wantLeft, wantWidth)
-		}
+func TestNewApproachLayoutWithNoFace(t *testing.T) {
+	t.Parallel()
 
-		if wantHeight := wantWidth * tenths / approachAspectTenths; strip.panel.Dy() != wantHeight {
-			t.Errorf("%s: panel height %d, want %d", testCase.name, strip.panel.Dy(), wantHeight)
-		}
+	scene := approachScene(t, windowFrame(), false)
+	scene.faces.Small = nil
+	lay := approachLay(t, approachTestWidth, approachTestHeight)
 
-		if !strip.plot.In(strip.panel) {
-			t.Errorf("%s: plot %v outside the panel %v", testCase.name, strip.plot, strip.panel)
-		}
+	if _, ok := scene.newApproachLayout(&lay); ok {
+		t.Error("a layout with no face to set the type in")
+	}
+}
+
+// TestApproachRightLimit checks the strip keeps clear of the clock: no limit
+// with the overlay off, and the clock's left edge less the overlay's gap
+// with it on.
+func TestApproachRightLimit(t *testing.T) {
+	t.Parallel()
+
+	lay := approachLay(t, approachTestWidth, approachTestHeight)
+	win := newWindowLayout(&lay)
+
+	if got := approachScene(t, windowFrame(), false).approachRightLimit(&lay, &win); got != math.MaxInt {
+		t.Errorf("limit %d with the overlay off, want none", got)
+	}
+
+	scene := approachScene(t, windowFrame(), true)
+	clock := scene.windowPen(&lay, &win, scene.faces.Large, 0)
+	want := win.box.Max.X - clock.measure("19:36") - win.scale*windowCountGap
+
+	if got := scene.approachRightLimit(&lay, &win); got != want {
+		t.Errorf("limit %d with the overlay on, want %d", got, want)
 	}
 }
 
@@ -346,7 +376,8 @@ func TestApproachLabelsNeverCollide(t *testing.T) {
 }
 
 // TestEveryArrivalIsLabelled is the owner's rule: eight arrivals spread over
-// the 15 NM, or four within 1.5 NM of each other, all carry their callsigns.
+// the 15 NM, or four within 1.5 NM of each other, all carry their callsigns,
+// in two rows at most.
 func TestEveryArrivalIsLabelled(t *testing.T) {
 	t.Parallel()
 
@@ -466,8 +497,8 @@ func checkApproachOrder(t *testing.T, scene *Scene) {
 			t.Errorf("callsign %q is out of its dot's order", dot.callsign)
 		}
 
-		if dot.label.box.Max.Y > dot.y {
-			t.Errorf("callsign %q is not above its dot", dot.callsign)
+		if dot.label.box.Max.Y > dot.y || dot.label.row >= approachRows {
+			t.Errorf("callsign %q is not above its dot within %d rows", dot.callsign, approachRows)
 		}
 
 		lastCentre = centre
@@ -583,6 +614,7 @@ func TestFindApproachSpot(t *testing.T) {
 		name      string
 		blocked   []image.Rectangle
 		lean      approachLean
+		next      int
 		edit      func(*approachRun)
 		want      approachSpot
 		wantFound bool
@@ -609,6 +641,14 @@ func TestFindApproachSpot(t *testing.T) {
 			edit: func(run *approachRun) { run.barriers[0] = 499 },
 		},
 		{name: "kept left of the last centre", edit: func(run *approachRun) { run.rightmost = 480 }},
+		{
+			name: "staggered clear of the next column", lean: leanStagger, next: 480,
+			want: approachSpot{box: image.Rect(500, bottom-10, 520, bottom)}, wantFound: true,
+		},
+		{
+			name: "staggered up a row off the next column", lean: leanStagger, next: 499,
+			want: approachSpot{box: image.Rect(500, bottom-21, 520, bottom-11), row: 1}, wantFound: true,
+		},
 	} {
 		scene := &Scene{}
 		for _, box := range testCase.blocked {
@@ -620,7 +660,10 @@ func TestFindApproachSpot(t *testing.T) {
 			testCase.edit(&run)
 		}
 
-		probe := approachProbe{strip: &strip, dot: &dot, width: 20, height: 10, own: -1}
+		probe := approachProbe{
+			strip: &strip, dot: &dot, width: 20, height: 10, own: -1,
+			next: testCase.next, stagger: testCase.lean == leanStagger,
+		}
 
 		got, found := scene.findApproachSpot(&probe, &run, testCase.lean)
 		if found != testCase.wantFound || got != testCase.want {

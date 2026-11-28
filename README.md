@@ -255,24 +255,29 @@ picture, for a stream with everything else switched off. The local time sits
 at the top right with the corridor airfield under it. While an arrival is
 within 15 NM of that airfield, or a departure within 8 NM when there is no
 arrival, the bottom left names it with its altitude in feet and its distance
-in nautical miles; the caption stays on one aircraft for at least eight seconds
-and fades in and out. A thin ring marks that aircraft in the picture for as
-long as its caption shows, and an operator name too long to fit beside the
+in nautical miles. The caption goes to the arrival nearest the field, the
+next to land, and stays on it until it has landed or left the 15 NM, unless
+another arrival gets more than 2 NM nearer the field; then it takes the
+nearest again. An aircraft rolling slower than 50 kt within 5 NM of the field
+counts as on the ground and is never named. The caption stays on one
+aircraft for at least eight seconds and fades in and out. A thin ring marks
+that aircraft in the picture for as long as its caption shows, and an operator name too long to fit beside the
 count gives way to the callsign. The bottom right counts the arrivals and
 departures of the last hour. There is no key for it.
 
 `--minimal-approach on` adds a see-through side view headed INBOUND TRAFFIC
-in the top-left corner of `minimal3d`, with or without the window overlay.
-Every arrival within 15 NM of the corridor airfield is a dot at its distance
-from the field and its height, so the queue can be seen sliding down towards
-the field. A dashed line marks a three-degree descent for comparison. Every
-dot carries its callsign as transmitted, above the line and in the same
-order as the dots; when neighbours are close the names step up a row or two,
-each with a thin vertical line down to its dot. The aircraft the caption is
-on has the larger dot and the brighter label. Only a bunch too tight to
-label leaves its furthest dots bare, counted in a small "+N" at the left.
-Aircraft above 5,000 ft sit on the top edge, drawn fainter. Heights are the
-pressure altitude the transponder reports. There is no key for it either.
+along the top left of `minimal3d`, with or without the window overlay. It is
+65% of the picture wide and a tenth of its width tall, and stops short of the
+clock when the overlay is on. Every arrival within 15 NM of the corridor
+airfield is a dot at its distance from the field and its height, so the queue
+can be seen sliding down towards the field. A dashed line marks a three-degree
+descent for comparison. Every dot carries its callsign as transmitted, above
+the line and in the same order as the dots; when neighbours are close a name
+steps up a row, with a thin vertical line down to its dot. The aircraft the
+caption is on has the larger dot and the brighter label. Only a bunch too
+tight to label leaves its furthest dots bare, counted in a small "+N" at the
+left. Aircraft above 5,000 ft sit on the top edge, drawn fainter. Heights are
+the pressure altitude the transponder reports. There is no key for it either.
 
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture, with only the keys

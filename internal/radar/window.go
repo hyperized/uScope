@@ -73,6 +73,26 @@ const (
 	// it is on screen long enough to read before it moves to another.
 	captionHold = 8 * time.Second
 
+	// captionOvertakeNm is how much nearer the field another arrival has to
+	// be before the caption leaves the one it holds for it. Less than the
+	// two and a half to three miles a tower keeps between two aircraft in
+	// line on final, so the one ahead in the queue always wins; more than
+	// the stagger between two aircraft on parallel finals, so the caption
+	// does not hop between them as their distances cross.
+	captionOvertakeNm = 2.0
+
+	// landedReachNm and landedSpeedKt mark an aircraft on the ground at the
+	// field: within reach of its reference point and slower over the ground
+	// than any fixed-wing aircraft flies a final. Five miles holds every
+	// runway of a field the size of Schiphol. Speed rather than height,
+	// because a transponder on the ground stops sending altitude and its
+	// last airborne figure and descent rate stay on the snapshot: an
+	// aircraft that has landed still reads as descending, low, while it
+	// taxis. The altitude is pressure altitude besides, a few hundred feet
+	// off the field's elevation on a high or low pressure day.
+	landedReachNm = 5.0
+	landedSpeedKt = 50.0
+
 	// captionFade is how long the caption takes to come up or go away.
 	captionFade = time.Second
 
@@ -243,12 +263,19 @@ func (s *Scene) drawWindowClock(lay *layout, win *windowLayout, frame source.Fra
 
 // followCaption decides which aircraft the caption is on for this frame.
 //
-// The nearest arrival within arrivalReachNm wins, then the nearest departure
-// within departureReachNm. Once on an aircraft the caption keeps it for at
-// least captionHold, then goes when the aircraft stops qualifying or when a
-// departure is held and an arrival has turned up. It always fades out before
-// it changes aircraft, so two names never cross on screen. An aircraft that
-// leaves the frame takes the caption with it at once, still fading.
+// The caption is meant to name the next aircraft to land. Free, it takes the
+// nearest arrival within arrivalReachNm, then the nearest departure within
+// departureReachNm. Once on an aircraft it keeps it for at least
+// captionHold. After that a held arrival goes when it has landed, has left
+// reach or the picture, has turned into a departure, or when another arrival
+// is captionOvertakeNm nearer the field, because that one will land first.
+// It does not go when it reads as passing through for a while: an arrival
+// flying level on a downwind or a base leg points away from or across the
+// field and would otherwise drop out and come back. A held departure goes
+// when it stops qualifying or an arrival turns up. The caption always fades
+// out before it changes aircraft, so two names never cross on screen, and
+// then takes the nearest again. An aircraft that leaves the frame takes the
+// caption with it at once, still fading.
 func (s *Scene) followCaption(frame source.Frame, elapsed time.Duration) {
 	held := &s.caption
 	field := frame.Corridors
@@ -316,42 +343,54 @@ func (s *Scene) captionDone(
 		return false
 	}
 
-	class, near := s.captionClass(*plane, field)
-	if !near || class != held.class {
+	if held.class == source.TrackInbound {
+		return s.arrivalDone(*plane, field, best)
+	}
+
+	class, _, near := s.captionClass(*plane, field)
+
+	return !near || class != held.class || (best.found && best.class == source.TrackInbound)
+}
+
+// arrivalDone reports whether a held arrival should give up the caption:
+// it has landed, left reach or the picture, turned into a departure, or
+// another arrival is clearly ahead of it.
+func (s *Scene) arrivalDone(plane airplane.Snapshot, field source.Corridors, best captionPick) bool {
+	class, distanceNm, shown := s.fromField(plane, field)
+	if !shown || distanceNm > arrivalReachNm || class == source.TrackOutbound || landed(plane, distanceNm) {
 		return true
 	}
 
-	return held.class == source.TrackOutbound && best.found && best.class == source.TrackInbound
+	return best.found && best.class == source.TrackInbound && best.nm < distanceNm-captionOvertakeNm
 }
 
-// captionPick is the aircraft the caption would pick if it were free, and
-// its class; found is false when nothing qualifies.
+// captionPick is the aircraft the caption would pick if it were free, its
+// class and its distance from the field; found is false when nothing
+// qualifies.
 type captionPick struct {
 	plane airplane.Snapshot
 	class source.TrackClass
+	nm    float64
 	found bool
 }
 
 // captionCandidate is the aircraft the caption would pick if it were free:
 // the nearest arrival in reach, or failing that the nearest departure.
 func (s *Scene) captionCandidate(frame source.Frame) captionPick {
-	arrival := captionPick{class: source.TrackInbound}
-	departure := captionPick{class: source.TrackOutbound}
-	arrivalNm, departureNm := math.Inf(1), math.Inf(1)
+	arrival := captionPick{class: source.TrackInbound, nm: math.Inf(1)}
+	departure := captionPick{class: source.TrackOutbound, nm: math.Inf(1)}
 
 	for _, plane := range frame.Planes {
-		class, near := s.captionClass(plane, frame.Corridors)
+		class, distanceNm, near := s.captionClass(plane, frame.Corridors)
 		if !near {
 			continue
 		}
 
-		distanceNm := frame.Corridors.Field.DistanceToNm(plane.Latitude, plane.Longitude)
-
 		switch {
-		case class == source.TrackInbound && distanceNm < arrivalNm:
-			arrival.plane, arrival.found, arrivalNm = plane, true, distanceNm
-		case class == source.TrackOutbound && distanceNm < departureNm:
-			departure.plane, departure.found, departureNm = plane, true, distanceNm
+		case class == source.TrackInbound && distanceNm < arrival.nm:
+			arrival.plane, arrival.found, arrival.nm = plane, true, distanceNm
+		case class == source.TrackOutbound && distanceNm < departure.nm:
+			departure.plane, departure.found, departure.nm = plane, true, distanceNm
 		default:
 		}
 	}
@@ -367,23 +406,24 @@ func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 	return captionPick{}
 }
 
-// captionClass is an aircraft's track class and whether it is close enough
-// to the field, and shown on the picture, for the caption to name it.
-func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, bool) {
+// captionClass is an aircraft's track class, its distance from the field,
+// and whether it is close enough to the field, and shown on the picture, for
+// the caption to name it.
+func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, float64, bool) {
 	class, distanceNm, shown := s.fromField(plane, field)
 	if !shown {
-		return source.TrackTransit, false
+		return source.TrackTransit, distanceNm, false
 	}
 
 	switch class {
 	case source.TrackInbound:
-		return class, distanceNm <= arrivalReachNm
+		return class, distanceNm, distanceNm <= arrivalReachNm
 	case source.TrackOutbound:
-		return class, distanceNm <= departureReachNm
+		return class, distanceNm, distanceNm <= departureReachNm
 	case source.TrackTransit:
 		fallthrough
 	default:
-		return class, false
+		return class, distanceNm, false
 	}
 }
 
@@ -392,12 +432,30 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 // filter is hiding it. The caption and the approach strip both sort the
 // traffic through it, so an aircraft the caption calls an arrival is one the
 // strip plots.
+//
+// An aircraft on the ground at the field passes through, whatever Classify
+// makes of it. Taxiing in it keeps the descent rate it touched down with,
+// which Classify reads as an arrival, and it is the nearest of them all; a
+// departure waiting at the holding point is not climbing out yet either.
 func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, float64, bool) {
 	if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
 		return source.TrackTransit, 0, false
 	}
 
-	return field.Classify(plane), field.Field.DistanceToNm(plane.Latitude, plane.Longitude), true
+	distanceNm := field.Field.DistanceToNm(plane.Latitude, plane.Longitude)
+	if landed(plane, distanceNm) {
+		return source.TrackTransit, distanceNm, true
+	}
+
+	return field.Classify(plane), distanceNm, true
+}
+
+// landed reports whether an aircraft distanceNm from the field is on the
+// ground there: within landedReachNm and known to be moving slower than
+// landedSpeedKt. A snapshot with no ground speed yet carries a negative one,
+// and that is not taken for standing still.
+func landed(plane airplane.Snapshot, distanceNm float64) bool {
+	return distanceNm <= landedReachNm && plane.Velocity >= 0 && plane.Velocity < landedSpeedKt
 }
 
 // findByICAO is the aircraft with this address on the frame, or nil when it
