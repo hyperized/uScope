@@ -223,6 +223,13 @@ func (c *corridors) near(fix airplane.PositionEntry) bool {
 	return c.field.distanceNm(fix.Latitude, fix.Longitude) <= corridorFieldNm
 }
 
+// DistanceToNm is the distance in nautical miles from the field to a
+// position, on the same flat frame Classify measures by, so a caption that
+// says how far out an arrival is agrees with the rule that called it one.
+func (f Airfield) DistanceToNm(latitude, longitude float64) float64 {
+	return f.distanceNm(latitude, longitude)
+}
+
 // distanceNm is the distance from the field to a position, on the local
 // equirectangular frame at the field's latitude.
 func (f Airfield) distanceNm(latitude, longitude float64) float64 {

@@ -54,6 +54,8 @@ type options struct {
 	filled     bool
 	scale      int
 	spacing    int
+	alpha      float64
+	blended    bool
 }
 
 // Option adjusts one drawing or measuring call.
@@ -104,6 +106,20 @@ func WithSpacing(pixels int) Option {
 	}
 }
 
+// WithAlpha mixes the glyphs, and the background if there is one, into what
+// is already on the canvas at alpha instead of painting over it. Alpha means
+// what it does for canvas.BlendRect: one or more paints exactly what no alpha
+// would, and NaN, zero or less draws nothing while the run still measures and
+// returns the same x. It is how a run fades in and out over a picture.
+func WithAlpha(alpha float64) Option {
+	return func(set options) options {
+		set.alpha = alpha
+		set.blended = true
+
+		return set
+	}
+}
+
 // Draw paints value at (x, y), which is the top-left corner of the first
 // glyph's cell, and returns the x just past the last glyph.
 //
@@ -124,7 +140,12 @@ func Draw(dst *canvas.Canvas, font *psf.Font, x, y int, value string, ink color.
 	}
 
 	if set.filled {
-		dst.FillRect(image.Rect(x, y, x+width, y+height), set.background)
+		box := image.Rect(x, y, x+width, y+height)
+		if set.blended {
+			dst.BlendRect(box, set.background, set.alpha)
+		} else {
+			dst.FillRect(box, set.background)
+		}
 	}
 
 	pen{dst: dst, font: font, ink: ink, set: set}.run(x, y, value)
@@ -225,6 +246,15 @@ func (p pen) glyph(glyph psf.Glyph, originX, originY int) {
 	for row := range p.font.Height() {
 		for col := range p.font.Width() {
 			if !glyph.Set(col, row) {
+				continue
+			}
+
+			if p.set.blended {
+				p.dst.BlendRect(image.Rect(
+					originX+col*scale, originY+row*scale,
+					originX+(col+1)*scale, originY+(row+1)*scale,
+				), p.ink, p.set.alpha)
+
 				continue
 			}
 

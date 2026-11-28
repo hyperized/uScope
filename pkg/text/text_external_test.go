@@ -740,3 +740,91 @@ func TestDrawRightAndCenteredNilFont(t *testing.T) {
 		})
 	}
 }
+
+// TestDrawWithAlpha checks that a blended run mixes its ink and its
+// background into the canvas the way canvas.BlendRect does, that alpha one
+// paints the same bytes as no alpha at all, and that alpha zero paints
+// nothing and still returns the measured end.
+func TestDrawWithAlpha(t *testing.T) {
+	t.Parallel()
+
+	const (
+		half  = 0.5
+		scale = 2
+	)
+
+	font := basicFont(t)
+
+	for _, testCase := range []struct {
+		name  string
+		alpha float64
+		scale int
+	}{
+		{name: "half at scale one", alpha: half, scale: 1},
+		{name: "half at scale two", alpha: half, scale: scale},
+		{name: "opaque", alpha: 1, scale: scale},
+		{name: "invisible", alpha: 0, scale: scale},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			width, height := text.Measure(font, twoGlyphValue, text.WithScale(testCase.scale))
+			got := blankCanvas(t, width, height)
+			want := blankCanvas(t, width, height)
+
+			got.Clear(canvas.Green)
+			want.Clear(canvas.Green)
+
+			end := text.Draw(got, font, 0, 0, twoGlyphValue, canvas.Red,
+				text.WithScale(testCase.scale), text.WithBackground(canvas.Blue), text.WithAlpha(testCase.alpha))
+			wantEnd := text.Draw(want, font, 0, 0, twoGlyphValue, canvas.Red, text.WithScale(testCase.scale))
+
+			if end != wantEnd {
+				t.Errorf("Draw returned %d, want %d", end, wantEnd)
+			}
+
+			reference := blankCanvas(t, width, height)
+			reference.Clear(canvas.Green)
+			reference.BlendRect(reference.Bounds(), canvas.Blue, testCase.alpha)
+
+			assertBlended(t, got, want, reference, testCase.alpha)
+		})
+	}
+}
+
+// blankCanvas is canvas.New with the error turned into a fatal one.
+func blankCanvas(t *testing.T, width, height int) *canvas.Canvas {
+	t.Helper()
+
+	canv, err := canvas.New(width, height)
+	if err != nil {
+		t.Fatalf("canvas.New: %v", err)
+	}
+
+	return canv
+}
+
+// assertBlended compares a blended run against an opaque one drawn on its
+// own: where the opaque run left the ground green the blended one shows the
+// background mixed in, and where it inked a pixel the blended one shows the
+// ink mixed over that background.
+func assertBlended(t *testing.T, got, opaque, background *canvas.Canvas, alpha float64) {
+	t.Helper()
+
+	bounds := got.Bounds()
+
+	for pixelY := bounds.Min.Y; pixelY < bounds.Max.Y; pixelY++ {
+		for pixelX := bounds.Min.X; pixelX < bounds.Max.X; pixelX++ {
+			want := background.Image().RGBAAt(pixelX, pixelY)
+
+			if opaque.Image().RGBAAt(pixelX, pixelY) == canvas.Red {
+				mixed := blankCanvas(t, 1, 1)
+				mixed.Clear(want)
+				mixed.Blend(0, 0, canvas.Red, alpha)
+				want = mixed.Image().RGBAAt(0, 0)
+			}
+
+			assertPixel(t, got, pixelX, pixelY, want)
+		}
+	}
+}

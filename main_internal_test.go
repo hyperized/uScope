@@ -83,6 +83,7 @@ const (
 	flagMinAirport = "--minimal-airports"
 	flagMinBar     = "--minimal-bar"
 	flagMinBoard   = "--minimal-board"
+	flagMinWindow  = "--minimal-window"
 	flagLights     = "--lights"
 	flagStars      = "--stars"
 	flagCorridors  = "--corridors"
@@ -3102,12 +3103,15 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 		wantAirports bool
 		wantBar      bool
 		wantBoard    bool
+		wantWindow   bool
 	}{
 		{name: caseDefault, args: nil, wantAirports: true},
 		{name: "bar on", args: []string{flagMinBar, defaultOn}, wantBar: true, wantAirports: true},
 		{name: "bar off explicit", args: []string{flagMinBar, offValue}, wantAirports: true},
 		{name: "board on", args: []string{flagMinBoard, defaultOn}, wantBoard: true, wantAirports: true},
 		{name: "board off explicit", args: []string{flagMinBoard, offValue}, wantAirports: true},
+		{name: "window on", args: []string{flagMinWindow, defaultOn}, wantWindow: true, wantAirports: true},
+		{name: "window off explicit", args: []string{flagMinWindow, offValue}, wantAirports: true},
 		{name: "off explicit", args: []string{flagMinShore, offValue, flagMinAirport, offValue}},
 		{name: "shore on", args: []string{flagMinShore, defaultOn}, wantShore: true, wantAirports: true},
 		{name: "airports off", args: []string{flagMinAirport, offValue}},
@@ -3129,13 +3133,14 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 			want.minimalAirports = testCase.wantAirports
 			want.minimalBar = testCase.wantBar
 			want.minimalBoard = testCase.wantBoard
+			want.minimalWindow = testCase.wantWindow
 
 			checkConfig(t, got, want)
 		})
 	}
 }
 
-// TestParseFlagsMinimalSwitchRejections checks each of the four refuses
+// TestParseFlagsMinimalSwitchRejections checks each of the five refuses
 // anything outside the on/off allow list with its own sentinel and the
 // radar's.
 func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
@@ -3156,6 +3161,8 @@ func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
 		{name: "bar wrong case", args: []string{flagMinBar, "On"}, wantErr: errMinBar},
 		{name: "board empty", args: []string{flagMinBoard, ""}, wantErr: errMinBoard},
 		{name: "board bool spelling", args: []string{flagMinBoard, "1"}, wantErr: errMinBoard},
+		{name: "window empty", args: []string{flagMinWindow, ""}, wantErr: errMinWindow},
+		{name: "window wrong case", args: []string{flagMinWindow, "ON"}, wantErr: errMinWindow},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3487,6 +3494,21 @@ func TestRadarSettingsCarriesTheBoard(t *testing.T) {
 
 	if !radarSettings(cfg).Board {
 		t.Error("radarSettings().Board = false after --minimal-board on, want true")
+	}
+}
+
+// TestRadarSettingsCarriesTheWindow checks that --minimal-window reaches the
+// scene's settings block.
+func TestRadarSettingsCarriesTheWindow(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagMinWindow, defaultOn})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if !radarSettings(cfg).Window {
+		t.Error("radarSettings().Window = false after --minimal-window on, want true")
 	}
 }
 

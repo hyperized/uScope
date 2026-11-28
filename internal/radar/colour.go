@@ -281,6 +281,14 @@ type Settings struct {
 	// bare. The full views have their own column and never read it.
 	Board bool
 
+	// Window is whether the bare 3D view carries the window overlay: the
+	// local time and the corridor airfield at the top right, a caption naming
+	// the nearest arrival or departure at the bottom left, and the last
+	// hour's arrivals and departures at the bottom right. A plain bool for the
+	// reason MinimalBar is one: off is the default, and a bare view opens
+	// bare. The other views never read it.
+	Window bool
+
 	// Lights is when the aircraft carry their exterior lights: red and green
 	// on the wingtips, white on the tail, the strobes and the beacon. Zero,
 	// and any spelling outside the three, reads as LightsOff, which is what
@@ -375,6 +383,7 @@ func (s *Scene) Apply(set Settings) {
 	s.minimalAirports = set.MinimalAirports
 	s.minimalBar = set.MinimalBar
 	s.board = set.Board
+	s.overlay = set.Window
 	s.lights = set.Lights.orDefault()
 	s.shown = set.View
 	s.applyRange(set.RangeNm)

@@ -250,6 +250,15 @@ EMERGENCY above them while an aircraft is squawking one.
 
 ![The bare 3D view with the strip board, coloured by corridor](docs/board.png)
 
+`--minimal-window on` sets three pieces of type straight on the bare 3D
+picture, for a stream with everything else switched off. The local time sits
+at the top right with the corridor airfield under it. While an arrival is
+within 25 km of that airfield, or a departure within 15 km when there is no
+arrival, the bottom left names it with its height in metres and its distance
+in kilometres; the caption stays on one aircraft for at least eight seconds
+and fades in and out. The bottom right counts the arrivals and departures of
+the last hour. There is no key for it.
+
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture, with only the keys
 that work there.
@@ -451,6 +460,7 @@ between the arrows and the brackets.
 | `--minimal-shore` | `off` | coastline, sea and land in `minimal` and `minimal3d` |
 | `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d` |
 | `--minimal-board` | `off` | the flight strip board down the right quarter of `minimal3d` |
+| `--minimal-window` | `off` | the time, a caption on the nearest arrival or departure and the hour's count over `minimal3d` |
 | `--lights` | `on` | the aircraft lights: `on`, `off`, or `auto` to leave them off in daylight |
 | `--stars` | `on` | stars in the 3D views' night sky |
 | `--corridors` | `on` | the corridor tubes |
@@ -475,8 +485,8 @@ between the arrows and the brackets.
 | `--test-pattern` | off | draw one still frame of the chosen scene and exit, leaving the console untouched |
 | `--scene` | `radar` | `radar`, or `pattern` for the rotation check |
 
-Every flag that takes `on` or `off` has a key that flips it while running;
-see the keys table.
+Every flag that takes `on` or `off` has a key that flips it while running,
+except `--minimal-window`; see the keys table.
 Exit status is 0 on a clean quit and 1 on any failure.
 
 ## Building and testing
