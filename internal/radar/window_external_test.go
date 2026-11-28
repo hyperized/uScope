@@ -130,7 +130,7 @@ func TestWindowStaysInItsCorners(t *testing.T) {
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestWindowDrawAllocations(t *testing.T) {
 	long := windowTestFrame()
-	long.Planes[0].Callsign = "CND093P"
+	long.Planes[0].Callsign = "SWR52CL"
 
 	for _, frame := range []source.Frame{windowTestFrame(), long} {
 		name := frame.Planes[0].Callsign

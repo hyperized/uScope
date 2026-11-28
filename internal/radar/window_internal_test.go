@@ -16,11 +16,11 @@ import (
 // The aircraft the caption tests place east of boardCorridors' field, in
 // nautical miles, and how they fly there.
 const (
-	windowArrivalNm      = 12.0 // 22 km, inside the arrival reach
+	windowArrivalNm      = 12.0 // inside the arrival reach
 	windowNearArrivalNm  = 8.0
-	windowFarArrivalNm   = 16.0 // 30 km, outside it
-	windowDepartureNm    = 5.0  // 9 km, inside the departure reach
-	windowFarDepartureNm = 10.0 // 18.5 km, outside it
+	windowFarArrivalNm   = 16.0 // outside it
+	windowDepartureNm    = 5.0  // inside the departure reach
+	windowFarDepartureNm = 10.0 // outside it
 
 	windowDescentFpm = -800
 	windowClimbFpm   = 1500
@@ -317,11 +317,11 @@ func TestCaptionDescribe(t *testing.T) {
 		altitudeFt           float64
 		wantName, wantNumber string
 		wantCallsign         string
-		wantMetres           float64
+		wantFeet             float64
 	}{
 		{
 			name: "a known operator", icao: lightICAO, callsign: "KLM1452 ", altitudeFt: 2100,
-			wantName: sampleICAO, wantNumber: "1452", wantCallsign: "KLM1452", wantMetres: 2100 * metresPerFoot,
+			wantName: sampleICAO, wantNumber: "1452", wantCallsign: "KLM1452", wantFeet: 2100,
 		},
 		{
 			name: "an unknown prefix", icao: lightICAO, callsign: windowUnknownCallsign,
@@ -352,12 +352,12 @@ func TestCaptionDescribe(t *testing.T) {
 					held.name, held.number, testCase.wantName, testCase.wantNumber)
 			}
 
-			if held.metres != testCase.wantMetres {
-				t.Errorf("describe() metres = %v, want %v", held.metres, testCase.wantMetres)
+			if held.altitudeFt != testCase.wantFeet {
+				t.Errorf("describe() altitude = %v ft, want %v", held.altitudeFt, testCase.wantFeet)
 			}
 
-			if wantKm := windowDepartureNm * kmPerNm; math.Abs(held.km-wantKm) > 1e-6 {
-				t.Errorf("describe() km = %v, want %v", held.km, wantKm)
+			if math.Abs(held.nm-windowDepartureNm) > 1e-6 {
+				t.Errorf("describe() distance = %v NM, want %v", held.nm, windowDepartureNm)
 			}
 		})
 	}
@@ -373,12 +373,36 @@ func TestCaptionFigures(t *testing.T) {
 		got  func() []byte
 		want string
 	}{
-		{name: "metres to the nearest ten", got: func() []byte { return scene.metresFigure(644) }, want: "640"},
-		{name: "tenths close in", got: func() []byte { return scene.kmFigure(4.24) }, want: "4.2"},
-		{name: "whole kilometres further out", got: func() []byte { return scene.kmFigure(13.4) }, want: "13"},
+		{name: "feet down to the nearest fifty", got: func() []byte { return scene.feetFigure(2424) }, want: "2,400"},
+		{name: "feet up to the nearest fifty", got: func() []byte { return scene.feetFigure(675) }, want: "700"},
+		{name: "tenths close in", got: func() []byte { return scene.nmFigure(4.24) }, want: "4.2"},
+		{name: "whole miles further out", got: func() []byte { return scene.nmFigure(13.4) }, want: "13"},
 	} {
 		if got := string(testCase.got()); got != testCase.want {
 			t.Errorf("%s: %q, want %q", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+// TestCaptionHeight checks the caption's height is the altitude in feet,
+// and that a zero or negative altitude gives none.
+func TestCaptionHeight(t *testing.T) {
+	t.Parallel()
+
+	var scene Scene
+
+	for _, testCase := range []struct {
+		altitudeFt float64
+		known      bool
+	}{
+		{altitudeFt: 2400, known: true},
+		{altitudeFt: 0},
+		{altitudeFt: -100},
+	} {
+		got, known := scene.captionHeight(testCase.altitudeFt)
+		if known != testCase.known || (known && got != testCase.altitudeFt) {
+			t.Errorf("captionHeight(%v) = %v, %v, want the same feet, %v",
+				testCase.altitudeFt, got, known, testCase.known)
 		}
 	}
 }
@@ -473,7 +497,7 @@ const windowUnknownCallsign = "ZZZ99"
 
 // windowLongCallsign is a real operator whose name makes the caption's
 // full form too long to sit beside the count at 1080 rows.
-const windowLongCallsign = "CND093P"
+const windowLongCallsign = "SWR52CL"
 
 // TestCaptionFit checks the caption's forms are tried longest first and the
 // first that fits is kept: the full form, the callsign in place of the name,
@@ -486,7 +510,7 @@ func TestCaptionFit(t *testing.T) {
 	canv := boardCanvas(t, 1920, 1080)
 	scene.Draw(canv, 0)
 
-	if scene.caption.name != "Corendon Dutch Airlines" || scene.caption.callsign != windowLongCallsign {
+	if scene.caption.name != "Swiss International Air Lines" || scene.caption.callsign != windowLongCallsign {
 		t.Fatalf("caption on %q %q, want the operator and the callsign", scene.caption.name, scene.caption.callsign)
 	}
 

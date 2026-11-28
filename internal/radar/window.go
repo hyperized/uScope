@@ -58,11 +58,11 @@ const (
 	// windowTracking spaces the small capitals out by one glyph pixel.
 	windowTracking = 1
 
-	// arrivalReachKm and departureReachKm are how close to the field an
+	// arrivalReachNm and departureReachNm are how close to the field an
 	// aircraft has to be for the caption to name it. An arrival is worth
 	// watching from further out, since it is coming towards the field.
-	arrivalReachKm   = 25.0
-	departureReachKm = 15.0
+	arrivalReachNm   = 15.0
+	departureReachNm = 8.0
 
 	// captionHold is the shortest time the caption stays on one aircraft, so
 	// it is on screen long enough to read before it moves to another.
@@ -75,35 +75,30 @@ const (
 	// so the figure does not drop to zero on the hour.
 	movementWindow = time.Hour
 
-	// kmPerNm and metresPerFoot turn the scene's nautical units into the
-	// metric ones a general audience reads.
-	kmPerNm       = 1.852
-	metresPerFoot = 0.3048
+	// feetStep rounds the caption's height to 50 ft. Altitude is reported
+	// in 25 ft steps, and a figure that flickers between two of them on
+	// every report is harder to read from across a room than it is worth.
+	feetStep = 50
 
-	// metresStep rounds a height to tens of metres. A pressure altitude is
-	// reported in 25 ft steps, so the last metre would be a figure nobody
-	// measured.
-	metresStep = 10
-
-	// tenthsBelowKm is the distance under which the caption gives tenths of
-	// a kilometre, because a final approach covers the last ten in a few
+	// tenthsBelowNm is the distance under which the caption gives tenths of
+	// a nautical mile, because a final approach covers the last ten in a few
 	// minutes and a whole number would sit still for most of it.
-	tenthsBelowKm = 10
+	tenthsBelowNm = 10
 
 	// callsignPrefix is how many letters of a callsign name the operator.
 	callsignPrefix = 3
 )
 
-// The overlay's words. The caption's units follow the owner's ruling that the
-// audience is the general public: metres up and kilometres out.
+// The overlay's words. The caption keeps aviation's units, as the rest of the
+// scope does: altitude in feet and distance in nautical miles.
 const (
 	captionInText    = "COMING IN NOW"
 	captionOutText   = "CLIMBING OUT"
 	landedLabel      = "LANDED THIS HOUR"
 	tookOffLabel     = "TOOK OFF"
 	captionSeparator = " · "
-	captionUp        = " m up"
-	captionOut       = " km out"
+	captionFeet      = " ft"
+	captionNm        = " NM"
 	captionSpace     = " "
 )
 
@@ -120,12 +115,12 @@ type caption struct {
 	name     string
 	number   string
 	callsign string
-	metres   float64
-	km       float64
+	nm       float64
 
 	// latitude, longitude and altitudeFt are where the aircraft was last
 	// seen, which is where its ring stays while the caption fades out after
-	// the aircraft has left the frame.
+	// the aircraft has left the frame. altitudeFt is also what captionHeight
+	// turns into the caption's height.
 	latitude, longitude, altitudeFt float64
 
 	// shownAt is the render clock the caption came up at, and leaveAt the
@@ -240,8 +235,8 @@ func (s *Scene) drawWindowClock(lay *layout, win *windowLayout, frame source.Fra
 
 // followCaption decides which aircraft the caption is on for this frame.
 //
-// The nearest arrival within arrivalReachKm wins, then the nearest departure
-// within departureReachKm. Once on an aircraft the caption keeps it for at
+// The nearest arrival within arrivalReachNm wins, then the nearest departure
+// within departureReachNm. Once on an aircraft the caption keeps it for at
 // least captionHold, then goes when the aircraft stops qualifying or when a
 // departure is held and an arrival has turned up. It always fades out before
 // it changes aircraft, so two names never cross on screen. An aircraft that
@@ -334,7 +329,7 @@ type captionPick struct {
 func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 	arrival := captionPick{class: source.TrackInbound}
 	departure := captionPick{class: source.TrackOutbound}
-	arrivalKm, departureKm := math.Inf(1), math.Inf(1)
+	arrivalNm, departureNm := math.Inf(1), math.Inf(1)
 
 	for _, plane := range frame.Planes {
 		class, near := s.captionClass(plane, frame.Corridors)
@@ -342,13 +337,13 @@ func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 			continue
 		}
 
-		distanceKm := frame.Corridors.Field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
+		distanceNm := frame.Corridors.Field.DistanceToNm(plane.Latitude, plane.Longitude)
 
 		switch {
-		case class == source.TrackInbound && distanceKm < arrivalKm:
-			arrival.plane, arrival.found, arrivalKm = plane, true, distanceKm
-		case class == source.TrackOutbound && distanceKm < departureKm:
-			departure.plane, departure.found, departureKm = plane, true, distanceKm
+		case class == source.TrackInbound && distanceNm < arrivalNm:
+			arrival.plane, arrival.found, arrivalNm = plane, true, distanceNm
+		case class == source.TrackOutbound && distanceNm < departureNm:
+			departure.plane, departure.found, departureNm = plane, true, distanceNm
 		default:
 		}
 	}
@@ -372,13 +367,13 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 	}
 
 	class := field.Classify(plane)
-	distanceKm := field.Field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
+	distanceNm := field.Field.DistanceToNm(plane.Latitude, plane.Longitude)
 
 	switch class {
 	case source.TrackInbound:
-		return class, distanceKm <= arrivalReachKm
+		return class, distanceNm <= arrivalReachNm
 	case source.TrackOutbound:
-		return class, distanceKm <= departureReachKm
+		return class, distanceNm <= departureReachNm
 	case source.TrackTransit:
 		fallthrough
 	default:
@@ -417,8 +412,15 @@ func (c *caption) describe(plane airplane.Snapshot, field source.Airfield) {
 	}
 
 	c.latitude, c.longitude, c.altitudeFt = plane.Latitude, plane.Longitude, plane.Altitude
-	c.metres = plane.Altitude * metresPerFoot
-	c.km = field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
+	c.nm = field.DistanceToNm(plane.Latitude, plane.Longitude)
+}
+
+// captionHeight is the height the caption gives for an altitude, both in
+// feet, and false when there is none to give. A snapshot says it has no
+// altitude with zero, and a figure at or under it is not worth a caption.
+// It is the one place the caption's height comes from.
+func (*Scene) captionHeight(altitudeFt float64) (float64, bool) {
+	return altitudeFt, altitudeFt > 0
 }
 
 // alpha is how far the caption has come up, from zero to one.
@@ -507,16 +509,16 @@ func (s *Scene) captionLine(pen *windowPen, alpha float64, form captionForm, dra
 		pen.draw(held.callsign, s.pal.Ink, alpha)
 	}
 
-	if held.metres > 0 {
+	if feet, known := s.captionHeight(held.altitudeFt); known {
 		pen.draw(captionSeparator, s.pal.Ink, alpha)
-		pen.drawBytes(s.metresFigure(held.metres), s.pal.Ink, alpha)
-		pen.draw(captionUp, s.pal.Ink, alpha)
+		pen.drawBytes(s.feetFigure(feet), s.pal.Ink, alpha)
+		pen.draw(captionFeet, s.pal.Ink, alpha)
 	}
 
 	if form != formNoDistance {
 		pen.draw(captionSeparator, s.pal.Ink, alpha)
-		pen.drawBytes(s.kmFigure(held.km), s.pal.Ink, alpha)
-		pen.draw(captionOut, s.pal.Ink, alpha)
+		pen.drawBytes(s.nmFigure(held.nm), s.pal.Ink, alpha)
+		pen.draw(captionNm, s.pal.Ink, alpha)
 	}
 
 	end := pen.x
@@ -525,19 +527,20 @@ func (s *Scene) captionLine(pen *windowPen, alpha float64, form captionForm, dra
 	return end
 }
 
-// metresFigure writes a height to the nearest ten metres.
-func (s *Scene) metresFigure(metres float64) []byte {
-	return s.whole(math.Round(metres/metresStep) * metresStep)
+// feetFigure writes a height to the nearest feetStep, with the thousands
+// separated the way the scope's other altitudes are.
+func (s *Scene) feetFigure(feet float64) []byte {
+	return s.thousands(math.Round(feet/feetStep) * feetStep)
 }
 
-// kmFigure writes a distance in tenths under tenthsBelowKm and in whole
-// kilometres from there out.
-func (s *Scene) kmFigure(km float64) []byte {
-	if km < tenthsBelowKm {
-		return s.fixed(km, 1)
+// nmFigure writes a distance in tenths under tenthsBelowNm and in whole
+// nautical miles from there out.
+func (s *Scene) nmFigure(nm float64) []byte {
+	if nm < tenthsBelowNm {
+		return s.fixed(nm, 1)
 	}
 
-	return s.whole(km)
+	return s.whole(nm)
 }
 
 // measureMovements is the x the hourly count starts at, measured before
