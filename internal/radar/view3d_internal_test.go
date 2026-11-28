@@ -1430,9 +1430,6 @@ func TestView3DCardinals(t *testing.T) {
 func TestView3DRefusesABoxItCannotDrawIn(t *testing.T) {
 	t.Parallel()
 
-	scene, _ := envelopeFixture()
-	scene.faces = Faces{}
-
 	for _, testCase := range []struct {
 		name string
 		box  image.Rectangle
@@ -1453,6 +1450,10 @@ func TestView3DRefusesABoxItCannotDrawIn(t *testing.T) {
 			// not be drawn through.
 			lay := layout{dst: canv, scope: testCase.box}
 
+			// Each case draws on a scene of its own: draw3D writes to the
+			// scene, and the cases run in parallel.
+			scene, _ := envelopeFixture()
+			scene.faces = Faces{}
 			scene.draw3D(&lay, source.Frame{}, 0)
 
 			if !identicalPixels(canv, blank) {
