@@ -261,6 +261,19 @@ long as its caption shows, and an operator name too long to fit beside the
 count gives way to the callsign. The bottom right counts the arrivals and
 departures of the last hour. There is no key for it.
 
+`--minimal-approach on` adds a see-through side view headed INBOUND TRAFFIC
+in the top-left corner of `minimal3d`, with or without the window overlay.
+Every arrival within 15 NM of the corridor airfield is a dot at its distance
+from the field and its height, so the queue can be seen sliding down towards
+the field. A dashed line marks a three-degree descent for comparison. Every
+dot carries its callsign as transmitted, above the line and in the same
+order as the dots; when neighbours are close the names step up a row or two,
+each with a thin vertical line down to its dot. The aircraft the caption is
+on has the larger dot and the brighter label. Only a bunch too tight to
+label leaves its furthest dots bare, counted in a small "+N" at the left.
+Aircraft above 5,000 ft sit on the top edge, drawn fainter. Heights are the
+pressure altitude the transponder reports. There is no key for it either.
+
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture, with only the keys
 that work there.
@@ -463,6 +476,7 @@ between the arrows and the brackets.
 | `--minimal-bar` | `off` | the bar with the clocks and the sun across the top of `minimal` and `minimal3d` |
 | `--minimal-board` | `off` | the flight strip board down the right quarter of `minimal3d` |
 | `--minimal-window` | `off` | the time, a caption on the nearest arrival or departure and the hour's count over `minimal3d` |
+| `--minimal-approach` | `off` | a side view of the arrivals by distance from the field and height, top left of `minimal3d` |
 | `--lights` | `on` | the aircraft lights: `on`, `off`, or `auto` to leave them off in daylight |
 | `--stars` | `on` | stars in the 3D views' night sky |
 | `--corridors` | `on` | the corridor tubes |
@@ -488,7 +502,7 @@ between the arrows and the brackets.
 | `--scene` | `radar` | `radar`, or `pattern` for the rotation check |
 
 Every flag that takes `on` or `off` has a key that flips it while running,
-except `--minimal-window`; see the keys table.
+except `--minimal-window` and `--minimal-approach`; see the keys table.
 Exit status is 0 on a clean quit and 1 on any failure.
 
 ## Building and testing

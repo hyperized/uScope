@@ -57,39 +57,40 @@ const (
 
 	// Repeated literals, named once so goconst has nothing to complain
 	// about and a typo in one table cannot silently diverge from another.
-	altFB          = "/dev/fb1"
-	outPNG         = "out.png"
-	flagRotate     = "--rotate"
-	flagSize       = "--size"
-	flagFPS        = "--fps"
-	flagBackend    = "--backend"
-	flagFrames     = "--frames"
-	flagPNG        = "--png"
-	flagScene      = "--scene"
-	flagTheme      = "--theme"
-	flagLook       = "--look"
-	flagDemo       = "--demo"
-	flagBeast      = "--beast"
-	flagReplay     = "--replay-iq"
-	flagGPSD       = "--gpsd"
-	flagLat        = "--lat"
-	flagLon        = "--lon"
-	flagColour     = "--colour"
-	flagFilter     = "--filter"
-	flagBattery    = "--battery"
-	flagAirports   = "--airports"
-	flagShore      = "--shore"
-	flagMinShore   = "--minimal-shore"
-	flagMinAirport = "--minimal-airports"
-	flagMinBar     = "--minimal-bar"
-	flagMinBoard   = "--minimal-board"
-	flagMinWindow  = "--minimal-window"
-	flagLights     = "--lights"
-	flagStars      = "--stars"
-	flagCorridors  = "--corridors"
-	flagAirways    = "--airways"
-	flagCorrField  = "--corridor-field"
-	flagHalfLife   = "--corridor-half-life"
+	altFB           = "/dev/fb1"
+	outPNG          = "out.png"
+	flagRotate      = "--rotate"
+	flagSize        = "--size"
+	flagFPS         = "--fps"
+	flagBackend     = "--backend"
+	flagFrames      = "--frames"
+	flagPNG         = "--png"
+	flagScene       = "--scene"
+	flagTheme       = "--theme"
+	flagLook        = "--look"
+	flagDemo        = "--demo"
+	flagBeast       = "--beast"
+	flagReplay      = "--replay-iq"
+	flagGPSD        = "--gpsd"
+	flagLat         = "--lat"
+	flagLon         = "--lon"
+	flagColour      = "--colour"
+	flagFilter      = "--filter"
+	flagBattery     = "--battery"
+	flagAirports    = "--airports"
+	flagShore       = "--shore"
+	flagMinShore    = "--minimal-shore"
+	flagMinAirport  = "--minimal-airports"
+	flagMinBar      = "--minimal-bar"
+	flagMinBoard    = "--minimal-board"
+	flagMinWindow   = "--minimal-window"
+	flagMinApproach = "--minimal-approach"
+	flagLights      = "--lights"
+	flagStars       = "--stars"
+	flagCorridors   = "--corridors"
+	flagAirways     = "--airways"
+	flagCorrField   = "--corridor-field"
+	flagHalfLife    = "--corridor-half-life"
 
 	// fieldEHAM is Schiphol, a busy field with traffic both ways.
 	fieldEHAM      = "EHAM"
@@ -3104,6 +3105,7 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 		wantBar      bool
 		wantBoard    bool
 		wantWindow   bool
+		wantApproach bool
 	}{
 		{name: caseDefault, args: nil, wantAirports: true},
 		{name: "bar on", args: []string{flagMinBar, defaultOn}, wantBar: true, wantAirports: true},
@@ -3112,6 +3114,8 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 		{name: "board off explicit", args: []string{flagMinBoard, offValue}, wantAirports: true},
 		{name: "window on", args: []string{flagMinWindow, defaultOn}, wantWindow: true, wantAirports: true},
 		{name: "window off explicit", args: []string{flagMinWindow, offValue}, wantAirports: true},
+		{name: "approach on", args: []string{flagMinApproach, defaultOn}, wantApproach: true, wantAirports: true},
+		{name: "approach off explicit", args: []string{flagMinApproach, offValue}, wantAirports: true},
 		{name: "off explicit", args: []string{flagMinShore, offValue, flagMinAirport, offValue}},
 		{name: "shore on", args: []string{flagMinShore, defaultOn}, wantShore: true, wantAirports: true},
 		{name: "airports off", args: []string{flagMinAirport, offValue}},
@@ -3134,13 +3138,14 @@ func TestParseFlagsMinimalSwitches(t *testing.T) {
 			want.minimalBar = testCase.wantBar
 			want.minimalBoard = testCase.wantBoard
 			want.minimalWindow = testCase.wantWindow
+			want.minimalApproach = testCase.wantApproach
 
 			checkConfig(t, got, want)
 		})
 	}
 }
 
-// TestParseFlagsMinimalSwitchRejections checks each of the five refuses
+// TestParseFlagsMinimalSwitchRejections checks each of the six refuses
 // anything outside the on/off allow list with its own sentinel and the
 // radar's.
 func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
@@ -3163,6 +3168,8 @@ func TestParseFlagsMinimalSwitchRejections(t *testing.T) {
 		{name: "board bool spelling", args: []string{flagMinBoard, "1"}, wantErr: errMinBoard},
 		{name: "window empty", args: []string{flagMinWindow, ""}, wantErr: errMinWindow},
 		{name: "window wrong case", args: []string{flagMinWindow, "ON"}, wantErr: errMinWindow},
+		{name: "approach empty", args: []string{flagMinApproach, ""}, wantErr: errMinApproach},
+		{name: "approach bool spelling", args: []string{flagMinApproach, "On"}, wantErr: errMinApproach},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -3509,6 +3516,21 @@ func TestRadarSettingsCarriesTheWindow(t *testing.T) {
 
 	if !radarSettings(cfg).Window {
 		t.Error("radarSettings().Window = false after --minimal-window on, want true")
+	}
+}
+
+// TestRadarSettingsCarriesTheApproach checks that --minimal-approach reaches
+// the scene's settings block.
+func TestRadarSettingsCarriesTheApproach(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseFlags([]string{flagMinApproach, defaultOn})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if !radarSettings(cfg).Approach {
+		t.Error("radarSettings().Approach = false after --minimal-approach on, want true")
 	}
 }
 

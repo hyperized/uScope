@@ -327,6 +327,14 @@ type Scene struct {
 	// minimalBar does. See boardcolumn.go.
 	board bool
 
+	// approach is whether the bare 3D view carries the approach strip, and
+	// approachDots and approachLabels the frame's dots and the places their
+	// labels took, kept here so a frame of them reaches the heap never. See
+	// approach.go.
+	approach       bool
+	approachDots   approachDots
+	approachLabels approachLabels
+
 	// overlay is whether the bare 3D view carries the window overlay: the
 	// clock, the caption and the hourly count set over the picture. caption
 	// is the aircraft the caption is on, and captionStarted says a frame has
@@ -800,6 +808,7 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 		s.drawScope(&lay, frame, elapsed)
 		s.drawBoardColumn(&lay, frame, column)
 		s.drawWindow(&lay, frame, elapsed)
+		s.drawApproach(&lay, frame)
 		s.drawBar(&lay, frame, bar)
 		s.drawRevealedKeyBar(&lay, elapsed)
 

@@ -362,12 +362,10 @@ func (s *Scene) captionCandidate(frame source.Frame) captionPick {
 // captionClass is an aircraft's track class and whether it is close enough
 // to the field, and shown on the picture, for the caption to name it.
 func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, bool) {
-	if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
+	class, distanceNm, shown := s.fromField(plane, field)
+	if !shown {
 		return source.TrackTransit, false
 	}
-
-	class := field.Classify(plane)
-	distanceNm := field.Field.DistanceToNm(plane.Latitude, plane.Longitude)
 
 	switch class {
 	case source.TrackInbound:
@@ -379,6 +377,19 @@ func (s *Scene) captionClass(plane airplane.Snapshot, field source.Corridors) (s
 	default:
 		return class, false
 	}
+}
+
+// fromField is an aircraft's track class and its distance from the corridor
+// airfield in nautical miles, and false when it has no position or the
+// filter is hiding it. The caption and the approach strip both sort the
+// traffic through it, so an aircraft the caption calls an arrival is one the
+// strip plots.
+func (s *Scene) fromField(plane airplane.Snapshot, field source.Corridors) (source.TrackClass, float64, bool) {
+	if !positioned(plane.Latitude, plane.Longitude) || !s.visible(plane) {
+		return source.TrackTransit, 0, false
+	}
+
+	return field.Classify(plane), field.Field.DistanceToNm(plane.Latitude, plane.Longitude), true
 }
 
 // findByICAO is the aircraft with this address on the frame, or nil when it
@@ -415,10 +426,11 @@ func (c *caption) describe(plane airplane.Snapshot, field source.Airfield) {
 	c.nm = field.DistanceToNm(plane.Latitude, plane.Longitude)
 }
 
-// captionHeight is the height the caption gives for an altitude, both in
-// feet, and false when there is none to give. A snapshot says it has no
-// altitude with zero, and a figure at or under it is not worth a caption.
-// It is the one place the caption's height comes from.
+// captionHeight is the height the caption and the approach strip give for
+// an altitude, both in feet, and false when there is none to give. A
+// snapshot says it has no altitude with zero, and a figure at or under it is
+// not worth a caption or a dot. It is the one place either takes a height
+// from.
 func (*Scene) captionHeight(altitudeFt float64) (float64, bool) {
 	return altitudeFt, altitudeFt > 0
 }

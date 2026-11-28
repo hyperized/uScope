@@ -214,6 +214,7 @@ func radarSettings(cfg config) radar.Settings {
 		MinimalBar:      cfg.minimalBar,
 		Board:           cfg.minimalBoard,
 		Window:          cfg.minimalWindow,
+		Approach:        cfg.minimalApproach,
 		Lights:          cfg.lights,
 		Stars:           cfg.stars,
 		Corridors:       cfg.corridors,
