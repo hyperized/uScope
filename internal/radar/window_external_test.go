@@ -3,11 +3,13 @@ package radar_test
 import (
 	"bytes"
 	"image"
+	"image/color"
 	"testing"
 	"time"
 
 	"github.com/hyperized/uScope/internal/radar"
 	"github.com/hyperized/uScope/internal/source"
+	"github.com/hyperized/uScope/internal/theme"
 	"github.com/hyperized/uScope/pkg/canvas"
 )
 
@@ -72,7 +74,8 @@ func TestWindowOnlyInTheBare3DView(t *testing.T) {
 
 // TestWindowStaysInItsCorners checks that the overlay draws in all three of
 // its places, the clock at the top right and the caption and the count along
-// the bottom, and leaves the middle of the picture alone.
+// the bottom, and leaves the middle of the picture alone but for the ring in
+// the accent ink around the captioned arrival.
 func TestWindowStaysInItsCorners(t *testing.T) {
 	t.Parallel()
 
@@ -103,13 +106,15 @@ func TestWindowStaysInItsCorners(t *testing.T) {
 				changed["caption"]++
 			case point.In(count):
 				changed["count"]++
+			case colorAt(after, offset) == theme.Night.Accent:
+				changed["ring"]++
 			default:
 				t.Fatalf("the overlay changed pixel %v, outside its three places", point)
 			}
 		}
 	}
 
-	for _, place := range []string{"clock", "caption", "count"} {
+	for _, place := range []string{"clock", "caption", "count", "ring"} {
 		if changed[place] == 0 {
 			t.Errorf("nothing drawn for the %s", place)
 		}
@@ -117,28 +122,36 @@ func TestWindowStaysInItsCorners(t *testing.T) {
 }
 
 // TestWindowDrawAllocations prices the overlay's frames at zero: the clock,
-// the count and the caption fading in, held and faded out, with the render
-// clock stepping a sixth of a second a frame.
+// the count, and the caption and its ring fading in, held and faded out, with
+// the render clock stepping a sixth of a second a frame. The second frame's
+// arrival flies for an operator whose name is too long to sit beside the
+// count, so every frame also measures the caption's shorter forms.
 //
 //nolint:paralleltest // AllocsPerRun panics when called from a parallel test.
 func TestWindowDrawAllocations(t *testing.T) {
-	frame := windowTestFrame()
-	scene, canv, _ := sceneOn(t, windowWidth, windowHeight, frame)
-	scene.Apply(radar.Settings{
-		View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Colour: radar.ColourCorridor, Window: true,
-	})
+	long := windowTestFrame()
+	long.Planes[0].Callsign = "SWR52CL"
 
-	var elapsed time.Duration
+	for _, frame := range []source.Frame{windowTestFrame(), long} {
+		name := frame.Planes[0].Callsign
 
-	scene.Draw(canv, elapsed)
+		scene, canv, _ := sceneOn(t, windowWidth, windowHeight, frame)
+		scene.Apply(radar.Settings{
+			View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Colour: radar.ColourCorridor, Window: true,
+		})
 
-	frameAt := func() {
-		elapsed += time.Second / 6
+		var elapsed time.Duration
+
 		scene.Draw(canv, elapsed)
-	}
 
-	if got := testing.AllocsPerRun(allocRuns, frameAt); got != 0 {
-		t.Errorf("Draw with the window overlay allocated %.1f times per frame, want 0", got)
+		frameAt := func() {
+			elapsed += time.Second / 6
+			scene.Draw(canv, elapsed)
+		}
+
+		if got := testing.AllocsPerRun(allocRuns, frameAt); got != 0 {
+			t.Errorf("%s: Draw with the window overlay allocated %.1f times per frame, want 0", name, got)
+		}
 	}
 }
 
@@ -162,6 +175,11 @@ func TestWindowWithNothingToCaption(t *testing.T) {
 	if !regionEqual(canv, bareCanvas, caption) {
 		t.Error("a caption was drawn with nothing near the field")
 	}
+}
+
+// colorAt is the colour of the pixel at offset in an RGBA pixel slice.
+func colorAt(pix []byte, offset int) color.RGBA {
+	return color.RGBA{R: pix[offset], G: pix[offset+1], B: pix[offset+2], A: pix[offset+3]}
 }
 
 // regionEqual reports whether two canvases hold the same pixels in box.
