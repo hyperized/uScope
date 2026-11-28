@@ -8,6 +8,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--minimal-window on` draws three pieces of type over the bare 3D view for
+  a stream with nothing else on screen: the local time and the corridor
+  airfield at the top right, a caption on the nearest arrival within 25 km
+  (or departure within 15 km) with its height in metres and distance in
+  kilometres at the bottom left, and the last hour's arrivals and departures
+  at the bottom right. The caption holds an aircraft for at least eight
+  seconds and fades in and out. Off by default, and with it off every
+  picture is the same byte for byte.
 - Coloured by corridor, the list and the bare 3D view's board open with an
   `EMERGENCY` section while any aircraft squawks 7500, 7600 or 7700. Those
   aircraft move there from `IN`, `OUT` and `OTHER`, so the counts still add

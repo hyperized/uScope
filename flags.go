@@ -135,6 +135,7 @@ var (
 	errMinAirport = errors.New(appName + ": --minimal-airports must be on or off")
 	errMinBar     = errors.New(appName + ": --minimal-bar must be on or off")
 	errMinBoard   = errors.New(appName + ": --minimal-board must be on or off")
+	errMinWindow  = errors.New(appName + ": --minimal-window must be on or off")
 	errLights     = errors.New(appName + ": --lights must be on, off or auto")
 	errRange      = errors.New(appName + ": --range must be auto or a range the scope can show")
 	errBattery    = errors.New(appName + ": --battery must not be empty")
@@ -183,12 +184,14 @@ type config struct {
 	airports    radar.Toggle
 	shore       radar.Toggle
 
-	// minimalShore, minimalAirports, minimalBar and minimalBoard are the bare
-	// views' own switches, already read from on/off into what the scene keeps.
+	// minimalShore, minimalAirports, minimalBar, minimalBoard and
+	// minimalWindow are the bare views' own switches, already read from on/off
+	// into what the scene keeps.
 	minimalShore    bool
 	minimalAirports bool
 	minimalBar      bool
 	minimalBoard    bool
+	minimalWindow   bool
 	lights          radar.LightsMode
 	stars           radar.Toggle
 	corridors       radar.Toggle
@@ -278,6 +281,7 @@ type rawFlags struct {
 	minAirports string
 	minBar      string
 	minBoard    string
+	minWindow   string
 	lights      string
 	stars       string
 	corridors   string
@@ -383,6 +387,8 @@ func bind(set *flag.FlagSet) *rawFlags {
 	set.StringVar(&raw.minBoard, "minimal-board", defaultOff,
 		"draw the flight strip board in a column down the right quarter of minimal3d: on or off. "+
 			"j flips it while it runs")
+	set.StringVar(&raw.minWindow, "minimal-window", defaultOff,
+		"draw the time, a caption on the nearest arrival or departure and the hour's count over minimal3d: on or off")
 	set.StringVar(&raw.lights, "lights", defaultOn,
 		"draw the aircraft's navigation lights, strobes and beacon: on, off, or auto to leave them off "+
 			"in daylight and fade them in as the sun sets. s cycles them while it runs")
@@ -566,6 +572,7 @@ func (raw rawFlags) display() (display, error) {
 			MinimalAirports: overlays.MinimalAirports,
 			MinimalBar:      overlays.MinimalBar,
 			Board:           overlays.Board,
+			Window:          overlays.Window,
 			Lights:          overlays.Lights,
 			Stars:           overlays.Stars,
 			Corridors:       overlays.Corridors,
@@ -731,6 +738,7 @@ func (raw rawFlags) validated() (config, error) {
 		minimalAirports: show.radar.MinimalAirports,
 		minimalBar:      show.radar.MinimalBar,
 		minimalBoard:    show.radar.Board,
+		minimalWindow:   show.radar.Window,
 		lights:          show.radar.Lights,
 		stars:           show.radar.Stars,
 		corridors:       show.radar.Corridors,
@@ -1048,7 +1056,7 @@ func (raw rawFlags) overlays() (radar.Settings, error) {
 	return minimal, nil
 }
 
-// minimalSwitches reads the bare views' four switches into the Settings
+// minimalSwitches reads the bare views' five switches into the Settings
 // fields they fill.
 func (raw rawFlags) minimalSwitches() (radar.Settings, error) {
 	minShore, err := parseMinimal(raw.minShore, errMinShore)
@@ -1071,8 +1079,14 @@ func (raw rawFlags) minimalSwitches() (radar.Settings, error) {
 		return radar.Settings{}, err
 	}
 
+	minWindow, err := parseMinimal(raw.minWindow, errMinWindow)
+	if err != nil {
+		return radar.Settings{}, err
+	}
+
 	return radar.Settings{
 		MinimalShore: minShore, MinimalAirports: minAirports, MinimalBar: minBar, Board: minBoard,
+		Window: minWindow,
 	}, nil
 }
 

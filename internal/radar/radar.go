@@ -327,6 +327,15 @@ type Scene struct {
 	// minimalBar does. See boardcolumn.go.
 	board bool
 
+	// overlay is whether the bare 3D view carries the window overlay: the
+	// clock, the caption and the hourly count set over the picture. caption
+	// is the aircraft the caption is on, and captionStarted says a frame has
+	// been drawn with the overlay, so the first one can come up without a
+	// fade. See window.go.
+	overlay        bool
+	caption        caption
+	captionStarted bool
+
 	// keyPressAt is the render clock at the last key press in a bare view,
 	// and keyPressed says there has been one. Both are written by Handle and
 	// read by Draw, which take turns on the run loop's goroutine. See
@@ -788,6 +797,7 @@ func (s *Scene) Draw(dst *canvas.Canvas, elapsed time.Duration) {
 		column := s.carveBoard(&lay)
 		s.drawScope(&lay, frame, elapsed)
 		s.drawBoardColumn(&lay, frame, column)
+		s.drawWindow(&lay, frame, elapsed)
 		s.drawBar(&lay, frame, bar)
 		s.drawRevealedKeyBar(&lay, elapsed)
 
