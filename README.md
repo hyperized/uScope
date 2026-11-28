@@ -256,8 +256,10 @@ at the top right with the corridor airfield under it. While an arrival is
 within 25 km of that airfield, or a departure within 15 km when there is no
 arrival, the bottom left names it with its height in metres and its distance
 in kilometres; the caption stays on one aircraft for at least eight seconds
-and fades in and out. The bottom right counts the arrivals and departures of
-the last hour. There is no key for it.
+and fades in and out. A thin ring marks that aircraft in the picture for as
+long as its caption shows, and an operator name too long to fit beside the
+count gives way to the callsign. The bottom right counts the arrivals and
+departures of the last hour. There is no key for it.
 
 Neither bare view has a key bar of its own. Press any key and one comes up
 along the bottom for four seconds, drawn over the picture, with only the keys

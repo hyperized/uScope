@@ -316,15 +316,22 @@ func TestCaptionDescribe(t *testing.T) {
 		name, icao, callsign string
 		altitudeFt           float64
 		wantName, wantNumber string
+		wantCallsign         string
 		wantMetres           float64
 	}{
 		{
 			name: "a known operator", icao: lightICAO, callsign: "KLM1452 ", altitudeFt: 2100,
-			wantName: sampleICAO, wantNumber: "1452", wantMetres: 2100 * metresPerFoot,
+			wantName: sampleICAO, wantNumber: "1452", wantCallsign: "KLM1452", wantMetres: 2100 * metresPerFoot,
 		},
-		{name: "an unknown prefix", icao: lightICAO, callsign: "ZZZ99", wantName: "ZZZ99"},
-		{name: "a bare designator", icao: lightICAO, callsign: sampleICAO, wantName: sampleICAO},
-		{name: "no callsign", icao: lightICAO, wantName: lightICAO},
+		{
+			name: "an unknown prefix", icao: lightICAO, callsign: windowUnknownCallsign,
+			wantName: windowUnknownCallsign, wantCallsign: windowUnknownCallsign,
+		},
+		{
+			name: "a bare designator", icao: lightICAO, callsign: sampleICAO,
+			wantName: sampleICAO, wantCallsign: sampleICAO,
+		},
+		{name: "no callsign", icao: lightICAO, wantName: lightICAO, wantCallsign: lightICAO},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -335,6 +342,10 @@ func TestCaptionDescribe(t *testing.T) {
 			var held caption
 
 			held.describe(plane, boardCorridors().Field)
+
+			if held.callsign != testCase.wantCallsign {
+				t.Errorf("describe() callsign = %q, want %q", held.callsign, testCase.wantCallsign)
+			}
 
 			if held.name != testCase.wantName || held.number != testCase.wantNumber {
 				t.Errorf("describe() = %q %q, want %q %q",
@@ -419,24 +430,27 @@ func TestDrawWindowWithNoField(t *testing.T) {
 	}
 }
 
-// TestCaptionTakesTheCountsRoom checks that a caption too long to sit beside
-// the count takes it off the frame rather than running into it.
-func TestCaptionTakesTheCountsRoom(t *testing.T) {
+// TestCaptionLeavesTheCountsRoom checks that the count stays on the frame
+// whatever the caption says, a real operator's long name and a callsign too
+// long to fit in any form alike.
+func TestCaptionLeavesTheCountsRoom(t *testing.T) {
 	t.Parallel()
 
 	const width, height = 1920, 1080
 
 	short := windowPlane("484AC4", "EZY12", windowDepartureNm, windowClimbFpm)
+	named := short
+	named.Callsign = windowLongCallsign
 	long := short
 	long.Callsign = "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
 
 	for _, testCase := range []struct {
-		name      string
-		plane     airplane.Snapshot
-		wantCount bool
+		name  string
+		plane airplane.Snapshot
 	}{
-		{name: "room for both", plane: short, wantCount: true},
-		{name: "no room", plane: long},
+		{name: "room for both", plane: short},
+		{name: "a long operator name", plane: named},
+		{name: "too long in any form", plane: long},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -447,10 +461,187 @@ func TestCaptionTakesTheCountsRoom(t *testing.T) {
 
 			// The arrivals' column is the only thing in the data colour on
 			// the right of the bottom band: the caption is a departure.
-			count := inkIn(canv, image.Rect(width*2/3, height*3/4, width, height), theme.Night.Data)
-			if (count > 0) != testCase.wantCount {
-				t.Errorf("%d pixels of the count, want some: %v", count, testCase.wantCount)
+			if inkIn(canv, image.Rect(width*2/3, height*3/4, width, height), theme.Night.Data) == 0 {
+				t.Error("no count beside the caption")
 			}
 		})
+	}
+}
+
+// windowUnknownCallsign has a prefix pkg/airlines does not know.
+const windowUnknownCallsign = "ZZZ99"
+
+// windowLongCallsign is a real operator whose name makes the caption's
+// full form too long to sit beside the count at 1080 rows.
+const windowLongCallsign = "CND093P"
+
+// TestCaptionFit checks the caption's forms are tried longest first and the
+// first that fits is kept: the full form, the callsign in place of the name,
+// then the height without the distance, which is kept even when nothing fits.
+func TestCaptionFit(t *testing.T) {
+	t.Parallel()
+
+	plane := windowPlane(lightICAO, windowLongCallsign, windowArrivalNm, windowDescentFpm)
+	scene, _ := windowScene(t, windowFrame(plane))
+	canv := boardCanvas(t, 1920, 1080)
+	scene.Draw(canv, 0)
+
+	if scene.caption.name != "Corendon Dutch Airlines" || scene.caption.callsign != windowLongCallsign {
+		t.Fatalf("caption on %q %q, want the operator and the callsign", scene.caption.name, scene.caption.callsign)
+	}
+
+	lay := scene.newLayout(canv)
+	lay.scope = canv.Bounds()
+	win := newWindowLayout(&lay)
+	line := scene.windowPen(&lay, &win, scene.faces.BodyBold, 0)
+	line.x = win.box.Min.X
+
+	widths := [3]int{}
+	for form := formFull; form <= formNoDistance; form++ {
+		widths[form] = scene.captionLine(&line, 1, form, false)
+	}
+
+	if widths[formFull] <= widths[formCallsign] || widths[formCallsign] <= widths[formNoDistance] {
+		t.Fatalf("forms end at %v, want each shorter than the one before", widths)
+	}
+
+	for _, testCase := range []struct {
+		name string
+		room int
+		want captionForm
+	}{
+		{name: "room for the full form", room: widths[formFull], want: formFull},
+		{name: "a pixel short of it", room: widths[formFull] - 1, want: formCallsign},
+		{name: "room for the callsign", room: widths[formCallsign], want: formCallsign},
+		{name: "a pixel short of that", room: widths[formCallsign] - 1, want: formNoDistance},
+		{name: "no room at all", room: 0, want: formNoDistance},
+	} {
+		if got := scene.captionFit(&line, testCase.room); got != testCase.want {
+			t.Errorf("%s: form %d, want %d", testCase.name, got, testCase.want)
+		}
+	}
+
+	if line.x != win.box.Min.X || !line.skip {
+		t.Errorf("captionFit moved the pen to %d or set skip %v", line.x, line.skip)
+	}
+}
+
+// TestCaptionRing checks the ring around the captioned aircraft: drawn in
+// the accent ink centred on the model while the caption is up, blended while
+// it fades, and absent with no caption, no 3D view to draw through, or no
+// position to put it at.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func TestCaptionRing(t *testing.T) {
+	t.Parallel()
+
+	const width, height = 1920, 1080
+
+	plane := windowPlane(lightICAO, "KLM1452", windowArrivalNm, windowDescentFpm)
+	scene, _ := windowScene(t, windowFrame(plane))
+	canv := boardCanvas(t, width, height)
+	scene.Draw(canv, 0)
+
+	shot := scene.captionView
+	if !shot.ok {
+		t.Fatal("the 3D view kept nothing to ring through")
+	}
+
+	x, y, ok := shot.view.project(plane.Latitude, plane.Longitude, plane.Altitude)
+	if !ok {
+		t.Fatal("the arrival is not on the picture")
+	}
+
+	radius := int(shot.view.cam.modelSpan * captionRingShare)
+	around := image.Rect(x-radius-2, y-radius-2, x+radius+3, y+radius+3)
+
+	if got := inkIn(canv, around, theme.Night.Accent); got < radius {
+		t.Errorf("%d accent pixels around the arrival, want a ring of radius %d", got, radius)
+	}
+
+	if got := inkIn(canv, canv.Bounds(), theme.Night.Accent) - inkIn(canv, around, theme.Night.Accent); got != 0 {
+		t.Errorf("%d accent pixels away from the arrival", got)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		change func(held *caption, view *captionView)
+		want   bool
+	}{
+		{name: "held", change: func(*caption, *captionView) {}, want: true},
+		{name: "no caption", change: func(held *caption, _ *captionView) { held.icao = "" }},
+		{name: "no view", change: func(_ *caption, view *captionView) { view.ok = false }},
+		{name: "no position", change: func(held *caption, _ *captionView) { held.latitude, held.longitude = 0, 0 }},
+		{name: "faded out", change: func(held *caption, _ *captionView) { held.shownAt = time.Hour }},
+	} {
+		clean := boardCanvas(t, width, height)
+		held, view := scene.caption, shot
+		view.dst = clean
+
+		testCase.change(&held, &view)
+
+		probe := &Scene{caption: held, captionView: view, pal: scene.pal}
+		probe.drawCaptionRing(0)
+
+		if got := inkIn(clean, around, theme.Night.Field) < around.Dx()*around.Dy(); got != testCase.want {
+			t.Errorf("%s: ring drawn %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+// TestCaptionRingFades checks the ring follows the caption's alpha: at half
+// way up it is drawn, but blended, so no pixel is the full accent ink.
+func TestCaptionRingFades(t *testing.T) {
+	t.Parallel()
+
+	plane := windowPlane(lightICAO, "KLM1452", windowArrivalNm, windowDescentFpm)
+	scene, _ := windowScene(t, windowFrame(plane))
+	canv := boardCanvas(t, 1920, 1080)
+	scene.Draw(canv, 0)
+
+	clean := boardCanvas(t, 1920, 1080)
+	scene.captionView.dst = clean
+	scene.caption.shownAt = 0
+	scene.drawCaptionRing(captionFade / 2)
+
+	if got := inkIn(clean, clean.Bounds(), theme.Night.Accent); got != 0 {
+		t.Errorf("%d pixels of full accent half way through the fade", got)
+	}
+
+	if got := inkIn(clean, clean.Bounds(), theme.Night.Field); got == 1920*1080 {
+		t.Error("no ring half way through the fade")
+	}
+}
+
+// TestCaptionRingClipped checks a ring on an aircraft at the edge of the
+// picture is cut off by the 3D view's window rather than drawn past it.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func TestCaptionRingClipped(t *testing.T) {
+	t.Parallel()
+
+	plane := windowPlane(lightICAO, "KLM1452", windowArrivalNm, windowDescentFpm)
+	scene, _ := windowScene(t, windowFrame(plane))
+	canv := boardCanvas(t, 1920, 1080)
+	scene.Draw(canv, 0)
+
+	x, y, _ := scene.captionView.view.project(plane.Latitude, plane.Longitude, plane.Altitude)
+
+	whole := boardCanvas(t, 1920, 1080)
+
+	window, ok := whole.Sub(image.Rect(0, 0, x, 1080))
+	if !ok {
+		t.Fatal("no room left of the arrival")
+	}
+
+	scene.captionView.dst = window
+	scene.drawCaptionRing(time.Hour)
+
+	if got := inkIn(whole, image.Rect(x, 0, 1920, 1080), theme.Night.Accent); got != 0 {
+		t.Errorf("%d ring pixels past the window's edge", got)
+	}
+
+	if got := inkIn(whole, image.Rect(0, y-30, x, y+30), theme.Night.Accent); got == 0 {
+		t.Error("no ring inside the window")
 	}
 }

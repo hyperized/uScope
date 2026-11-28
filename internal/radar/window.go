@@ -10,6 +10,7 @@ import (
 	"github.com/hyperized/uAirwaves/pkg/airplane"
 	"github.com/hyperized/uScope/internal/source"
 	"github.com/hyperized/uScope/pkg/airlines"
+	"github.com/hyperized/uScope/pkg/canvas"
 	"github.com/hyperized/uScope/pkg/psf"
 	"github.com/hyperized/uScope/pkg/text"
 )
@@ -18,7 +19,8 @@ import (
 // picture for someone watching from a distance, with no panel behind them. A clock
 // with the corridor airfield under it at the top right, a caption naming the
 // aircraft coming in or climbing out at the bottom left, and the hour's
-// arrivals and departures at the bottom right.
+// arrivals and departures at the bottom right. While the caption shows, the
+// aircraft it names carries a ring, so a viewer can find it among the rest.
 //
 // It is drawn on every frame after the picture and touches nothing the
 // picture is drawn from, which is why none of it is in layerKey: the bare 3D
@@ -44,9 +46,14 @@ const (
 	windowColumnGap = 16
 
 	// windowCountGap is the least room left between the caption and the
-	// count, in glyph pixels. A caption that would come closer takes the
-	// count off the frame rather than run into it.
+	// count, in glyph pixels. A caption that would come closer is shortened
+	// until it does not, so the count never leaves the frame.
 	windowCountGap = 12
+
+	// captionRingShare is the radius of the ring around the captioned
+	// aircraft as a share of the model's drawn span: half the span would
+	// touch the wingtips, and three quarters leaves them some air.
+	captionRingShare = 0.75
 
 	// windowTracking spaces the small capitals out by one glyph pixel.
 	windowTracking = 1
@@ -108,12 +115,18 @@ const (
 // described for the rest of the fade. Every string here points into the
 // airline table or into a snapshot's callsign, so holding one copies nothing.
 type caption struct {
-	icao   string
-	class  source.TrackClass
-	name   string
-	number string
-	metres float64
-	km     float64
+	icao     string
+	class    source.TrackClass
+	name     string
+	number   string
+	callsign string
+	metres   float64
+	km       float64
+
+	// latitude, longitude and altitudeFt are where the aircraft was last
+	// seen, which is where its ring stays while the caption fades out after
+	// the aircraft has left the frame.
+	latitude, longitude, altitudeFt float64
 
 	// shownAt is the render clock the caption came up at, and leaveAt the
 	// one it started going away at, which only means anything while leaving.
@@ -163,13 +176,46 @@ func (s *Scene) drawWindow(lay *layout, frame source.Frame, elapsed time.Duratio
 	}
 
 	s.followCaption(frame, elapsed)
+	s.drawCaptionRing(elapsed)
 
-	countLeft := s.measureMovements(&win, frame)
-	captionEnd := s.drawCaption(lay, &win, elapsed)
+	room := s.measureMovements(&win, frame) - win.scale*windowCountGap
+	s.drawCaption(lay, &win, elapsed, room)
+	s.drawMovements(lay, &win, frame)
+}
 
-	if captionEnd <= countLeft-win.scale*windowCountGap {
-		s.drawMovements(lay, &win, frame)
+// captionView is what the 3D view drew the frame's aircraft through, kept by
+// draw3D so the overlay, drawn after it, can put a ring on the one the
+// caption is about. ok is false on a frame with no aircraft drawn.
+type captionView struct {
+	view scene3
+	dst  *canvas.Canvas
+	ok   bool
+}
+
+// drawCaptionRing rings the aircraft the caption is on, fading with the
+// caption.
+//
+// The ring is a circle on the screen around the model, not one on the
+// ground, so it stays round at any tilt and sits on the aircraft rather than
+// under it. It is drawn through the 3D view's own clipped window, so an
+// aircraft at the edge of the picture gets part of a ring.
+//
+//nolint:varnamelen // x, y is the pixel-addressing idiom used throughout uScope.
+func (s *Scene) drawCaptionRing(elapsed time.Duration) {
+	held := &s.caption
+	shot := &s.captionView
+
+	if held.icao == "" || !shot.ok {
+		return
 	}
+
+	x, y, ok := shot.view.project(held.latitude, held.longitude, held.altitudeFt)
+	if !ok {
+		return
+	}
+
+	radius := int(shot.view.cam.modelSpan * captionRingShare)
+	shot.dst.BlendStrokeCircle(x, y, radius, max(shot.view.weight, 1), s.pal.Accent, held.alpha(elapsed))
 }
 
 // drawWindowClock sets the local time at the top right, and under it the
@@ -364,10 +410,13 @@ func (c *caption) describe(plane airplane.Snapshot, field source.Airfield) {
 		c.name = plane.ICAO
 	}
 
+	c.callsign = c.name
+
 	if airline, known := airlines.Lookup(callsign); known && len(callsign) > callsignPrefix {
 		c.name, c.number = airline.Name, strings.TrimSpace(callsign[callsignPrefix:])
 	}
 
+	c.latitude, c.longitude, c.altitudeFt = plane.Latitude, plane.Longitude, plane.Altitude
 	c.metres = plane.Altitude * metresPerFoot
 	c.km = field.DistanceToNm(plane.Latitude, plane.Longitude) * kmPerNm
 }
@@ -382,18 +431,36 @@ func (c *caption) alpha(elapsed time.Duration) float64 {
 	return min(max(float64(since)/float64(captionFade), 0), 1)
 }
 
-// drawCaption sets the caption at the bottom left and returns the x just past
-// its longer line, or the box's left edge when there is no caption.
-func (s *Scene) drawCaption(lay *layout, win *windowLayout, elapsed time.Duration) int {
+// captionForm is how much the caption's second line says. Each form is
+// shorter than the one before it, and the caption takes the first that ends
+// before room.
+type captionForm int
+
+const (
+	// formFull names the operator and the flight number.
+	formFull captionForm = iota
+
+	// formCallsign gives the callsign in place of the operator's name, which
+	// is what makes a long name fit.
+	formCallsign
+
+	// formNoDistance is the callsign and the height, for when even the
+	// callsign form runs into the count.
+	formNoDistance
+)
+
+// drawCaption sets the caption at the bottom left in the longest form whose
+// second line ends at or before room, or the shortest form when none does.
+func (s *Scene) drawCaption(lay *layout, win *windowLayout, elapsed time.Duration, room int) {
 	held := &s.caption
 	if held.icao == "" {
-		return win.box.Min.X
+		return
 	}
 
 	alpha := held.alpha(elapsed)
 	line := s.windowPen(lay, win, s.faces.BodyBold, 0)
 	line.x, line.y = win.box.Min.X, win.box.Max.Y-line.height()
-	end := s.captionLine(&line, alpha, false)
+	form := s.captionFit(&line, room)
 
 	heading := s.windowPen(lay, win, s.faces.Small, windowTracking)
 	heading.x = win.box.Min.X
@@ -405,24 +472,39 @@ func (s *Scene) drawCaption(lay *layout, win *windowLayout, elapsed time.Duratio
 	}
 
 	heading.draw(word, s.classColour(held.class), alpha)
-	s.captionLine(&line, alpha, true)
-
-	return max(end, heading.x)
+	s.captionLine(&line, alpha, form, true)
 }
 
-// captionLine runs the caption's second line through pen, measuring it when
-// draw is false and setting it when true, and returns the x past its end.
-// The pieces go down one at a time so no string is ever built.
-func (s *Scene) captionLine(pen *windowPen, alpha float64, draw bool) int {
+// captionFit is the longest form of the caption's second line that, set
+// from line's pen position, ends at or before room, and the shortest form
+// when none does. The count beside it is drawn either way.
+func (s *Scene) captionFit(line *windowPen, room int) captionForm {
+	form := formFull
+	for form < formNoDistance && s.captionLine(line, 1, form, false) > room {
+		form++
+	}
+
+	return form
+}
+
+// captionLine runs the caption's second line in form through pen, measuring
+// it when draw is false and setting it when true, and returns the x past its
+// end. The pieces go down one at a time so no string is ever built, which is
+// also what lets the caption try each form against the room per frame.
+func (s *Scene) captionLine(pen *windowPen, alpha float64, form captionForm, draw bool) int {
 	held := &s.caption
 	start := pen.x
 	pen.skip = !draw
 
-	pen.draw(held.name, s.pal.Ink, alpha)
+	if form == formFull {
+		pen.draw(held.name, s.pal.Ink, alpha)
 
-	if held.number != "" {
-		pen.draw(captionSpace, s.pal.Ink, alpha)
-		pen.draw(held.number, s.pal.Ink, alpha)
+		if held.number != "" {
+			pen.draw(captionSpace, s.pal.Ink, alpha)
+			pen.draw(held.number, s.pal.Ink, alpha)
+		}
+	} else {
+		pen.draw(held.callsign, s.pal.Ink, alpha)
 	}
 
 	if held.metres > 0 {
@@ -431,9 +513,11 @@ func (s *Scene) captionLine(pen *windowPen, alpha float64, draw bool) int {
 		pen.draw(captionUp, s.pal.Ink, alpha)
 	}
 
-	pen.draw(captionSeparator, s.pal.Ink, alpha)
-	pen.drawBytes(s.kmFigure(held.km), s.pal.Ink, alpha)
-	pen.draw(captionOut, s.pal.Ink, alpha)
+	if form != formNoDistance {
+		pen.draw(captionSeparator, s.pal.Ink, alpha)
+		pen.drawBytes(s.kmFigure(held.km), s.pal.Ink, alpha)
+		pen.draw(captionOut, s.pal.Ink, alpha)
+	}
 
 	end := pen.x
 	pen.x = start

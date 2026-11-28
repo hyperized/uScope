@@ -278,6 +278,8 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 	// most of the box, and the envelope around it is taller than the range is
 	// wide, so a good part of the scene genuinely falls outside: unclipped, the
 	// bowl's meridians run straight across the flight list.
+	s.captionView.ok = false
+
 	window, room := s.window(lay.dst, lay.scope)
 	if !room {
 		return
@@ -289,6 +291,7 @@ func (s *Scene) draw3D(lay *layout, frame source.Frame, elapsed time.Duration) {
 	// camera first draws nothing; it is what tells the sky which rows the
 	// ground is about to cover anyway.
 	view, drawable := s.measure3D(lay, frame, elapsed)
+	s.captionView = captionView{view: view, dst: window, ok: drawable && view.plottable}
 
 	var covered []bool
 	if drawable {

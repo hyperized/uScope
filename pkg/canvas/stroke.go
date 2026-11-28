@@ -297,9 +297,30 @@ func (c *Canvas) StrokeCircle(centerX, centerY, radius, width int, col color.RGB
 //
 //nolint:varnamelen // y and dy are the row and its offset from the centre, the idiom used throughout this package.
 func (c *Canvas) annulusRow(centerX, y int, dy, inner, outer float64, col color.RGBA) {
+	first, last, lit := annulusExtent(dy, inner, outer)
+	if !lit {
+		return
+	}
+
+	if first == 0 {
+		c.hline(centerX-last, centerX+last, y, col)
+
+		return
+	}
+
+	c.hline(centerX-last, centerX-first, y, col)
+	c.hline(centerX+first, centerX+last, y, col)
+}
+
+// annulusExtent is the run of offsets from the centre an annulus row covers:
+// from first to last on either side, or the one span from -last to last when
+// first is zero. lit is false when the row has no pixel in the ring.
+//
+//nolint:varnamelen // dy is the row's offset from the centre, the idiom used throughout this package.
+func annulusExtent(dy, inner, outer float64) (int, int, bool) {
 	far := outer*outer - dy*dy
 	if far <= 0 {
-		return
+		return 0, 0, false
 	}
 
 	// The largest offset strictly inside the outer edge, and the smallest one
@@ -313,18 +334,7 @@ func (c *Canvas) annulusRow(centerX, y int, dy, inner, outer float64, col color.
 		first = int(math.Ceil(math.Sqrt(near)))
 	}
 
-	if first > last {
-		return
-	}
-
-	if first == 0 {
-		c.hline(centerX-last, centerX+last, y, col)
-
-		return
-	}
-
-	c.hline(centerX-last, centerX-first, y, col)
-	c.hline(centerX+first, centerX+last, y, col)
+	return first, last, first <= last
 }
 
 // StrokeRect draws the outline of rect width pixels thick, growing inward so
