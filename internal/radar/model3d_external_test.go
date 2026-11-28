@@ -3,6 +3,7 @@ package radar_test
 import (
 	"image"
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/hyperized/uAirwaves/pkg/airplane"
@@ -216,5 +217,104 @@ func TestView3DUnknownHeadingDrawsTheDisc(t *testing.T) {
 	if withDisc == withModel {
 		t.Errorf("an aircraft with no heading drew the same %d pixels as one with, want the disc instead",
 			withDisc)
+	}
+}
+
+// inkShades is how many different shades of ink, mixed part of the way
+// towards field, the canvas holds: ink itself and the field are not counted.
+//
+// A colour is a shade when one share of ink explains all three channels to
+// within a step of rounding. The twin jet paints every face in such a shade,
+// a score of them for one aircraft, where the dart has its far wing and at
+// most one more where a stroked edge happened to blend onto the line; so the
+// count says which of the two models is on the canvas without having to know
+// where it landed.
+func inkShades(canv *canvas.Canvas, ink, field color.RGBA) int {
+	seen := map[color.RGBA]bool{}
+	img := canv.Image()
+
+	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
+		for x := img.Rect.Min.X; x < img.Rect.Max.X; x++ {
+			got := img.RGBAAt(x, y)
+			if got != ink && got != field && isShade(got, ink, field) {
+				seen[got] = true
+			}
+		}
+	}
+
+	return len(seen)
+}
+
+// isShade reports whether got is field mixed towards ink by one share, to
+// within a step of rounding on every channel.
+func isShade(got, ink, field color.RGBA) bool {
+	channels := [3][3]float64{
+		{float64(got.R), float64(ink.R), float64(field.R)},
+		{float64(got.G), float64(ink.G), float64(field.G)},
+		{float64(got.B), float64(ink.B), float64(field.B)},
+	}
+
+	// The share is read off the channel where ink and field are furthest
+	// apart, which is where rounding moves it least.
+	widest := channels[0]
+	for _, channel := range channels[1:] {
+		if math.Abs(channel[1]-channel[2]) > math.Abs(widest[1]-widest[2]) {
+			widest = channel
+		}
+	}
+
+	share := (widest[0] - widest[2]) / (widest[1] - widest[2])
+	if share <= 0 || share >= 1 {
+		return false
+	}
+
+	for _, channel := range channels {
+		if math.Abs(channel[2]+share*(channel[1]-channel[2])-channel[0]) > 1.5 {
+			return false
+		}
+	}
+
+	return true
+}
+
+// TestModelIsTheTwinJetOnlyWhenItIsLargeEnough checks the switch between the
+// two models, by the shades each paints.
+//
+// At 1280x720 the model is sixteen pixels across and has to be the dart, to
+// the byte, so the panel's picture does not move: its fills are the aircraft's
+// colour and the far wing's one fade of it. At 3840x2160 the layout's scale is
+// two, the model thirty-two pixels across, and the twin jet's faces each take
+// their own shade by how they face the light.
+func TestModelIsTheTwinJetOnlyWhenItIsLargeEnough(t *testing.T) {
+	t.Parallel()
+
+	plane := scenePlane(icaoSample, callsignSample, 45, 12, 2400, 41)
+	plane.PositionHistory = nil
+
+	for _, testCase := range []struct {
+		name          string
+		width, height int
+		atLeast       int
+		atMost        int
+	}{
+		{name: "the dart on the panel", width: panelWidth, height: panelHeight, atLeast: 1, atMost: 2},
+		{name: "the twin jet at 4K", width: 3840, height: 2160, atLeast: 8, atMost: math.MaxInt},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			scene, canv, _ := sceneOn(t, testCase.width, testCase.height, sceneFrame(plane))
+			scene.Apply(radar.Settings{
+				View: radar.ViewMinimal3D, RangeNm: sceneRangeNm, Lights: radar.LightsOff,
+				Stars: radar.ToggleOff, Corridors: radar.ToggleOff, Orbit: radar.ToggleOff,
+			})
+			scene.Draw(canv, 0)
+
+			got := inkShades(canv, theme.Night.AltLow, theme.Night.Field)
+			if got < testCase.atLeast || got > testCase.atMost {
+				t.Errorf("the model drew %d shades of its colour, want %d to %d",
+					got, testCase.atLeast, testCase.atMost)
+			}
+		})
 	}
 }

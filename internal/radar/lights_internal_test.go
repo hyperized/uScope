@@ -480,7 +480,7 @@ func TestDrawLights3SkipsWhatIsNotThere(t *testing.T) {
 			scene.SetPalette(theme.Night)
 
 			if testCase.lights == LightsOn {
-				scene.posed.seen = [modelVertexCount]bool{}
+				scene.posed.seen = [posedVertexCount]bool{}
 			}
 
 			canv := lightCanvas(t)
